@@ -96,6 +96,11 @@
     <section id="view-insights" class="view">
       <p class="insight-note card-glass" id="insight-banner"></p>
 
+      <div class="card" id="recurring-due-card" style="display:none; margin-bottom:16px;">
+        <div class="card-label" style="margin-bottom:14px; display:block;">Due for Logging</div>
+        <div id="recurring-due-list"></div>
+      </div>
+
       <div class="card card-glass" style="margin-bottom:16px;">
         <div class="card-header-row">
           <span class="card-label">Spending Breakdown</span>
@@ -176,6 +181,10 @@
         <div class="save-recurring-row">
           <input type="checkbox" id="entry-save-recurring">
           <label for="entry-save-recurring" style="margin:0; color:inherit; font-weight:600;">Save as a Quick Add for next time (e.g. salary, rent)</label>
+        </div>
+        <div class="save-recurring-row" id="entry-recurring-remind-row" style="display:none; margin-top:6px;">
+          <input type="checkbox" id="entry-recurring-remind">
+          <label for="entry-recurring-remind" style="margin:0; color:inherit; font-weight:600;">Also remind me monthly, around this day, to log it again</label>
         </div>
         <button type="submit" class="btn-pill btn-black stamp-btn">Save Entry</button>
         <button type="button" id="cancel-edit-link"><span data-icon="x" data-icon-size="13"></span> Cancel edit</button>

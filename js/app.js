@@ -694,6 +694,7 @@
     const amount = parseFloat(document.getElementById('entry-amount').value);
     const note = document.getElementById('entry-note').value.trim();
     const saveRecurringChecked = document.getElementById('entry-save-recurring').checked;
+    const recurringRemindChecked = document.getElementById('entry-recurring-remind').checked;
     if(!date || !category || isNaN(amount) || amount<=0){ alert('Please fill in the date, category and a valid amount greater than 0.'); return; }
     if(editingId){
       const idx = transactions.findIndex(t=>t.id===editingId);
@@ -705,11 +706,14 @@
       if(saveRecurringChecked){
         const exists = recurring.some(r=> r.type===type && r.category===category && r.amount===amount && (r.note||'')===note);
         if(!exists){
-          recurring.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), type, category, amount, note });
+          const dueDay = recurringRemindChecked ? parseInt(date.slice(8,10),10) : null;
+          recurring.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), type, category, amount, note, dueDay, lastDismissedPeriod: dueDay ? date.slice(0,7) : null });
           await saveRecurring();
         }
       }
-      document.getElementById('entry-amount').value=''; document.getElementById('entry-note').value=''; document.getElementById('entry-save-recurring').checked=false; resetEntryDateDefault();
+      document.getElementById('entry-amount').value=''; document.getElementById('entry-note').value=''; document.getElementById('entry-save-recurring').checked=false;
+      document.getElementById('entry-recurring-remind').checked=false; document.getElementById('entry-recurring-remind-row').style.display='none';
+      resetEntryDateDefault();
     }
     refreshAll();
   }
@@ -738,8 +742,44 @@
     const accountSelect = document.getElementById('entry-account');
     const account = (accountSelect && accountSelect.value) || (accounts[0] ? accounts[0].name : 'Cash');
     transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:toLocalDateStr(new Date()), category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
+    if(r.dueDay) r.lastDismissedPeriod = toLocalDateStr(new Date()).slice(0,7);
     await saveTransactions();
+    await saveRecurring();
     showStamp(r.type);
+    refreshAll();
+  }
+  function recurringDueStatus(r){
+    if(!r.dueDay) return null;
+    const today = new Date(); const todayStr = toLocalDateStr(today); const ym = todayStr.slice(0,7);
+    if(r.lastDismissedPeriod === ym) return null;
+    const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
+    const day = Math.min(r.dueDay, lastDayOfMonth);
+    const dueDateThisMonth = `${ym}-${String(day).padStart(2,'0')}`;
+    const diffDays = Math.round((new Date(dueDateThisMonth+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
+    if(diffDays > 3) return null;
+    return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), periodKey: ym };
+  }
+  function renderRecurringDueCard(){
+    const card = document.getElementById('recurring-due-card'); const list = document.getElementById('recurring-due-list');
+    if(!card || !list) return;
+    const items = recurring.map(r=> ({ r, status: recurringDueStatus(r) })).filter(x=>x.status);
+    if(items.length===0){ card.style.display='none'; return; }
+    card.style.display='block';
+    items.sort((a,b)=> a.status.diffDays - b.status.diffDays);
+    list.innerHTML='';
+    items.forEach(({r,status})=>{
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(r.category)}</div><div class="reminder-meta">${status.dueLabel} · ${fmt(r.amount)}</div></div><span class="reminder-status ${status.overdue?'overdue':'upcoming'}">${reminderStatusLabel(status)}</span></div><div class="reminder-actions"><button class="btn-pill btn-black log-recurring-due-btn" data-id="${r.id}">Log it</button><button class="btn-pill btn-outline skip-recurring-due-btn" data-id="${r.id}">Skip this month</button></div>`;
+      list.appendChild(row);
+    });
+    list.querySelectorAll('.log-recurring-due-btn').forEach(btn=> btn.addEventListener('click', ()=> quickAddRecurring(btn.dataset.id)));
+    list.querySelectorAll('.skip-recurring-due-btn').forEach(btn=> btn.addEventListener('click', ()=> skipRecurringDue(btn.dataset.id)));
+  }
+  async function skipRecurringDue(id){
+    const r = recurring.find(x=>x.id===id); if(!r) return;
+    const status = recurringDueStatus(r);
+    r.lastDismissedPeriod = status ? status.periodKey : toLocalDateStr(new Date()).slice(0,7);
+    await saveRecurring();
     refreshAll();
   }
   async function deleteRecurring(id){
@@ -1782,7 +1822,8 @@
     Object.keys(budgets).forEach(cat=>{ if(budgets[cat]>0 && (spentMap[cat]||0)>budgets[cat]) overCount++; });
     const overdueDebtCount = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0).length;
     const reminderCount = reminders.filter(r=> reminderStatus(r)).length;
-    const totalAlerts = overCount + overdueDebtCount + reminderCount;
+    const recurringDueCount = recurring.filter(r=> recurringDueStatus(r)).length;
+    const totalAlerts = overCount + overdueDebtCount + reminderCount + recurringDueCount;
     const badge = document.getElementById('bell-badge');
     if(totalAlerts>0){ badge.style.display='flex'; badge.textContent = totalAlerts>9?'9+':String(totalAlerts); }
     else { badge.style.display='none'; }
@@ -1804,6 +1845,7 @@
     renderGoalsOverview();
     renderGoalsList();
     renderRemindersUpcoming();
+    renderRecurringDueCard();
     renderTrendChart();
     renderReports();
     renderHistory();
@@ -2287,6 +2329,11 @@
     });
     document.getElementById('entry-form').addEventListener('submit', handleAddEntry);
     document.getElementById('cancel-edit-link').addEventListener('click', cancelEdit);
+    document.getElementById('entry-save-recurring').addEventListener('change', (e)=>{
+      const row = document.getElementById('entry-recurring-remind-row');
+      row.style.display = e.target.checked ? 'flex' : 'none';
+      if(!e.target.checked) document.getElementById('entry-recurring-remind').checked = false;
+    });
 
     document.querySelectorAll('.ring-period-btn[data-range]').forEach(btn=>{
       btn.addEventListener('click', ()=>{ ringRange = btn.dataset.range; renderAllRings(); });
