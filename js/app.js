@@ -436,6 +436,27 @@
     setTimeout(()=> overlay.classList.remove('show'), 1100);
   }
 
+  let pendingUndo = null;
+  const UNDO_TIMEOUT_MS = 6000;
+  function showUndoSnackbar(message, restoreFn){
+    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
+    const el = document.getElementById('undo-snackbar');
+    document.getElementById('undo-snackbar-msg').textContent = message;
+    el.classList.add('show');
+    pendingUndo = { restore: restoreFn, timer: setTimeout(hideUndoSnackbar, UNDO_TIMEOUT_MS) };
+  }
+  function hideUndoSnackbar(){
+    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
+    pendingUndo = null;
+    document.getElementById('undo-snackbar').classList.remove('show');
+  }
+  async function undoLastDelete(){
+    if(!pendingUndo) return;
+    const restore = pendingUndo.restore;
+    hideUndoSnackbar();
+    await restore();
+  }
+
   function renderHomeBalance(){
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
     const masked = settings.hideBalances && !balancesRevealed;
@@ -602,11 +623,19 @@
   }
 
   async function deleteTransaction(id){
-    if(!confirm('Delete this entry? This cannot be undone.')) return false;
+    const idx = transactions.findIndex(t=>t.id===id);
+    if(idx===-1) return false;
+    const removed = transactions[idx];
     recentlyDeletedTxIds.add(id);
-    transactions = transactions.filter(t=>t.id!==id);
+    transactions.splice(idx, 1);
     await saveTransactions();
     refreshAll();
+    showUndoSnackbar('Entry deleted.', async ()=>{
+      recentlyDeletedTxIds.delete(id);
+      transactions.splice(idx, 0, removed);
+      await saveTransactions();
+      refreshAll();
+    });
     return true;
   }
   function resetEntryDateDefault(){ document.getElementById('entry-date').value = toLocalDateStr(new Date()); }
@@ -1148,10 +1177,17 @@
     document.getElementById('add-goal-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   async function deleteGoal(id){
-    if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return;
-    goals = goals.filter(g=>g.id!==id);
+    const idx = goals.findIndex(g=>g.id===id);
+    if(idx===-1) return;
+    const removed = goals[idx];
+    goals.splice(idx, 1);
     await saveGoals();
     refreshAll();
+    showUndoSnackbar('Savings goal deleted.', async ()=>{
+      goals.splice(idx, 0, removed);
+      await saveGoals();
+      refreshAll();
+    });
   }
 
   async function handleAddDebt(e){
@@ -1236,11 +1272,19 @@
   }
 
   async function deleteDebt(id){
-    if(!confirm('Remove this debt from your tracker? Past payments already recorded in your transactions will NOT be deleted.')) return;
+    const idx = debts.findIndex(d=>d.id===id);
+    if(idx===-1) return;
+    const removed = debts[idx];
     recentlyDeletedDebtIds.add(id);
-    debts = debts.filter(d=>d.id!==id);
+    debts.splice(idx, 1);
     await saveDebts();
     refreshAll();
+    showUndoSnackbar('Debt removed. (Past payments already logged are unaffected.)', async ()=>{
+      recentlyDeletedDebtIds.delete(id);
+      debts.splice(idx, 0, removed);
+      await saveDebts();
+      refreshAll();
+    });
   }
 
   function ordinalSuffix(n){
@@ -1329,10 +1373,17 @@
     refreshAll();
   }
   async function deleteReminder(id){
-    if(!confirm('Delete this reminder?')) return;
-    reminders = reminders.filter(r=>r.id!==id);
+    const idx = reminders.findIndex(r=>r.id===id);
+    if(idx===-1) return;
+    const removed = reminders[idx];
+    reminders.splice(idx, 1);
     await saveReminders();
     refreshAll();
+    showUndoSnackbar('Reminder deleted.', async ()=>{
+      reminders.splice(idx, 0, removed);
+      await saveReminders();
+      refreshAll();
+    });
   }
   async function handleAddReminder(e){
     e.preventDefault();
@@ -2112,6 +2163,7 @@
 
     document.getElementById('bell-btn').addEventListener('click', ()=>{ switchTab('insights'); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
+    document.getElementById('undo-snackbar-btn').addEventListener('click', undoLastDelete);
 
     document.getElementById('global-search-btn').addEventListener('click', openGlobalSearch);
     document.getElementById('close-search-btn').addEventListener('click', ()=> history.back());
