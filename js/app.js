@@ -1845,7 +1845,7 @@
       submitBtn.textContent = 'Unlock';
     } else if(mode==='setup-new'){
       title.textContent = 'Set a PIN';
-      subtitle.textContent = 'Choose a 4-digit PIN to lock Trackr.';
+      subtitle.textContent = 'Choose a 4-digit PIN to lock Trackr. This is a local deterrent, not real security — there’s no server, so the PIN can’t be recovered, and it isn’t protection against someone with access to this device’s storage.';
       cancelBtn.style.display = 'inline-flex';
       submitBtn.textContent = 'Continue';
     } else if(mode==='setup-confirm'){

@@ -1,25 +1,25 @@
   if(!window.storage){
     (function(){
       const PREFIX = 'moneyLedgerPremium:';
-      function lsKey(key, shared){ return PREFIX + (shared ? 'shared:' : '') + key; }
+      function lsKey(key){ return PREFIX + key; }
       window.storage = {
-        async get(key, shared){
-          try{ const raw = localStorage.getItem(lsKey(key, shared)); if(raw===null) return null; return { key, value: raw, shared: !!shared }; }
+        async get(key){
+          try{ const raw = localStorage.getItem(lsKey(key)); if(raw===null) return null; return { key, value: raw }; }
           catch(e){ return null; }
         },
-        async set(key, value, shared){
-          try{ localStorage.setItem(lsKey(key, shared), value); return { key, value, shared: !!shared }; }
+        async set(key, value){
+          try{ localStorage.setItem(lsKey(key), value); return { key, value }; }
           catch(e){ return null; }
         },
-        async delete(key, shared){
-          try{ localStorage.removeItem(lsKey(key, shared)); return { key, deleted:true, shared: !!shared }; }
+        async delete(key){
+          try{ localStorage.removeItem(lsKey(key)); return { key, deleted:true }; }
           catch(e){ return null; }
         },
-        async list(prefix, shared){
+        async list(prefix){
           try{
-            const full = lsKey(prefix || '', shared); const keys = [];
-            for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(k && k.indexOf(full)===0) keys.push(k.slice(PREFIX.length + (shared?7:0))); }
-            return { keys, prefix, shared: !!shared };
+            const full = lsKey(prefix || ''); const keys = [];
+            for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(k && k.indexOf(full)===0) keys.push(k.slice(PREFIX.length)); }
+            return { keys, prefix };
           }catch(e){ return null; }
         }
       };

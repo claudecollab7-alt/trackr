@@ -565,6 +565,7 @@
             <div><label style="display:block; margin-bottom:2px;">App Lock (PIN)</label><span class="period-hint">Require a 4-digit PIN to open Trackr</span></div>
             <button class="theme-toggle" id="app-lock-toggle" role="switch" aria-checked="false" aria-label="Toggle app lock"><span class="theme-toggle-thumb"></span></button>
           </div>
+          <p style="margin:10px 0 0; font-size:12px; color:var(--ink-soft); line-height:1.5;">This is a quick deterrent to keep casual snoopers out &mdash; not real security. There's no server, so the PIN is stored only on this device and isn't salted or rate-limited; anyone with access to the device's storage could bypass it.</p>
           <div id="app-lock-timeout-row" style="display:none; margin-top:14px; justify-content:space-between; align-items:center; gap:10px;">
             <label style="font-size:13px; color:var(--ink-soft); font-weight:700;">Auto-lock after</label>
             <select id="app-lock-timeout" style="padding:7px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink);">
