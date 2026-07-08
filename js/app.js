@@ -47,7 +47,7 @@
   let reminders = [];
   let goals = [];
   let accounts = defaultAccounts();
-  let charts = { weekTrend:null };
+  let charts = { weekTrend:null, netWorthTrend:null, categoryTrend:null };
   let currentReport = null;
   let editingId = null;
   let editingDebtId = null;
@@ -589,6 +589,72 @@
           { label:'Credit', data:incomeData, backgroundColor:creditColor, borderRadius:4 },
           { label:'Debit', data:expenseData, backgroundColor:debitColor, borderRadius:4 }
         ]},
+        options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ font:{family:'Inter', size:11, weight:600}, color:tickColor } } }, scales:{ y:{ beginAtZero:true, grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
+      });
+    }
+  }
+
+  function last6MonthKeys(){
+    const months=[]; const now = new Date();
+    for(let i=5;i>=0;i--){ months.push(toLocalDateStr(new Date(now.getFullYear(), now.getMonth()-i, 1)).slice(0,7)); }
+    return months;
+  }
+  function chartThemeColors(){
+    const themeNow = document.body.getAttribute('data-theme');
+    const isDark = themeNow==='dark';
+    const isMounty = themeNow==='mounty';
+    return {
+      gridColor: isDark ? '#232C42' : (isMounty ? '#123029' : '#E2E8F0'),
+      tickColor: isDark ? '#8B95AC' : (isMounty ? '#8EB69B' : '#64748B'),
+      lineColor: isMounty ? '#5FD98C' : '#2563EB'
+    };
+  }
+  function renderNetWorthTrendChart(){
+    const canvas = document.getElementById('chart-networth-trend');
+    if(!canvas) return;
+    const months = last6MonthKeys();
+    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
+    const data = months.map(m=>{
+      const monthEnd = monthRangeFromDate(m+'-01').end;
+      const balance = transactions.filter(t=> t.date<=monthEnd).reduce((s,t)=> s + (t.type==='income'?t.amount:-t.amount), 0);
+      const debtOutstanding = debts.filter(d=> d.startDate <= monthEnd).reduce((s,d)=>{
+        const paidByThen = (d.payments||[]).filter(p=>p.date<=monthEnd).reduce((ps,p)=>ps+p.amount,0);
+        return s + Math.max(0, d.total - paidByThen);
+      }, 0);
+      return balance - debtOutstanding;
+    });
+    if(charts.netWorthTrend) charts.netWorthTrend.destroy();
+    if(window.Chart){
+      const { gridColor, tickColor, lineColor } = chartThemeColors();
+      charts.netWorthTrend = new Chart(canvas.getContext('2d'), {
+        type:'line',
+        data:{ labels, datasets:[{ label:'Net Worth', data, borderColor:lineColor, backgroundColor:lineColor+'22', tension:.3, fill:true, pointRadius:3 }] },
+        options:{ responsive:true, plugins:{ legend:{ display:false } }, scales:{ y:{ grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
+      });
+    }
+  }
+  function renderCategoryTrendChart(){
+    const canvas = document.getElementById('chart-category-trend');
+    const emptyNote = document.getElementById('category-trend-empty');
+    if(!canvas) return;
+    const months = last6MonthKeys();
+    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
+    const expenseInRange = transactions.filter(t=> t.type==='expense' && months.includes(t.date.slice(0,7)));
+    const totals = {}; expenseInRange.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
+    const topCats = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([c])=>c);
+    if(charts.categoryTrend){ charts.categoryTrend.destroy(); charts.categoryTrend = null; }
+    if(topCats.length===0){ canvas.style.display='none'; emptyNote.style.display='block'; return; }
+    canvas.style.display='block'; emptyNote.style.display='none';
+    if(window.Chart){
+      const { gridColor, tickColor } = chartThemeColors();
+      const datasets = topCats.map(cat=>{
+        const data = months.map(m=> sumByType(transactions.filter(t=>t.category===cat && t.date.startsWith(m)), 'expense'));
+        const color = categoryColor(cat);
+        return { label:cat, data, borderColor:color, backgroundColor:color, tension:.3, pointRadius:2, fill:false };
+      });
+      charts.categoryTrend = new Chart(canvas.getContext('2d'), {
+        type:'line',
+        data:{ labels, datasets },
         options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ font:{family:'Inter', size:11, weight:600}, color:tickColor } } }, scales:{ y:{ beginAtZero:true, grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
       });
     }
@@ -1799,6 +1865,8 @@
     renderRemindersUpcoming();
     renderRecurringDueCard();
     renderTrendChart();
+    renderNetWorthTrendChart();
+    renderCategoryTrendChart();
     renderReports();
     renderHistory();
     renderBudgetSetList();
@@ -2197,6 +2265,8 @@
         applyTheme(newTheme);
         renderAllRings();
         renderTrendChart();
+        renderNetWorthTrendChart();
+        renderCategoryTrendChart();
       });
     });
 
