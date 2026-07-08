@@ -1677,6 +1677,50 @@
   }
   function closeGlobalSearch(){ hideOverlay('search-overlay'); }
 
+  function openNotificationsOverlay(){
+    renderNotificationsList();
+    showOverlay('notifications-overlay');
+    history.pushState({ notificationsOpen:true }, '', '');
+  }
+  function closeNotificationsOverlay(){ hideOverlay('notifications-overlay'); }
+  function goToAlertTarget(tab, sub){
+    history.back();
+    setTimeout(()=>{ if(sub){ goToMoreSub('more', sub); } else { switchTab(tab); } }, 50);
+  }
+  function renderNotificationsList(){
+    const container = document.getElementById('notifications-list'); container.innerHTML='';
+    const { overBudget, overdueDebts, dueReminders, dueRecurring } = collectAlerts();
+    if(overBudget.length+overdueDebts.length+dueReminders.length+dueRecurring.length === 0){
+      container.innerHTML = '<p class="empty-note">You\'re all caught up — no alerts right now.</p>';
+      return;
+    }
+    function addSection(label){
+      const h = document.createElement('div'); h.className='activity-group-label'; h.textContent=label; container.appendChild(h);
+    }
+    function addRow(title, meta, onClick){
+      const row = document.createElement('div'); row.className='reminder-card clickable-row';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(title)}</div><div class="reminder-meta">${meta}</div></div></div>`;
+      row.addEventListener('click', onClick);
+      container.appendChild(row);
+    }
+    if(overBudget.length){
+      addSection('Over Budget');
+      overBudget.forEach(b=> addRow(b.category, `${fmt(b.spent)} of ${fmt(b.limit)} — over by ${fmt(b.spent-b.limit)}`, ()=> goToAlertTarget(null,'budgets')));
+    }
+    if(overdueDebts.length){
+      addSection('Overdue Debts');
+      overdueDebts.forEach(d=> addRow(d.name, `${debtOverdueCount(d)} installment${debtOverdueCount(d)===1?'':'s'} overdue`, ()=> goToAlertTarget(null,'debts')));
+    }
+    if(dueReminders.length){
+      addSection('Reminders');
+      dueReminders.forEach(({r,status})=> addRow(r.title, `${reminderStatusLabel(status)}${r.amount?' · '+fmt(r.amount):''}`, ()=> goToAlertTarget(null,'reminders')));
+    }
+    if(dueRecurring.length){
+      addSection('Due for Logging');
+      dueRecurring.forEach(({r,status})=> addRow(r.category, `${reminderStatusLabel(status)} · ${fmt(r.amount)}`, ()=> goToAlertTarget('insights',null)));
+    }
+  }
+
   function openSchedule(debtId){
     const d = debts.find(x=>x.id===debtId); if(!d || d.type!=='emi') return;
     setText('schedule-debt-name', d.name);
@@ -1834,16 +1878,21 @@
     history.back();
   }
 
-  function updateBellBadge(){
+  function collectAlerts(){
     const today = toLocalDateStr(new Date()); const monthPrefix = today.slice(0,7);
     const monthExpense = transactions.filter(t=>t.type==='expense' && t.date.startsWith(monthPrefix));
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
-    let overCount = 0;
-    Object.keys(budgets).forEach(cat=>{ if(budgets[cat]>0 && (spentMap[cat]||0)>budgets[cat]) overCount++; });
-    const overdueDebtCount = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0).length;
-    const reminderCount = reminders.filter(r=> reminderStatus(r)).length;
-    const recurringDueCount = recurring.filter(r=> recurringDueStatus(r)).length;
-    const totalAlerts = overCount + overdueDebtCount + reminderCount + recurringDueCount;
+    const overBudget = Object.keys(budgets)
+      .filter(cat=> budgets[cat]>0 && (spentMap[cat]||0) > budgets[cat])
+      .map(cat=> ({ category: cat, spent: spentMap[cat]||0, limit: budgets[cat] }));
+    const overdueDebts = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0);
+    const dueReminders = reminders.map(r=> ({ r, status: reminderStatus(r) })).filter(x=>x.status);
+    const dueRecurring = recurring.map(r=> ({ r, status: recurringDueStatus(r) })).filter(x=>x.status);
+    return { overBudget, overdueDebts, dueReminders, dueRecurring };
+  }
+  function updateBellBadge(){
+    const alerts = collectAlerts();
+    const totalAlerts = alerts.overBudget.length + alerts.overdueDebts.length + alerts.dueReminders.length + alerts.dueRecurring.length;
     const badge = document.getElementById('bell-badge');
     if(totalAlerts>0){ badge.style.display='flex'; badge.textContent = totalAlerts>9?'9+':String(totalAlerts); }
     else { badge.style.display='none'; }
@@ -2226,7 +2275,9 @@
     document.querySelectorAll('.more-row').forEach(btn=> btn.addEventListener('click', ()=> showMoreSub(btn.dataset.sub)));
     document.querySelectorAll('[data-back]').forEach(btn=> btn.addEventListener('click', backToMoreMenu));
 
-    document.getElementById('bell-btn').addEventListener('click', ()=>{ switchTab('insights'); });
+    document.getElementById('bell-btn').addEventListener('click', openNotificationsOverlay);
+    document.getElementById('close-notifications-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('notifications-overlay').addEventListener('click', (e)=>{ if(e.target.id==='notifications-overlay') history.back(); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
     document.getElementById('backup-nag-now-btn').addEventListener('click', downloadBackup);
     document.getElementById('backup-nag-later-btn').addEventListener('click', dismissBackupNag);
@@ -2445,6 +2496,7 @@
       if(!state.scheduleOpen){ closeSchedule(); }
       if(!state.catDetailOpen){ closeCategoryDetail(); }
       if(!state.txDetailOpen){ closeTransactionDetail(); }
+      if(!state.notificationsOpen){ closeNotificationsOverlay(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){
