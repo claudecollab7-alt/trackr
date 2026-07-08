@@ -142,6 +142,12 @@
         <div class="period-hint" id="debt-summary-meta">0 active debts</div>
       </div>
 
+      <div class="card" id="receivable-summary-card" style="display:none; margin-bottom:16px;">
+        <div class="card-header-row"><span class="card-label">Owed to You</span><button class="link-btn" data-tab="more" data-sub="debts">View All</button></div>
+        <div class="balance-amount mono-num" id="receivable-summary-amount" style="font-size:22px; margin:0 0 6px; color:var(--credit);">₹0.00</div>
+        <div class="period-hint" id="receivable-summary-meta">0 active receivables</div>
+      </div>
+
       <div class="card" id="goals-summary-card" style="display:none; margin-bottom:16px;">
         <div class="card-header-row"><span class="card-label">Savings Goals</span><button class="link-btn" data-tab="more" data-sub="goals">View All</button></div>
         <div class="balance-amount mono-num" id="goals-summary-amount" style="font-size:22px; margin:0 0 6px; color:var(--goal);">₹0.00</div>
@@ -318,6 +324,35 @@
           <div class="debt-overview-row"><span>Paid <span class="mono-num" id="reportsdebt-lump-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="reportsdebt-lump-pending">₹0.00</span></span></div>
         </div>
       </div>
+
+      <div class="card" id="reportsreceivable-card" style="display:none; margin-top:18px;">
+        <div class="card-header-row"><span class="card-label">Receivables Overview</span><button class="link-btn" data-tab="more" data-sub="debts">View All</button></div>
+        <p class="period-hint" style="display:block; margin-bottom:14px;">Money owed to you — this reflects everything right now, not just this report's date range.</p>
+        <div class="debt-overview-grid">
+          <div class="debt-overview-stat">
+            <span class="debt-overview-label">Total Committed</span>
+            <span class="debt-overview-amt mono-num" id="reportsreceivable-total-committed">₹0.00</span>
+          </div>
+          <div class="debt-overview-stat">
+            <span class="debt-overview-label">Total Received</span>
+            <span class="debt-overview-amt mono-num" id="reportsreceivable-total-paid" style="color:var(--credit);">₹0.00</span>
+          </div>
+          <div class="debt-overview-stat">
+            <span class="debt-overview-label">Total Pending</span>
+            <span class="debt-overview-amt mono-num" id="reportsreceivable-total-pending" style="color:var(--debit);">₹0.00</span>
+          </div>
+        </div>
+        <div class="debt-overview-track"><div class="debt-overview-fill" id="reportsreceivable-overall-fill"></div></div>
+
+        <div class="debt-overview-subsection" id="reportsreceivable-emi-section" style="display:none;">
+          <div class="debt-overview-subtitle">EMI Receivables</div>
+          <div class="debt-overview-row"><span>Received <span class="mono-num" id="reportsreceivable-emi-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="reportsreceivable-emi-pending">₹0.00</span></span></div>
+        </div>
+        <div class="debt-overview-subsection" id="reportsreceivable-lump-section" style="display:none;">
+          <div class="debt-overview-subtitle">One-time Receivables</div>
+          <div class="debt-overview-row"><span>Received <span class="mono-num" id="reportsreceivable-lump-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="reportsreceivable-lump-pending">₹0.00</span></span></div>
+        </div>
+      </div>
     </section>
 
     <section id="view-more" class="view">
@@ -358,11 +393,16 @@
 
       <div id="more-sub-debts" class="more-sub">
         <button class="back-btn" data-back><span data-icon="chevronLeft" data-icon-size="15"></span> Back</button>
-        <h2>Debts &amp; EMIs</h2>
-        <p class="period-hint" style="display:block; margin-bottom:16px;">Track anything you owe — a loan, a credit card, money borrowed from someone. Every debt below is set up as one of two types: <strong>EMI</strong> (a fixed amount due every month, for a set number of months) or <strong>One-time</strong> (any amount, paid off whenever you like). Log a payment as you make it — it's recorded in your transactions too, under "EMI / Loan".</p>
+        <h2 id="debts-page-title">Debts &amp; EMIs</h2>
+        <p class="period-hint" id="debts-page-intro" style="display:block; margin-bottom:16px;">Track anything you owe — a loan, a credit card, money borrowed from someone. Every debt below is set up as one of two types: <strong>EMI</strong> (a fixed amount due every month, for a set number of months) or <strong>One-time</strong> (any amount, paid off whenever you like). Log a payment as you make it — it's recorded in your transactions too, under "EMI / Loan".</p>
+
+        <div class="type-toggle" id="debt-kind-toggle" style="margin-bottom:16px;">
+          <button type="button" class="type-btn active" data-debtkind="debt"><span data-icon="arrowDown" data-icon-size="14"></span> I Owe</button>
+          <button type="button" class="type-btn" data-debtkind="receivable"><span data-icon="arrowUp" data-icon-size="14"></span> Owed to Me</button>
+        </div>
 
         <div class="card" id="debtov-card" style="display:none; margin-bottom:16px;">
-          <div class="card-label" style="margin-bottom:14px; display:block;">Debt Overview — All Debts</div>
+          <div class="card-label" style="margin-bottom:14px; display:block;" id="debtov-label">Debt Overview — All Debts</div>
           <div class="debt-overview-grid">
             <div class="debt-overview-stat">
               <span class="debt-overview-label">Total Committed</span>
@@ -392,7 +432,7 @@
         <div class="card" style="margin-bottom:16px;">
           <div id="debts-list"></div>
         </div>
-        <button class="btn-pill btn-black" id="show-add-debt-btn"><span data-icon="plus" data-icon-size="14"></span> Add Debt</button>
+        <button class="btn-pill btn-black" id="show-add-debt-btn"><span data-icon="plus" data-icon-size="14"></span> <span id="add-debt-btn-label">Add Debt</span></button>
         <form class="card ledger-form" id="add-debt-form" style="display:none; margin-top:14px; max-width:none;">
           <label>Name
             <input type="text" id="debt-name" placeholder="e.g. Car Loan - HDFC" required>
@@ -404,7 +444,7 @@
           <p class="period-hint" id="debt-type-hint" style="margin:-6px 0 16px;">A fixed installment is due every month, for a set number of months.</p>
           <input type="hidden" id="debt-type-value" value="emi">
           <div id="lump-fields" style="display:none;">
-            <label>Total Amount <span style="color:var(--ink-soft); font-weight:500;">— the full amount owed</span>
+            <label>Total Amount <span style="color:var(--ink-soft); font-weight:500;" id="debt-total-hint">— the full amount owed</span>
               <input type="number" id="debt-total" min="0.01" step="0.01">
             </label>
           </div>
