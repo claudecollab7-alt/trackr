@@ -340,7 +340,7 @@
     const sub = `${escapeHtml(t.note || (t.type==='income'?'Credit':'Debit'))}${showDate ? ' · '+formatHuman(t.date) : ''}`;
     let actionsHtml = '';
     if(withActions){
-      actionsHtml = `<div class="activity-actions"><button class="icon-btn-sm edit-btn" data-id="${t.id}">${icon('edit',14)}</button><button class="icon-btn-sm del-btn" data-id="${t.id}">${icon('trash',14)}</button></div>`;
+      actionsHtml = `<div class="activity-actions"><button class="icon-btn-sm edit-btn" data-id="${t.id}" aria-label="Edit entry">${icon('edit',14)}</button><button class="icon-btn-sm del-btn" data-id="${t.id}" aria-label="Delete entry">${icon('trash',14)}</button></div>`;
     }
     row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div></div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}</div>`;
     row.dataset.category = t.category; row.dataset.txType = t.type;
@@ -790,7 +790,8 @@
     recurring.forEach(r=>{
       const color = r.type==='income' ? '#16A34A' : categoryColor(r.category);
       const chip = document.createElement('button'); chip.type='button'; chip.className='recurring-chip'; chip.dataset.id=r.id;
-      chip.innerHTML = `<span class="chip-badge" style="background:${color};">${r.type==='income'?'↑':categoryInitial(r.category)}</span><span>${escapeHtml(r.category)} · ${fmt(r.amount)}</span><span class="chip-del" data-id="${r.id}">×</span>`;
+      chip.setAttribute('aria-label', `Log ${r.category}, ${fmt(r.amount)}`);
+      chip.innerHTML = `<span class="chip-badge" style="background:${color};">${r.type==='income'?'↑':categoryInitial(r.category)}</span><span>${escapeHtml(r.category)} · ${fmt(r.amount)}</span><span class="chip-del" data-id="${r.id}" aria-label="Remove ${escapeHtml(r.category)} quick add" role="button">×</span>`;
       container.appendChild(chip);
     });
     container.querySelectorAll('.chip-del').forEach(x=>{
@@ -1033,8 +1034,8 @@
             <div class="debt-type-badge" style="color:${typeColor};">${typeLabel}</div>
           </div>
           <div style="display:flex; gap:4px;">
-            <button class="icon-btn-sm edit-debt-btn" data-id="${d.id}">${icon('edit',14)}</button>
-            <button class="icon-btn-sm del-debt-btn" data-id="${d.id}">${icon('trash',14)}</button>
+            <button class="icon-btn-sm edit-debt-btn" data-id="${d.id}" aria-label="Edit debt">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-debt-btn" data-id="${d.id}" aria-label="Delete debt">${icon('trash',14)}</button>
           </div>
         </div>
         <div class="debt-bar-track"><div class="debt-bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
@@ -1158,8 +1159,8 @@
             ${metaParts.length ? `<div class="goal-meta">${metaParts.join(' · ')}</div>` : ''}
           </div>
           <div style="display:flex; gap:4px;">
-            <button class="icon-btn-sm edit-goal-btn" data-id="${g.id}">${icon('edit',14)}</button>
-            <button class="icon-btn-sm del-goal-btn" data-id="${g.id}">${icon('trash',14)}</button>
+            <button class="icon-btn-sm edit-goal-btn" data-id="${g.id}" aria-label="Edit savings goal">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-goal-btn" data-id="${g.id}" aria-label="Delete savings goal">${icon('trash',14)}</button>
           </div>
         </div>
         <div class="goal-bar-track"><div class="goal-bar-fill" style="width:${pct}%; background:${isComplete?'var(--credit)':'var(--goal)'};"></div></div>
@@ -1413,8 +1414,8 @@
         </div>
         <div class="reminder-actions">
           ${ status ? `<button class="btn-pill btn-outline dismiss-reminder-btn" data-id="${r.id}">Mark Done</button>` : '' }
-          <button class="icon-btn-sm edit-reminder-btn" data-id="${r.id}">${icon('edit',14)}</button>
-          <button class="icon-btn-sm del-reminder-btn" data-id="${r.id}">${icon('trash',14)}</button>
+          <button class="icon-btn-sm edit-reminder-btn" data-id="${r.id}" aria-label="Edit reminder">${icon('edit',14)}</button>
+          <button class="icon-btn-sm del-reminder-btn" data-id="${r.id}" aria-label="Delete reminder">${icon('trash',14)}</button>
         </div>
       `;
       container.appendChild(card);
@@ -1731,7 +1732,7 @@
     categories[type].forEach(c=>{
       const color = categoryColor(c);
       const row = document.createElement('div'); row.className='cat-row';
-      row.innerHTML = `<span class="cat-row-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}">${icon('trash',14)}</button>`;
+      row.innerHTML = `<span class="cat-row-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-cat-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteCategory(btn.dataset.type, btn.dataset.cat)));
@@ -1769,7 +1770,7 @@
       row.innerHTML = `
         <div class="budget-row-top">
           <span class="budget-cat-left"><span class="cat-badge sm" style="background:${categoryColor(a.name)};">${categoryInitial(a.name)}</span><span class="budget-cat-name">${escapeHtml(a.name)}</span></span>
-          <button class="icon-btn-sm del-account-btn" data-id="${a.id}">${icon('trash',14)}</button>
+          <button class="icon-btn-sm del-account-btn" data-id="${a.id}" aria-label="Delete account ${escapeHtml(a.name)}">${icon('trash',14)}</button>
         </div>
         <div class="budget-row-meta" style="font-size:14px; font-weight:700; color:${bal<0?'var(--debit)':'var(--ink)'};">${fmt(bal)}</div>
       `;

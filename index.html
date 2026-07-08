@@ -37,9 +37,9 @@
     <div class="topbar">
       <div class="topbar-left"><h1 id="page-title">Home</h1></div>
       <div class="topbar-right">
-        <button class="icon-circle" id="global-search-btn"><span data-icon="search"></span></button>
-        <button class="icon-circle" id="bell-btn"><span data-icon="bell"></span><span class="badge-dot" id="bell-badge"></span></button>
-        <button class="icon-circle" id="settings-btn"><span data-icon="sliders"></span></button>
+        <button class="icon-circle" id="global-search-btn" aria-label="Search"><span data-icon="search"></span></button>
+        <button class="icon-circle" id="bell-btn" aria-label="Notifications and alerts"><span data-icon="bell"></span><span class="badge-dot" id="bell-badge"></span></button>
+        <button class="icon-circle" id="settings-btn" aria-label="Settings"><span data-icon="sliders"></span></button>
       </div>
     </div>
 
@@ -629,41 +629,41 @@
   <button class="link-btn" id="pinlock-cancel-setup" style="display:none;">Cancel</button>
 </div>
 
-<div class="search-overlay" id="search-overlay">
+<div class="search-overlay" id="search-overlay" role="dialog" aria-modal="true" aria-label="Search">
   <div class="search-overlay-inner">
     <div class="search-overlay-header">
       <div class="search-input-wrap" style="flex:1;"><span class="search-icon" data-icon="search" data-icon-size="15"></span><input type="text" id="global-search-input" class="search-input" placeholder="Search transactions, categories, debts…" autocomplete="off"></div>
-      <button class="icon-btn-sm" id="close-search-btn"><span data-icon="x" data-icon-size="16"></span></button>
+      <button class="icon-btn-sm" id="close-search-btn" aria-label="Close search"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="global-search-results"></div></div>
   </div>
 </div>
 
-<div class="search-overlay" id="schedule-overlay">
+<div class="search-overlay" id="schedule-overlay" role="dialog" aria-modal="true" aria-label="Payment schedule">
   <div class="search-overlay-inner">
     <div class="search-overlay-header">
       <div style="flex:1;"><strong id="schedule-debt-name">Loan</strong><div class="period-hint" style="margin-top:2px;">Payment schedule</div></div>
-      <button class="icon-btn-sm" id="close-schedule-btn"><span data-icon="x" data-icon-size="16"></span></button>
+      <button class="icon-btn-sm" id="close-schedule-btn" aria-label="Close payment schedule"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="schedule-list"></div></div>
   </div>
 </div>
 
-<div class="search-overlay" id="category-detail-overlay">
+<div class="search-overlay" id="category-detail-overlay" role="dialog" aria-modal="true" aria-label="Category detail">
   <div class="search-overlay-inner">
     <div class="search-overlay-header">
       <div style="flex:1;"><strong id="catdetail-title">Category</strong><div class="period-hint" id="catdetail-subtitle" style="margin-top:2px;">—</div></div>
-      <button class="icon-btn-sm" id="close-catdetail-btn"><span data-icon="x" data-icon-size="16"></span></button>
+      <button class="icon-btn-sm" id="close-catdetail-btn" aria-label="Close category detail"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="catdetail-list"></div></div>
   </div>
 </div>
 
-<div class="search-overlay" id="txdetail-overlay">
+<div class="search-overlay" id="txdetail-overlay" role="dialog" aria-modal="true" aria-label="Transaction details">
   <div class="search-overlay-inner">
     <div class="search-overlay-header">
       <div style="flex:1;"><strong>Transaction Details</strong></div>
-      <button class="icon-btn-sm" id="close-txdetail-btn"><span data-icon="x" data-icon-size="16"></span></button>
+      <button class="icon-btn-sm" id="close-txdetail-btn" aria-label="Close transaction details"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body">
       <div class="txdetail-hero">
@@ -683,7 +683,7 @@
 <nav class="bottom-nav">
   <button class="tab-btn active" data-tab="home"><span data-icon="home" data-icon-size="20"></span><span class="tab-label">Home</span></button>
   <button class="tab-btn" data-tab="insights"><span data-icon="insights" data-icon-size="20"></span><span class="tab-label">Insights</span></button>
-  <button class="tab-btn fab" data-tab="add"><span data-icon="plus" data-icon-size="22"></span></button>
+  <button class="tab-btn fab" data-tab="add" aria-label="Add Entry"><span data-icon="plus" data-icon-size="22"></span></button>
   <button class="tab-btn" data-tab="reports"><span data-icon="file" data-icon-size="20"></span><span class="tab-label">Reports</span></button>
   <button class="tab-btn" data-tab="more"><span data-icon="more" data-icon-size="20"></span><span class="tab-label">More</span></button>
 </nav>
