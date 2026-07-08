@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trackr — Money Math Tests</title>
+<style>
+  body{ font-family:system-ui,sans-serif; background:#0F172A; color:#E2E8F0; padding:24px; max-width:720px; margin:0 auto; }
+  h1{ font-size:20px; }
+  .summary{ font-weight:700; font-size:16px; margin:16px 0; padding:12px 16px; border-radius:10px; }
+  .summary.pass{ background:rgba(22,163,74,.18); color:#4ADE80; }
+  .summary.fail{ background:rgba(220,38,38,.18); color:#F87171; }
+  ul{ list-style:none; padding:0; margin:0; }
+  li{ padding:8px 12px; border-radius:8px; margin-bottom:4px; font-size:13.5px; font-family:ui-monospace,monospace; }
+  li.pass{ background:rgba(22,163,74,.08); color:#86EFAC; }
+  li.fail{ background:rgba(220,38,38,.14); color:#FCA5A5; }
+  li.fail .detail{ display:block; color:#FECACA; margin-top:4px; }
+</style>
+</head>
+<body>
+<h1>Trackr — money-math.js tests</h1>
+<p style="color:#94A3B8; font-size:13px;">Open this file directly in a browser (no server or build step needed) to verify the EMI, debt, goal, and report-total math. Re-run anytime after touching js/money-math.js.</p>
+<div id="summary" class="summary">Running…</div>
+<ul id="results"></ul>
+
+<script src="js/money-math.js"></script>
+<script>
+(function(){
+  "use strict";
+  const results = [];
+  function assertEqual(actual, expected, label){
+    const pass = actual === expected;
+    results.push({ pass, label, detail: pass ? '' : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}` });
+  }
+  function assertTrue(cond, label, detail){
+    results.push({ pass: !!cond, label, detail: cond ? '' : (detail||'') });
+  }
+  function monthsAgoDay1(n){
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-n);
+    return toLocalDateStr(d);
+  }
+
+  // --- toLocalDateStr ---
+  assertEqual(toLocalDateStr(new Date(2024,0,5)), '2024-01-05', 'toLocalDateStr pads single-digit month/day');
+  assertEqual(toLocalDateStr(new Date(2024,11,31)), '2024-12-31', 'toLocalDateStr handles December 31');
+
+  // --- sumByType ---
+  const txList = [
+    { type:'income', amount:100 },
+    { type:'expense', amount:40 },
+    { type:'income', amount:20 }
+  ];
+  assertEqual(sumByType(txList,'income'), 120, 'sumByType sums only matching type (income)');
+  assertEqual(sumByType(txList,'expense'), 40, 'sumByType sums only matching type (expense)');
+
+  // --- categoryBreakdownData ---
+  const breakdown = categoryBreakdownData([
+    { category:'Food', type:'expense', amount:50 },
+    { category:'Food', type:'expense', amount:30 },
+    { category:'Salary', type:'income', amount:1000 }
+  ]);
+  assertEqual(breakdown.length, 2, 'categoryBreakdownData groups by category+type');
+  assertEqual(breakdown[0].category, 'Salary', 'categoryBreakdownData sorts descending by amount (largest first)');
+  assertEqual(breakdown[0].amt, 1000, 'categoryBreakdownData Salary total is untouched');
+  assertEqual(breakdown[1].category, 'Food', 'categoryBreakdownData second entry is Food');
+  assertEqual(breakdown[1].amt, 80, 'categoryBreakdownData sums Food entries together (50+30)');
+
+  // --- debtPaid / debtRemaining ---
+  assertEqual(debtPaid({ total:1000, payments:[{amount:200},{amount:300}] }), 500, 'debtPaid sums payment amounts');
+  assertEqual(debtRemaining({ total:1000, payments:[{amount:200},{amount:300}] }), 500, 'debtRemaining subtracts paid from total');
+  assertEqual(debtRemaining({ total:100, payments:[{amount:150}] }), 0, 'debtRemaining clamps at 0, never goes negative');
+
+  // --- emiMonthsElapsed (relative to real "today", using day-1 anchors to dodge month-length edge cases) ---
+  assertEqual(emiMonthsElapsed(monthsAgoDay1(0)), 1, 'emiMonthsElapsed counts the starting month itself as month 1');
+  assertEqual(emiMonthsElapsed(monthsAgoDay1(5)), 6, 'emiMonthsElapsed counts 5 full months back as 6 elapsed');
+
+  // --- debtOverdueCount ---
+  const emiDebt = { type:'emi', startDate: monthsAgoDay1(5), tenure:12, payments:[{},{},{}] };
+  assertEqual(debtOverdueCount(emiDebt), 3, 'debtOverdueCount = months elapsed (6) minus payments made (3)');
+  assertEqual(debtOverdueCount({ ...emiDebt, type:'onetime' }), 0, 'debtOverdueCount is always 0 for non-EMI debts');
+  assertEqual(debtOverdueCount({ ...emiDebt, payments:[{},{},{},{},{},{},{}] }), 0, 'debtOverdueCount clamps at 0 when fully paid up');
+
+  // --- emiPayoffDate ---
+  assertEqual(emiPayoffDate({ type:'onetime', tenure:4, payments:[] }), null, 'emiPayoffDate is null for non-EMI debts');
+  assertEqual(emiPayoffDate({ type:'emi', tenure:4, payments:[{},{},{},{}] }), null, 'emiPayoffDate is null once all installments are paid');
+  const payoff = emiPayoffDate({ type:'emi', tenure:4, payments:[{}] });
+  assertTrue(payoff instanceof Date, 'emiPayoffDate returns a Date when installments remain');
+
+  // --- buildEmiSchedule ---
+  const schedule = buildEmiSchedule({ type:'emi', startDate: monthsAgoDay1(3), tenure:6, emiAmount:2000,
+    payments:[{date:'2024-01-01',amount:2000},{date:'2024-02-01',amount:2000}] });
+  assertEqual(schedule.length, 6, 'buildEmiSchedule returns exactly `tenure` installments');
+  assertTrue(schedule.every((s,i)=> s.installmentNo===i+1), 'buildEmiSchedule numbers installments sequentially from 1');
+  assertEqual(schedule[0].paid, true, 'buildEmiSchedule marks installment 1 paid (1st payment on record)');
+  assertEqual(schedule[1].paid, true, 'buildEmiSchedule marks installment 2 paid (2nd payment on record)');
+  assertEqual(schedule[2].paid, false, 'buildEmiSchedule leaves installment 3 unpaid (no 3rd payment)');
+  assertEqual(schedule[2].overdue, true, 'buildEmiSchedule flags an unpaid, past-due installment as overdue');
+  assertEqual(schedule[5].overdue, false, 'buildEmiSchedule never flags a future installment as overdue, paid or not');
+  assertEqual(buildEmiSchedule({ type:'onetime' }).length, 0, 'buildEmiSchedule returns empty array for non-EMI debts');
+
+  // --- goalSaved / goalRemaining ---
+  assertEqual(goalSaved({ initialSaved:100, contributions:[{amount:50},{amount:25}] }), 175, 'goalSaved adds initialSaved plus all contributions');
+  assertEqual(goalRemaining({ initialSaved:100, contributions:[{amount:50},{amount:25}], target:500 }), 325, 'goalRemaining subtracts saved from target');
+  assertEqual(goalRemaining({ initialSaved:0, contributions:[{amount:1000}], target:500 }), 0, 'goalRemaining clamps at 0 once target is exceeded');
+
+  // --- render ---
+  const passCount = results.filter(r=>r.pass).length;
+  const failCount = results.length - passCount;
+  const summary = document.getElementById('summary');
+  summary.textContent = failCount===0 ? `All ${results.length} tests passed` : `${failCount} of ${results.length} tests FAILED`;
+  summary.className = 'summary ' + (failCount===0 ? 'pass' : 'fail');
+  const list = document.getElementById('results');
+  results.forEach(r=>{
+    const li = document.createElement('li'); li.className = r.pass ? 'pass' : 'fail';
+    li.textContent = (r.pass?'✓ ':'✗ ') + r.label;
+    if(!r.pass && r.detail){ const d = document.createElement('span'); d.className='detail'; d.textContent = r.detail; li.appendChild(d); }
+    list.appendChild(li);
+  });
+  console.log(`[trackr money-math tests] ${passCount}/${results.length} passed`);
+})();
+</script>
+</body>
+</html>
