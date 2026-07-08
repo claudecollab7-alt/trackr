@@ -433,27 +433,6 @@
     setTimeout(()=> overlay.classList.remove('show'), 1100);
   }
 
-  let pendingUndo = null;
-  const UNDO_TIMEOUT_MS = 6000;
-  function showUndoSnackbar(message, restoreFn){
-    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
-    const el = document.getElementById('undo-snackbar');
-    document.getElementById('undo-snackbar-msg').textContent = message;
-    el.classList.add('show');
-    pendingUndo = { restore: restoreFn, timer: setTimeout(hideUndoSnackbar, UNDO_TIMEOUT_MS) };
-  }
-  function hideUndoSnackbar(){
-    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
-    pendingUndo = null;
-    document.getElementById('undo-snackbar').classList.remove('show');
-  }
-  async function undoLastDelete(){
-    if(!pendingUndo) return;
-    const restore = pendingUndo.restore;
-    hideUndoSnackbar();
-    await restore();
-  }
-
   function renderHomeBalance(){
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
     const masked = settings.hideBalances && !balancesRevealed;
@@ -522,6 +501,31 @@
       });
       container.appendChild(cell);
     });
+  }
+
+  let appToastTimer = null;
+  function showAppToast(message, type){
+    const el = document.getElementById('app-toast');
+    document.getElementById('app-toast-msg').textContent = message;
+    el.classList.toggle('info', type==='info');
+    el.classList.add('show');
+    if(appToastTimer) clearTimeout(appToastTimer);
+    appToastTimer = setTimeout(()=> el.classList.remove('show'), 6000);
+  }
+  function hideAppToast(){
+    if(appToastTimer){ clearTimeout(appToastTimer); appToastTimer = null; }
+    document.getElementById('app-toast').classList.remove('show');
+  }
+  function checkBudgetCrossing(category, date, addedAmount){
+    const limit = budgets[category];
+    if(!limit || limit<=0) return;
+    const monthPrefix = toLocalDateStr(new Date()).slice(0,7);
+    if(!date.startsWith(monthPrefix)) return; // budgets only ever track the current month
+    const spendNow = sumByType(transactions.filter(t=>t.category===category && t.date.startsWith(monthPrefix)), 'expense');
+    const spendBefore = spendNow - addedAmount;
+    if(spendBefore <= limit && spendNow > limit){
+      showAppToast(`Over budget on ${category} by ${fmt(spendNow-limit)}`);
+    }
   }
 
   function renderInsightBanner(){
@@ -686,19 +690,11 @@
   }
 
   async function deleteTransaction(id){
-    const idx = transactions.findIndex(t=>t.id===id);
-    if(idx===-1) return false;
-    const removed = transactions[idx];
+    if(!confirm('Delete this entry? This cannot be undone.')) return false;
     recentlyDeletedTxIds.add(id);
-    transactions.splice(idx, 1);
+    transactions = transactions.filter(t=>t.id!==id);
     await saveTransactions();
     refreshAll();
-    showUndoSnackbar('Entry deleted.', async ()=>{
-      recentlyDeletedTxIds.delete(id);
-      transactions.splice(idx, 0, removed);
-      await saveTransactions();
-      refreshAll();
-    });
     return true;
   }
   function resetEntryDateDefault(){ document.getElementById('entry-date').value = toLocalDateStr(new Date()); }
@@ -766,6 +762,7 @@
     } else {
       transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type, date, category, account, amount, note, createdAt: new Date().toISOString() });
       await saveTransactions(); showStamp(type);
+      if(type==='expense') checkBudgetCrossing(category, date, amount);
       if(saveRecurringChecked){
         const exists = recurring.some(r=> r.type===type && r.category===category && r.amount===amount && (r.note||'')===note);
         if(!exists){
@@ -805,11 +802,13 @@
     const r = recurring.find(x=>x.id===id); if(!r) return;
     const accountSelect = document.getElementById('entry-account');
     const account = (accountSelect && accountSelect.value) || (accounts[0] ? accounts[0].name : 'Cash');
-    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:toLocalDateStr(new Date()), category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
-    if(r.dueDay) r.lastDismissedPeriod = toLocalDateStr(new Date()).slice(0,7);
+    const today = toLocalDateStr(new Date());
+    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:today, category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
+    if(r.dueDay) r.lastDismissedPeriod = today.slice(0,7);
     await saveTransactions();
     await saveRecurring();
     showStamp(r.type);
+    if(r.type==='expense') checkBudgetCrossing(r.category, today, r.amount);
     refreshAll();
   }
   function recurringDueStatus(r){
@@ -1236,17 +1235,10 @@
     document.getElementById('add-goal-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   async function deleteGoal(id){
-    const idx = goals.findIndex(g=>g.id===id);
-    if(idx===-1) return;
-    const removed = goals[idx];
-    goals.splice(idx, 1);
+    if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return;
+    goals = goals.filter(g=>g.id!==id);
     await saveGoals();
     refreshAll();
-    showUndoSnackbar('Savings goal deleted.', async ()=>{
-      goals.splice(idx, 0, removed);
-      await saveGoals();
-      refreshAll();
-    });
   }
 
   async function handleAddDebt(e){
@@ -1331,19 +1323,11 @@
   }
 
   async function deleteDebt(id){
-    const idx = debts.findIndex(d=>d.id===id);
-    if(idx===-1) return;
-    const removed = debts[idx];
+    if(!confirm('Remove this debt from your tracker? Past payments already recorded in your transactions will NOT be deleted.')) return;
     recentlyDeletedDebtIds.add(id);
-    debts.splice(idx, 1);
+    debts = debts.filter(d=>d.id!==id);
     await saveDebts();
     refreshAll();
-    showUndoSnackbar('Debt removed. (Past payments already logged are unaffected.)', async ()=>{
-      recentlyDeletedDebtIds.delete(id);
-      debts.splice(idx, 0, removed);
-      await saveDebts();
-      refreshAll();
-    });
   }
 
   function ordinalSuffix(n){
@@ -1432,17 +1416,10 @@
     refreshAll();
   }
   async function deleteReminder(id){
-    const idx = reminders.findIndex(r=>r.id===id);
-    if(idx===-1) return;
-    const removed = reminders[idx];
-    reminders.splice(idx, 1);
+    if(!confirm('Delete this reminder?')) return;
+    reminders = reminders.filter(r=>r.id!==id);
     await saveReminders();
     refreshAll();
-    showUndoSnackbar('Reminder deleted.', async ()=>{
-      reminders.splice(idx, 0, removed);
-      await saveReminders();
-      refreshAll();
-    });
   }
   async function handleAddReminder(e){
     e.preventDefault();
@@ -2251,9 +2228,9 @@
 
     document.getElementById('bell-btn').addEventListener('click', ()=>{ switchTab('insights'); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
-    document.getElementById('undo-snackbar-btn').addEventListener('click', undoLastDelete);
     document.getElementById('backup-nag-now-btn').addEventListener('click', downloadBackup);
     document.getElementById('backup-nag-later-btn').addEventListener('click', dismissBackupNag);
+    document.getElementById('app-toast-close').addEventListener('click', hideAppToast);
 
     document.getElementById('global-search-btn').addEventListener('click', openGlobalSearch);
     document.getElementById('close-search-btn').addEventListener('click', ()=> history.back());
