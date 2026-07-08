@@ -43,6 +43,7 @@
   let settings = { currency: '₹' };
   let budgets = {};
   let debts = [];
+  let receivables = [];
   let recurring = [];
   let reminders = [];
   let goals = [];
@@ -56,11 +57,13 @@
   let notifiedReminderIds = new Set();
   let trendRange = '7d';
   let ringRange = 'month';
+  let activeDebtKind = 'debt'; // 'debt' (I Owe) or 'receivable' (Owed to Me) — which list the Debts & EMIs page currently shows
   // Cross-tab data safety: if this tab deletes a record, remember its id so a later
   // merge-on-save (which reconciles against whatever another tab may have written)
   // never silently resurrects something this tab intentionally removed.
   let recentlyDeletedTxIds = new Set();
   let recentlyDeletedDebtIds = new Set();
+  let recentlyDeletedReceivableIds = new Set();
 
   const CAT_PALETTE = ['#16A34A','#DC2626','#F59E0B','#2563EB','#14B8A6','#9333EA','#0EA5E9','#F97316','#84CC16','#EC4899','#DC4018','#DC7E18','#CBCB16','#31DC18','#18DC96','#18C5DC','#1881DC','#2618DC','#DC18DB','#DC1849'];
   const CAT_PALETTE_MOUNTY = ['#67301E','#55671E','#82671C','#37821C','#8E6129','#298E3F','#6D3717','#176D54','#7B6D24','#4E7B24','#977020','#209720','#67411E','#1E6741','#823A1C','#64821C','#8E7829','#3F8E29','#6D4B17','#176D2E','#7B4824','#247B65','#978C20','#549720','#67521E','#1E6721','#82521C','#1C8252','#8E4D29','#6B8E29','#6D5F17','#266D17','#7B5C24','#247B3F','#975820','#209780','#67321E','#3A671E','#826A1C','#1C8226','#8E6429','#298E64','#6D3A17','#4B6D17','#7B7024','#2E7B24','#977420','#20974C','#67441E','#1E675C'];
@@ -144,6 +147,7 @@
     try{ const s = await window.storage.get('settings'); settings = s ? JSON.parse(s.value) : { currency:'₹' }; } catch(e){ settings = { currency:'₹' }; }
     try{ const b = await window.storage.get('budgets'); budgets = b ? JSON.parse(b.value) : {}; } catch(e){ budgets = {}; }
     try{ const dbt = await window.storage.get('debts'); debts = dbt ? JSON.parse(dbt.value) : []; } catch(e){ debts = []; }
+    try{ const rcv = await window.storage.get('receivables'); receivables = rcv ? JSON.parse(rcv.value) : []; } catch(e){ receivables = []; }
     try{ const r = await window.storage.get('recurring'); recurring = r ? JSON.parse(r.value) : []; } catch(e){ recurring = []; }
     try{ const rm = await window.storage.get('reminders'); reminders = rm ? JSON.parse(rm.value) : []; } catch(e){ reminders = []; }
     try{ const g = await window.storage.get('goals'); goals = g ? JSON.parse(g.value) : []; } catch(e){ goals = []; }
@@ -157,6 +161,8 @@
     if(!budgets || typeof budgets !== 'object' || Array.isArray(budgets)) budgets = {};
     if(!Array.isArray(debts)) debts = [];
     debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; });
+    if(!Array.isArray(receivables)) receivables = [];
+    receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; });
     if(!Array.isArray(recurring)) recurring = [];
     if(!Array.isArray(reminders)) reminders = [];
     if(!Array.isArray(goals)) goals = [];
@@ -201,6 +207,19 @@
         debts = Object.values(byId);
       }
       await window.storage.set('debts', JSON.stringify(debts));
+    } catch(e){ console.error(e); }
+  }
+  async function saveReceivables(){
+    try{
+      const disk = await window.storage.get('receivables');
+      const diskArr = disk ? JSON.parse(disk.value) : [];
+      if(Array.isArray(diskArr)){
+        const byId = {};
+        diskArr.forEach(d=>{ if(d && d.id && !recentlyDeletedReceivableIds.has(d.id)) byId[d.id] = d; });
+        receivables.forEach(d=>{ if(d && d.id) byId[d.id] = d; });
+        receivables = Object.values(byId);
+      }
+      await window.storage.set('receivables', JSON.stringify(receivables));
     } catch(e){ console.error(e); }
   }
 
@@ -433,27 +452,6 @@
     setTimeout(()=> overlay.classList.remove('show'), 1100);
   }
 
-  let pendingUndo = null;
-  const UNDO_TIMEOUT_MS = 6000;
-  function showUndoSnackbar(message, restoreFn){
-    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
-    const el = document.getElementById('undo-snackbar');
-    document.getElementById('undo-snackbar-msg').textContent = message;
-    el.classList.add('show');
-    pendingUndo = { restore: restoreFn, timer: setTimeout(hideUndoSnackbar, UNDO_TIMEOUT_MS) };
-  }
-  function hideUndoSnackbar(){
-    if(pendingUndo && pendingUndo.timer) clearTimeout(pendingUndo.timer);
-    pendingUndo = null;
-    document.getElementById('undo-snackbar').classList.remove('show');
-  }
-  async function undoLastDelete(){
-    if(!pendingUndo) return;
-    const restore = pendingUndo.restore;
-    hideUndoSnackbar();
-    await restore();
-  }
-
   function renderHomeBalance(){
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
     const masked = settings.hideBalances && !balancesRevealed;
@@ -477,10 +475,11 @@
   function renderNetWorth(){
     const row = document.getElementById('networth-row'); if(!row) return;
     const totalDebt = debts.reduce((s,d)=> s + debtRemaining(d), 0);
-    if(totalDebt <= 0.004){ row.style.display='none'; return; }
+    const totalReceivable = receivables.reduce((s,d)=> s + debtRemaining(d), 0);
+    if(totalDebt <= 0.004 && totalReceivable <= 0.004){ row.style.display='none'; return; }
     row.style.display='flex';
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
-    const netWorth = netBalance - totalDebt;
+    const netWorth = netBalance - totalDebt + totalReceivable;
     const el = document.getElementById('networth-amount');
     const masked = settings.hideBalances && !balancesRevealed;
     setText('networth-amount', masked ? maskAmount(fmt(netWorth)) : fmt(netWorth));
@@ -522,6 +521,31 @@
       });
       container.appendChild(cell);
     });
+  }
+
+  let appToastTimer = null;
+  function showAppToast(message, type){
+    const el = document.getElementById('app-toast');
+    document.getElementById('app-toast-msg').textContent = message;
+    el.classList.toggle('info', type==='info');
+    el.classList.add('show');
+    if(appToastTimer) clearTimeout(appToastTimer);
+    appToastTimer = setTimeout(()=> el.classList.remove('show'), 6000);
+  }
+  function hideAppToast(){
+    if(appToastTimer){ clearTimeout(appToastTimer); appToastTimer = null; }
+    document.getElementById('app-toast').classList.remove('show');
+  }
+  function checkBudgetCrossing(category, date, addedAmount){
+    const limit = budgets[category];
+    if(!limit || limit<=0) return;
+    const monthPrefix = toLocalDateStr(new Date()).slice(0,7);
+    if(!date.startsWith(monthPrefix)) return; // budgets only ever track the current month
+    const spendNow = sumByType(transactions.filter(t=>t.category===category && t.date.startsWith(monthPrefix)), 'expense');
+    const spendBefore = spendNow - addedAmount;
+    if(spendBefore <= limit && spendNow > limit){
+      showAppToast(`Over budget on ${category} by ${fmt(spendNow-limit)}`);
+    }
   }
 
   function renderInsightBanner(){
@@ -617,11 +641,11 @@
     const data = months.map(m=>{
       const monthEnd = monthRangeFromDate(m+'-01').end;
       const balance = transactions.filter(t=> t.date<=monthEnd).reduce((s,t)=> s + (t.type==='income'?t.amount:-t.amount), 0);
-      const debtOutstanding = debts.filter(d=> d.startDate <= monthEnd).reduce((s,d)=>{
+      const outstandingAsOf = (list)=> list.filter(d=> d.startDate <= monthEnd).reduce((s,d)=>{
         const paidByThen = (d.payments||[]).filter(p=>p.date<=monthEnd).reduce((ps,p)=>ps+p.amount,0);
         return s + Math.max(0, d.total - paidByThen);
       }, 0);
-      return balance - debtOutstanding;
+      return balance - outstandingAsOf(debts) + outstandingAsOf(receivables);
     });
     if(charts.netWorthTrend) charts.netWorthTrend.destroy();
     if(window.Chart){
@@ -686,19 +710,11 @@
   }
 
   async function deleteTransaction(id){
-    const idx = transactions.findIndex(t=>t.id===id);
-    if(idx===-1) return false;
-    const removed = transactions[idx];
+    if(!confirm('Delete this entry? This cannot be undone.')) return false;
     recentlyDeletedTxIds.add(id);
-    transactions.splice(idx, 1);
+    transactions = transactions.filter(t=>t.id!==id);
     await saveTransactions();
     refreshAll();
-    showUndoSnackbar('Entry deleted.', async ()=>{
-      recentlyDeletedTxIds.delete(id);
-      transactions.splice(idx, 0, removed);
-      await saveTransactions();
-      refreshAll();
-    });
     return true;
   }
   function resetEntryDateDefault(){ document.getElementById('entry-date').value = toLocalDateStr(new Date()); }
@@ -766,6 +782,7 @@
     } else {
       transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type, date, category, account, amount, note, createdAt: new Date().toISOString() });
       await saveTransactions(); showStamp(type);
+      if(type==='expense') checkBudgetCrossing(category, date, amount);
       if(saveRecurringChecked){
         const exists = recurring.some(r=> r.type===type && r.category===category && r.amount===amount && (r.note||'')===note);
         if(!exists){
@@ -805,11 +822,13 @@
     const r = recurring.find(x=>x.id===id); if(!r) return;
     const accountSelect = document.getElementById('entry-account');
     const account = (accountSelect && accountSelect.value) || (accounts[0] ? accounts[0].name : 'Cash');
-    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:toLocalDateStr(new Date()), category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
-    if(r.dueDay) r.lastDismissedPeriod = toLocalDateStr(new Date()).slice(0,7);
+    const today = toLocalDateStr(new Date());
+    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:today, category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
+    if(r.dueDay) r.lastDismissedPeriod = today.slice(0,7);
     await saveTransactions();
     await saveRecurring();
     showStamp(r.type);
+    if(r.type==='expense') checkBudgetCrossing(r.category, today, r.amount);
     refreshAll();
   }
   function recurringDueStatus(r){
@@ -1005,11 +1024,20 @@
   function formatMonthYear(date){ return date.toLocaleDateString('en-IN', { month:'short', year:'numeric' }); }
   // emiPayoffDate and buildEmiSchedule live in money-math.js, loaded before this file.
 
+  // The Debts & EMIs page shows either the "I Owe" (debts) or "Owed to Me" (receivables)
+  // list depending on activeDebtKind — every function below operates on whichever is current.
+  function currentDebtList(){ return activeDebtKind==='debt' ? debts : receivables; }
+  function currentDebtSaveFn(){ return activeDebtKind==='debt' ? saveDebts : saveReceivables; }
+  function currentDeletedDebtIds(){ return activeDebtKind==='debt' ? recentlyDeletedDebtIds : recentlyDeletedReceivableIds; }
+  function findInAnyDebtList(id){ return debts.find(x=>x.id===id) || receivables.find(x=>x.id===id); }
+
   function renderDebtsList(){
     const container = document.getElementById('debts-list'); if(!container) return;
+    const isReceivable = activeDebtKind==='receivable';
+    const list = currentDebtList();
     container.innerHTML='';
-    if(debts.length===0){ container.innerHTML = '<p class="empty-note">No debts tracked yet. Add one below.</p>'; return; }
-    const sorted = [...debts].sort((a,b)=>{
+    if(list.length===0){ container.innerHTML = `<p class="empty-note">No ${isReceivable?'receivables':'debts'} tracked yet. Add one below.</p>`; return; }
+    const sorted = [...list].sort((a,b)=>{
       const aPaid = debtRemaining(a)<=0.004, bPaid = debtRemaining(b)<=0.004;
       if(aPaid!==bPaid) return aPaid ? 1 : -1;
       return 0;
@@ -1019,13 +1047,15 @@
       const pct = d.total>0 ? Math.min(100, paid/d.total*100) : 0;
       const overdue = debtOverdueCount(d);
       const card = document.createElement('div'); card.className = 'debt-card type-'+d.type+(isPaidOff?' paid-off':'');
-      const typeLabel = d.type==='emi' ? `EMI · ${fmt(d.emiAmount)}/mo` : 'One-time debt';
+      const typeLabel = d.type==='emi' ? `EMI · ${fmt(d.emiAmount)}/mo` : (isReceivable ? 'One-time receivable' : 'One-time debt');
       const typeColor = d.type==='emi' ? 'var(--link)' : 'var(--gold)';
       const barColor = isPaidOff ? 'var(--credit)' : typeColor;
+      const paidLabel = isReceivable ? 'received' : 'paid';
+      const paidOffLabel = isReceivable ? 'Fully Received ✓' : 'Paid Off ✓';
       let installmentLine = '';
       if(d.type==='emi'){
         const payoff = emiPayoffDate(d);
-        installmentLine = `<div class="debt-row-meta">Installment ${Math.min((d.payments||[]).length, d.tenure)} of ${d.tenure}${(overdue>0 && !isPaidOff) ? ` · <span class="overdue-tag">${overdue} EMI${overdue>1?'s':''} due</span>` : ''}${payoff && !isPaidOff ? ` · Debt-free ${formatMonthYear(payoff)}` : ''}</div>`;
+        installmentLine = `<div class="debt-row-meta">Installment ${Math.min((d.payments||[]).length, d.tenure)} of ${d.tenure}${(overdue>0 && !isPaidOff) ? ` · <span class="overdue-tag">${overdue} due</span>` : ''}${payoff && !isPaidOff ? ` · ${isReceivable?'Fully received by':'Debt-free'} ${formatMonthYear(payoff)}` : ''}</div>`;
       }
       card.innerHTML = `
         <div class="debt-card-top">
@@ -1034,15 +1064,15 @@
             <div class="debt-type-badge" style="color:${typeColor};">${typeLabel}</div>
           </div>
           <div style="display:flex; gap:4px;">
-            <button class="icon-btn-sm edit-debt-btn" data-id="${d.id}" aria-label="Edit debt">${icon('edit',14)}</button>
-            <button class="icon-btn-sm del-debt-btn" data-id="${d.id}" aria-label="Delete debt">${icon('trash',14)}</button>
+            <button class="icon-btn-sm edit-debt-btn" data-id="${d.id}" aria-label="Edit">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-debt-btn" data-id="${d.id}" aria-label="Delete">${icon('trash',14)}</button>
           </div>
         </div>
         <div class="debt-bar-track"><div class="debt-bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
-        <div class="debt-row-meta">${fmt(paid)} paid of ${fmt(d.total)} ${isPaidOff ? '· <span class="paidoff-tag">Paid Off ✓</span>' : '· '+fmt(remaining)+' remaining'}</div>
+        <div class="debt-row-meta">${fmt(paid)} ${paidLabel} of ${fmt(d.total)} ${isPaidOff ? '· <span class="paidoff-tag">'+paidOffLabel+'</span>' : '· '+fmt(remaining)+' remaining'}</div>
         ${installmentLine}
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          ${ isPaidOff ? '' : `<button class="btn-pill btn-outline log-payment-btn" data-id="${d.id}">+ Log Payment</button>` }
+          ${ isPaidOff ? '' : `<button class="btn-pill btn-outline log-payment-btn" data-id="${d.id}">+ ${isReceivable?'Log Received':'Log Payment'}</button>` }
           ${ d.type==='emi' ? `<button class="btn-pill btn-outline view-schedule-btn" data-id="${d.id}">View Schedule</button>` : '' }
         </div>
         ${ isPaidOff ? '' : `
@@ -1051,7 +1081,7 @@
           <label>Date<input type="date" class="lp-date" value="${toLocalDateStr(new Date())}"></label>
           <label>Account<select class="lp-account">${accounts.map(a=>`<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`).join('')}</select></label>
           <div style="display:flex; gap:8px; margin-top:10px;">
-            <button type="button" class="btn-pill btn-black lp-confirm" data-id="${d.id}">Save Payment</button>
+            <button type="button" class="btn-pill btn-black lp-confirm" data-id="${d.id}">Save</button>
             <button type="button" class="btn-pill btn-outline lp-cancel" data-id="${d.id}">Cancel</button>
           </div>
         </div>` }
@@ -1082,22 +1112,35 @@
     setText('debt-summary-amount', fmt(totalOutstanding));
     setText('debt-summary-meta', `${active.length} active debt${active.length>1?'s':''}${overdueTotal>0 ? ' · '+overdueTotal+' EMI'+(overdueTotal>1?'s':'')+' overdue' : ''}${latestPayoff ? ' · debt-free by '+formatMonthYear(latestPayoff) : ''}`);
   }
-
-  function renderDebtOverviewInto(prefix){
-    const card = document.getElementById(prefix+'-card'); if(!card) return;
-    if(debts.length===0){ card.style.display='none'; return; }
+  function renderReceivableSummaryInsights(){
+    const card = document.getElementById('receivable-summary-card'); if(!card) return;
+    const active = receivables.filter(d=> debtRemaining(d) > 0.004);
+    if(active.length===0){ card.style.display='none'; return; }
     card.style.display='block';
-    const totalCommitted = debts.reduce((s,d)=>s+d.total,0);
-    const totalPaid = debts.reduce((s,d)=>s+debtPaid(d),0);
-    const totalPending = debts.reduce((s,d)=>s+debtRemaining(d),0);
+    const totalOutstanding = active.reduce((s,d)=> s+debtRemaining(d), 0);
+    const overdueTotal = active.reduce((s,d)=> s+debtOverdueCount(d), 0);
+    const payoffDates = active.map(emiPayoffDate).filter(Boolean);
+    const latestPayoff = payoffDates.length ? new Date(Math.max(...payoffDates.map(d=>d.getTime()))) : null;
+    setText('receivable-summary-amount', fmt(totalOutstanding));
+    setText('receivable-summary-meta', `${active.length} active receivable${active.length>1?'s':''}${overdueTotal>0 ? ' · '+overdueTotal+' overdue' : ''}${latestPayoff ? ' · fully received by '+formatMonthYear(latestPayoff) : ''}`);
+  }
+
+  function renderDebtOverviewInto(prefix, list){
+    list = list || debts;
+    const card = document.getElementById(prefix+'-card'); if(!card) return;
+    if(list.length===0){ card.style.display='none'; return; }
+    card.style.display='block';
+    const totalCommitted = list.reduce((s,d)=>s+d.total,0);
+    const totalPaid = list.reduce((s,d)=>s+debtPaid(d),0);
+    const totalPending = list.reduce((s,d)=>s+debtRemaining(d),0);
     setText(prefix+'-total-committed', fmt(totalCommitted));
     setText(prefix+'-total-paid', fmt(totalPaid));
     setText(prefix+'-total-pending', fmt(totalPending));
     const pct = totalCommitted>0 ? Math.min(100, totalPaid/totalCommitted*100) : 0;
     const fillEl = document.getElementById(prefix+'-overall-fill'); if(fillEl) fillEl.style.width = pct+'%';
 
-    const emiDebts = debts.filter(d=>d.type==='emi');
-    const lumpDebts = debts.filter(d=>d.type==='lump');
+    const emiDebts = list.filter(d=>d.type==='emi');
+    const lumpDebts = list.filter(d=>d.type==='lump');
     const emiSection = document.getElementById(prefix+'-emi-section');
     if(emiSection) emiSection.style.display = emiDebts.length ? 'block' : 'none';
     setText(prefix+'-emi-paid', fmt(emiDebts.reduce((s,d)=>s+debtPaid(d),0)));
@@ -1108,8 +1151,19 @@
     setText(prefix+'-lump-pending', fmt(lumpDebts.reduce((s,d)=>s+debtRemaining(d),0)));
   }
   function renderDebtOverview(){
-    renderDebtOverviewInto('debtov');
-    renderDebtOverviewInto('reportsdebt');
+    renderDebtOverviewInto('debtov', currentDebtList());
+    renderDebtOverviewInto('reportsdebt', debts);
+    renderDebtOverviewInto('reportsreceivable', receivables);
+  }
+  function updateDebtKindLabels(){
+    const isReceivable = activeDebtKind==='receivable';
+    setText('debts-page-title', isReceivable ? 'Receivables' : 'Debts & EMIs');
+    setText('debts-page-intro', isReceivable
+      ? 'Track money others owe you — a loan you gave, pending project income, anything you\'re expecting to be paid back. Set it up as EMI (fixed monthly installments) or One-time (any amount, whenever it comes in). Log a collection as you receive it — it\'s recorded in your transactions too, under "Loan Repayment Received".'
+      : 'Track anything you owe — a loan, a credit card, money borrowed from someone. Every debt below is set up as one of two types: EMI (a fixed amount due every month, for a set number of months) or One-time (any amount, paid off whenever you like). Log a payment as you make it — it\'s recorded in your transactions too, under "EMI / Loan".');
+    setText('debtov-label', isReceivable ? 'Receivables Overview — All Receivables' : 'Debt Overview — All Debts');
+    setText('add-debt-btn-label', isReceivable ? 'Add Receivable' : 'Add Debt');
+    setText('debt-total-hint', isReceivable ? '— the full amount owed to you' : '— the full amount owed');
   }
 
   // goalSaved and goalRemaining live in money-math.js, loaded before this file.
@@ -1236,21 +1290,15 @@
     document.getElementById('add-goal-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   async function deleteGoal(id){
-    const idx = goals.findIndex(g=>g.id===id);
-    if(idx===-1) return;
-    const removed = goals[idx];
-    goals.splice(idx, 1);
+    if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return;
+    goals = goals.filter(g=>g.id!==id);
     await saveGoals();
     refreshAll();
-    showUndoSnackbar('Savings goal deleted.', async ()=>{
-      goals.splice(idx, 0, removed);
-      await saveGoals();
-      refreshAll();
-    });
   }
 
   async function handleAddDebt(e){
     e.preventDefault();
+    const isReceivable = activeDebtKind==='receivable';
     const name = document.getElementById('debt-name').value.trim();
     const type = document.getElementById('debt-type-value').value;
     const emiAmount = parseFloat(document.getElementById('debt-emi-amount').value) || 0;
@@ -1259,18 +1307,19 @@
     const total = type==='emi' ? (emiAmount * tenure) : lumpTotal;
     const startDate = document.getElementById('debt-start-date').value;
     const note = document.getElementById('debt-note').value.trim();
-    if(!name || !startDate){ alert('Please fill in the debt name and a start date.'); return; }
+    if(!name || !startDate){ alert(`Please fill in the ${isReceivable?'receivable':'debt'} name and a start date.`); return; }
     if(type==='emi' && (isNaN(emiAmount) || emiAmount<=0 || !tenure || tenure<=0)){ alert('Please enter a valid EMI amount and tenure in months.'); return; }
     if(type==='lump' && (isNaN(lumpTotal) || lumpTotal<=0)){ alert('Please enter a valid total amount.'); return; }
+    const list = currentDebtList();
     if(editingDebtId){
-      const idx = debts.findIndex(d=>d.id===editingDebtId);
+      const idx = list.findIndex(d=>d.id===editingDebtId);
       if(idx>-1){
-        debts[idx] = { ...debts[idx], name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note };
+        list[idx] = { ...list[idx], name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note };
       }
     } else {
-      debts.push({ id:'debt_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note, payments: [] });
+      list.push({ id:(isReceivable?'rcv_':'debt_')+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note, payments: [] });
     }
-    await saveDebts();
+    await currentDebtSaveFn()();
     resetDebtForm();
     refreshAll();
   }
@@ -1278,7 +1327,7 @@
     editingDebtId = null;
     document.getElementById('add-debt-form').reset();
     document.getElementById('add-debt-form').style.display='none';
-    document.getElementById('save-debt-btn').textContent = 'Save Debt';
+    document.getElementById('save-debt-btn').textContent = activeDebtKind==='receivable' ? 'Save Receivable' : 'Save Debt';
     document.getElementById('debt-type-value').value='emi';
     document.querySelectorAll('.debt-type-btn').forEach(b=> b.classList.toggle('active', b.dataset.debttype==='emi'));
     document.getElementById('emi-fields').style.display='block';
@@ -1293,7 +1342,7 @@
     setText('emi-total-preview', `Total: ${fmt(emiAmount * tenure)} over ${tenure || 0} month${tenure===1?'':'s'}`);
   }
   function startEditDebt(id){
-    const d = debts.find(x=>x.id===id); if(!d) return;
+    const d = currentDebtList().find(x=>x.id===id); if(!d) return;
     editingDebtId = id;
     document.getElementById('add-debt-form').style.display='block';
     document.getElementById('debt-name').value = d.name;
@@ -1303,47 +1352,49 @@
     document.getElementById('lump-fields').style.display = d.type==='lump' ? 'block' : 'none';
     setText('debt-type-hint', d.type==='emi'
       ? 'A fixed installment is due every month, for a set number of months.'
-      : "Pay any amount, any time, until it's fully settled — no fixed schedule.");
+      : "Any amount, any time, until it's fully settled — no fixed schedule.");
     document.getElementById('debt-emi-amount').value = d.emiAmount || '';
     document.getElementById('debt-tenure').value = d.tenure || '';
     document.getElementById('debt-total').value = d.total || '';
     updateEmiTotalPreview();
     document.getElementById('debt-start-date').value = d.startDate;
     document.getElementById('debt-note').value = d.note || '';
-    document.getElementById('save-debt-btn').textContent = 'Update Debt';
+    document.getElementById('save-debt-btn').textContent = activeDebtKind==='receivable' ? 'Update Receivable' : 'Update Debt';
     document.getElementById('add-debt-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   function resetDebtStartDateDefault(){ const el = document.getElementById('debt-start-date'); if(el) el.value = toLocalDateStr(new Date()); }
 
   async function confirmLogPayment(debtId){
+    const isReceivable = activeDebtKind==='receivable';
     const form = document.getElementById('lp-form-'+debtId); if(!form) return;
     const amount = parseFloat(form.querySelector('.lp-amount').value);
     const date = form.querySelector('.lp-date').value;
     const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
-    const debt = debts.find(d=>d.id===debtId); if(!debt) return;
+    const debt = currentDebtList().find(d=>d.id===debtId); if(!debt) return;
     debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date });
-    await saveDebts();
-    if(!categories.expense.includes('EMI / Loan')) categories.expense.push('EMI / Loan');
-    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:'expense', category:'EMI / Loan', date, account, amount, note: debt.name+' — payment', createdAt: new Date().toISOString() });
+    await currentDebtSaveFn()();
+    const txType = isReceivable ? 'income' : 'expense';
+    const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
+    const catList = isReceivable ? categories.income : categories.expense;
+    if(!catList.includes(txCategory)) catList.push(txCategory);
+    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: new Date().toISOString() });
     await saveTransactions(); await saveCategories();
     refreshAll();
   }
 
   async function deleteDebt(id){
-    const idx = debts.findIndex(d=>d.id===id);
-    if(idx===-1) return;
-    const removed = debts[idx];
-    recentlyDeletedDebtIds.add(id);
-    debts.splice(idx, 1);
-    await saveDebts();
+    const isReceivable = activeDebtKind==='receivable';
+    const msg = isReceivable
+      ? 'Remove this receivable from your tracker? Past collections already recorded in your transactions will NOT be deleted.'
+      : 'Remove this debt from your tracker? Past payments already recorded in your transactions will NOT be deleted.';
+    if(!confirm(msg)) return;
+    currentDeletedDebtIds().add(id);
+    const list = currentDebtList();
+    const idx = list.findIndex(d=>d.id===id);
+    if(idx>-1) list.splice(idx,1);
+    await currentDebtSaveFn()();
     refreshAll();
-    showUndoSnackbar('Debt removed. (Past payments already logged are unaffected.)', async ()=>{
-      recentlyDeletedDebtIds.delete(id);
-      debts.splice(idx, 0, removed);
-      await saveDebts();
-      refreshAll();
-    });
   }
 
   function ordinalSuffix(n){
@@ -1432,17 +1483,10 @@
     refreshAll();
   }
   async function deleteReminder(id){
-    const idx = reminders.findIndex(r=>r.id===id);
-    if(idx===-1) return;
-    const removed = reminders[idx];
-    reminders.splice(idx, 1);
+    if(!confirm('Delete this reminder?')) return;
+    reminders = reminders.filter(r=>r.id!==id);
     await saveReminders();
     refreshAll();
-    showUndoSnackbar('Reminder deleted.', async ()=>{
-      reminders.splice(idx, 0, removed);
-      await saveReminders();
-      refreshAll();
-    });
   }
   async function handleAddReminder(e){
     e.preventDefault();
@@ -1596,7 +1640,25 @@
         const debtHeaders = ['Name','Type','Total','Paid','Pending'];
         const debtColX = [marginX, marginX+62, marginX+96, marginX+130, marginX+164];
         const debtRows = debts.map(d=> [truncate(d.name,26), d.type==='emi'?'EMI':'One-time', fmtPdf(d.total), fmtPdf(debtPaid(d)), fmtPdf(debtRemaining(d))]);
-        drawSimpleTable(doc, finalY, debtHeaders, debtColX, debtRows);
+        finalY = drawSimpleTable(doc, finalY, debtHeaders, debtColX, debtRows);
+      }
+      if(receivables.length>0){
+        finalY += 10;
+        if(finalY > 235){ doc.addPage(); finalY = 20; }
+        doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.text('Receivables Overview', marginX, finalY); finalY += 7;
+        doc.setFontSize(9); doc.setFont('helvetica','normal');
+        const totalCommittedR = receivables.reduce((s,d)=>s+d.total,0);
+        const totalPaidAllR = receivables.reduce((s,d)=>s+debtPaid(d),0);
+        const totalPendingAllR = receivables.reduce((s,d)=>s+debtRemaining(d),0);
+        doc.text(`Total Committed: ${fmtPdf(totalCommittedR)}`, marginX, finalY); finalY += 5;
+        doc.text(`Total Received: ${fmtPdf(totalPaidAllR)}`, marginX, finalY); finalY += 5;
+        doc.text(`Total Pending: ${fmtPdf(totalPendingAllR)}`, marginX, finalY);
+        finalY += 8;
+        doc.setFontSize(8.5);
+        const rcvHeaders = ['Name','Type','Total','Received','Pending'];
+        const rcvColX = [marginX, marginX+62, marginX+96, marginX+130, marginX+164];
+        const rcvRows = receivables.map(d=> [truncate(d.name,26), d.type==='emi'?'EMI':'One-time', fmtPdf(d.total), fmtPdf(debtPaid(d)), fmtPdf(debtRemaining(d))]);
+        drawSimpleTable(doc, finalY, rcvHeaders, rcvColX, rcvRows);
       }
       const safeLabel = currentReport.label.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
       doc.save(`trackr_${safeLabel}.pdf`);
@@ -1624,6 +1686,19 @@
       rows.push(['Debt Name','Type','Total','Paid','Pending']);
       debts.forEach(d=> rows.push([d.name, d.type==='emi'?'EMI':'One-time', d.total.toFixed(2), debtPaid(d).toFixed(2), debtRemaining(d).toFixed(2)]));
     }
+    if(receivables.length>0){
+      const totalCommittedR = receivables.reduce((s,d)=>s+d.total,0);
+      const totalPaidAllR = receivables.reduce((s,d)=>s+debtPaid(d),0);
+      const totalPendingAllR = receivables.reduce((s,d)=>s+debtRemaining(d),0);
+      rows.push([]);
+      rows.push(['--- Receivables Overview ---']);
+      rows.push(['Total Committed','','','', totalCommittedR.toFixed(2)]);
+      rows.push(['Total Received','','','', totalPaidAllR.toFixed(2)]);
+      rows.push(['Total Pending','','','', totalPendingAllR.toFixed(2)]);
+      rows.push([]);
+      rows.push(['Receivable Name','Type','Total','Received','Pending']);
+      receivables.forEach(d=> rows.push([d.name, d.type==='emi'?'EMI':'One-time', d.total.toFixed(2), debtPaid(d).toFixed(2), debtRemaining(d).toFixed(2)]));
+    }
     const csv = rows.map(r=> r.map(csvEscape).join(',')).join('\n');
     const safeLabel = currentReport.label.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
     triggerDownload(csv, `trackr_${safeLabel}.csv`, 'text/csv;charset=utf-8;');
@@ -1631,7 +1706,7 @@
   function downloadBackup(){
     settings.lastBackupAt = new Date().toISOString();
     saveSettings();
-    const data = { transactions, categories, settings, budgets, debts, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
+    const data = { transactions, categories, settings, budgets, debts, receivables, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
     triggerDownload(JSON.stringify(data, null, 2), `trackr_backup_${toLocalDateStr(new Date())}.json`, 'application/json');
     renderLastBackupNote();
     renderBackupNag();
@@ -1639,7 +1714,7 @@
   const BACKUP_NAG_AFTER_DAYS = 30;
   const BACKUP_NAG_SNOOZE_DAYS = 7;
   function shouldShowBackupNag(){
-    if(transactions.length===0 && debts.length===0 && goals.length===0) return false;
+    if(transactions.length===0 && debts.length===0 && receivables.length===0 && goals.length===0) return false;
     const daysSince = (iso)=> Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
     if(settings.lastBackupNagDismissedAt && daysSince(settings.lastBackupNagDismissedAt) < BACKUP_NAG_SNOOZE_DAYS) return false;
     if(!settings.lastBackupAt) return true;
@@ -1669,11 +1744,12 @@
         if(!confirm('This will replace all current data with the contents of this backup file. Continue?')) return;
         transactions = data.transactions || []; categories = data.categories || defaultCategories();
         settings = data.settings || { currency:'₹' }; budgets = data.budgets || {}; debts = Array.isArray(data.debts) ? data.debts : [];
+        receivables = Array.isArray(data.receivables) ? data.receivables : [];
         recurring = Array.isArray(data.recurring) ? data.recurring : []; reminders = Array.isArray(data.reminders) ? data.reminders : [];
         goals = Array.isArray(data.goals) ? data.goals : [];
         accounts = Array.isArray(data.accounts) && data.accounts.length ? data.accounts : defaultAccounts();
         if(!settings.theme) settings.theme = 'light';
-        await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
+        await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveReceivables(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
         populateFilterCategorySelect(document.getElementById('filter-type').value);
@@ -1700,8 +1776,52 @@
   }
   function closeGlobalSearch(){ hideOverlay('search-overlay'); }
 
+  function openNotificationsOverlay(){
+    renderNotificationsList();
+    showOverlay('notifications-overlay');
+    history.pushState({ notificationsOpen:true }, '', '');
+  }
+  function closeNotificationsOverlay(){ hideOverlay('notifications-overlay'); }
+  function goToAlertTarget(tab, sub){
+    history.back();
+    setTimeout(()=>{ if(sub){ goToMoreSub('more', sub); } else { switchTab(tab); } }, 50);
+  }
+  function renderNotificationsList(){
+    const container = document.getElementById('notifications-list'); container.innerHTML='';
+    const { overBudget, overdueDebts, dueReminders, dueRecurring } = collectAlerts();
+    if(overBudget.length+overdueDebts.length+dueReminders.length+dueRecurring.length === 0){
+      container.innerHTML = '<p class="empty-note">You\'re all caught up — no alerts right now.</p>';
+      return;
+    }
+    function addSection(label){
+      const h = document.createElement('div'); h.className='activity-group-label'; h.textContent=label; container.appendChild(h);
+    }
+    function addRow(title, meta, onClick){
+      const row = document.createElement('div'); row.className='reminder-card clickable-row';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(title)}</div><div class="reminder-meta">${meta}</div></div></div>`;
+      row.addEventListener('click', onClick);
+      container.appendChild(row);
+    }
+    if(overBudget.length){
+      addSection('Over Budget');
+      overBudget.forEach(b=> addRow(b.category, `${fmt(b.spent)} of ${fmt(b.limit)} — over by ${fmt(b.spent-b.limit)}`, ()=> goToAlertTarget(null,'budgets')));
+    }
+    if(overdueDebts.length){
+      addSection('Overdue Debts');
+      overdueDebts.forEach(d=> addRow(d.name, `${debtOverdueCount(d)} installment${debtOverdueCount(d)===1?'':'s'} overdue`, ()=> goToAlertTarget(null,'debts')));
+    }
+    if(dueReminders.length){
+      addSection('Reminders');
+      dueReminders.forEach(({r,status})=> addRow(r.title, `${reminderStatusLabel(status)}${r.amount?' · '+fmt(r.amount):''}`, ()=> goToAlertTarget(null,'reminders')));
+    }
+    if(dueRecurring.length){
+      addSection('Due for Logging');
+      dueRecurring.forEach(({r,status})=> addRow(r.category, `${reminderStatusLabel(status)} · ${fmt(r.amount)}`, ()=> goToAlertTarget('insights',null)));
+    }
+  }
+
   function openSchedule(debtId){
-    const d = debts.find(x=>x.id===debtId); if(!d || d.type!=='emi') return;
+    const d = findInAnyDebtList(debtId); if(!d || d.type!=='emi') return;
     setText('schedule-debt-name', d.name);
     renderScheduleList(d);
     showOverlay('schedule-overlay');
@@ -1730,16 +1850,25 @@
   function renderGlobalSearchResults(query){
     const container = document.getElementById('global-search-results'); container.innerHTML='';
     const q = query.trim().toLowerCase();
-    if(!q){ container.innerHTML = '<p class="empty-note">Type to search across transactions, categories, and debts.</p>'; return; }
+    if(!q){ container.innerHTML = '<p class="empty-note">Type to search across transactions, categories, debts, and receivables.</p>'; return; }
     const matchedDebts = debts.filter(d=> d.name.toLowerCase().includes(q));
+    const matchedReceivables = receivables.filter(d=> d.name.toLowerCase().includes(q));
     const matchedTx = transactions.filter(t=> t.category.toLowerCase().includes(q) || (t.note||'').toLowerCase().includes(q))
       .sort((a,b)=> b.date.localeCompare(a.date)).slice(0,40);
-    if(matchedDebts.length===0 && matchedTx.length===0){ container.innerHTML = '<p class="empty-note">No matches found.</p>'; return; }
+    if(matchedDebts.length===0 && matchedReceivables.length===0 && matchedTx.length===0){ container.innerHTML = '<p class="empty-note">No matches found.</p>'; return; }
     if(matchedDebts.length){
       const h = document.createElement('div'); h.className='activity-group-label'; h.textContent='Debts'; container.appendChild(h);
       matchedDebts.forEach(d=>{
         const row = document.createElement('div'); row.className='activity-row';
         row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${categoryColor(d.name)};">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} debt</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
+        container.appendChild(row);
+      });
+    }
+    if(matchedReceivables.length){
+      const h = document.createElement('div'); h.className='activity-group-label'; h.textContent='Receivables'; container.appendChild(h);
+      matchedReceivables.forEach(d=>{
+        const row = document.createElement('div'); row.className='activity-row';
+        row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${categoryColor(d.name)};">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} receivable</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
         container.appendChild(row);
       });
     }
@@ -1857,16 +1986,21 @@
     history.back();
   }
 
-  function updateBellBadge(){
+  function collectAlerts(){
     const today = toLocalDateStr(new Date()); const monthPrefix = today.slice(0,7);
     const monthExpense = transactions.filter(t=>t.type==='expense' && t.date.startsWith(monthPrefix));
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
-    let overCount = 0;
-    Object.keys(budgets).forEach(cat=>{ if(budgets[cat]>0 && (spentMap[cat]||0)>budgets[cat]) overCount++; });
-    const overdueDebtCount = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0).length;
-    const reminderCount = reminders.filter(r=> reminderStatus(r)).length;
-    const recurringDueCount = recurring.filter(r=> recurringDueStatus(r)).length;
-    const totalAlerts = overCount + overdueDebtCount + reminderCount + recurringDueCount;
+    const overBudget = Object.keys(budgets)
+      .filter(cat=> budgets[cat]>0 && (spentMap[cat]||0) > budgets[cat])
+      .map(cat=> ({ category: cat, spent: spentMap[cat]||0, limit: budgets[cat] }));
+    const overdueDebts = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0);
+    const dueReminders = reminders.map(r=> ({ r, status: reminderStatus(r) })).filter(x=>x.status);
+    const dueRecurring = recurring.map(r=> ({ r, status: recurringDueStatus(r) })).filter(x=>x.status);
+    return { overBudget, overdueDebts, dueReminders, dueRecurring };
+  }
+  function updateBellBadge(){
+    const alerts = collectAlerts();
+    const totalAlerts = alerts.overBudget.length + alerts.overdueDebts.length + alerts.dueReminders.length + alerts.dueRecurring.length;
     const badge = document.getElementById('bell-badge');
     if(totalAlerts>0){ badge.style.display='flex'; badge.textContent = totalAlerts>9?'9+':String(totalAlerts); }
     else { badge.style.display='none'; }
@@ -1883,6 +2017,7 @@
     renderInsightBanner();
     renderBudgetWatchInsights();
     renderDebtSummaryInsights();
+    renderReceivableSummaryInsights();
     renderDebtOverview();
     renderGoalsSummaryInsights();
     renderGoalsOverview();
@@ -2249,11 +2384,13 @@
     document.querySelectorAll('.more-row').forEach(btn=> btn.addEventListener('click', ()=> showMoreSub(btn.dataset.sub)));
     document.querySelectorAll('[data-back]').forEach(btn=> btn.addEventListener('click', backToMoreMenu));
 
-    document.getElementById('bell-btn').addEventListener('click', ()=>{ switchTab('insights'); });
+    document.getElementById('bell-btn').addEventListener('click', openNotificationsOverlay);
+    document.getElementById('close-notifications-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('notifications-overlay').addEventListener('click', (e)=>{ if(e.target.id==='notifications-overlay') history.back(); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
-    document.getElementById('undo-snackbar-btn').addEventListener('click', undoLastDelete);
     document.getElementById('backup-nag-now-btn').addEventListener('click', downloadBackup);
     document.getElementById('backup-nag-later-btn').addEventListener('click', dismissBackupNag);
+    document.getElementById('app-toast-close').addEventListener('click', hideAppToast);
 
     document.getElementById('global-search-btn').addEventListener('click', openGlobalSearch);
     document.getElementById('close-search-btn').addEventListener('click', ()=> history.back());
@@ -2348,8 +2485,19 @@
 
     document.getElementById('show-add-debt-btn').addEventListener('click', ()=>{
       editingDebtId = null;
-      document.getElementById('save-debt-btn').textContent = 'Save Debt';
+      document.getElementById('save-debt-btn').textContent = activeDebtKind==='receivable' ? 'Save Receivable' : 'Save Debt';
       document.getElementById('add-debt-form').style.display='block';
+    });
+    document.querySelectorAll('#debt-kind-toggle .type-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        if(activeDebtKind===btn.dataset.debtkind) return;
+        activeDebtKind = btn.dataset.debtkind;
+        document.querySelectorAll('#debt-kind-toggle .type-btn').forEach(b=> b.classList.toggle('active', b===btn));
+        resetDebtForm();
+        updateDebtKindLabels();
+        renderDebtsList();
+        renderDebtOverviewInto('debtov', currentDebtList());
+      });
     });
     document.getElementById('cancel-add-debt-btn').addEventListener('click', resetDebtForm);
     document.querySelectorAll('.debt-type-btn').forEach(btn=>{
@@ -2468,6 +2616,7 @@
       if(!state.scheduleOpen){ closeSchedule(); }
       if(!state.catDetailOpen){ closeCategoryDetail(); }
       if(!state.txDetailOpen){ closeTransactionDetail(); }
+      if(!state.notificationsOpen){ closeNotificationsOverlay(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){
