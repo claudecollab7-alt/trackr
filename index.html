@@ -44,6 +44,16 @@
     </div>
 
     <section id="view-home" class="view active">
+      <div class="card" id="backup-nag-banner" style="display:none; margin-bottom:16px; border:1.5px solid rgba(245,158,11,.4);">
+        <div class="card-header-row" style="margin-bottom:6px;">
+          <span class="card-label" style="color:var(--gold);">Backup Reminder</span>
+        </div>
+        <p style="margin:0 0 12px; font-size:13px; color:var(--ink-soft);" id="backup-nag-text">It's been a while since your last backup.</p>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-pill btn-black" id="backup-nag-now-btn"><span data-icon="download" data-icon-size="14"></span> Back Up Now</button>
+          <button class="btn-pill btn-outline" id="backup-nag-later-btn">Remind Me Later</button>
+        </div>
+      </div>
       <div class="grid-2x2">
         <div class="card card-glass balance-card">
           <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">

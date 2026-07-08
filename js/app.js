@@ -1634,6 +1634,30 @@
     const data = { transactions, categories, settings, budgets, debts, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
     triggerDownload(JSON.stringify(data, null, 2), `trackr_backup_${toLocalDateStr(new Date())}.json`, 'application/json');
     renderLastBackupNote();
+    renderBackupNag();
+  }
+  const BACKUP_NAG_AFTER_DAYS = 30;
+  const BACKUP_NAG_SNOOZE_DAYS = 7;
+  function shouldShowBackupNag(){
+    if(transactions.length===0 && debts.length===0 && goals.length===0) return false;
+    const daysSince = (iso)=> Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if(settings.lastBackupNagDismissedAt && daysSince(settings.lastBackupNagDismissedAt) < BACKUP_NAG_SNOOZE_DAYS) return false;
+    if(!settings.lastBackupAt) return true;
+    return daysSince(settings.lastBackupAt) > BACKUP_NAG_AFTER_DAYS;
+  }
+  function renderBackupNag(){
+    const banner = document.getElementById('backup-nag-banner'); if(!banner) return;
+    if(!shouldShowBackupNag()){ banner.style.display='none'; return; }
+    banner.style.display='block';
+    const text = document.getElementById('backup-nag-text');
+    text.textContent = settings.lastBackupAt
+      ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last backup — everything you've entered only lives on this device.`
+      : "You haven't backed up yet — everything you've entered only lives on this device.";
+  }
+  async function dismissBackupNag(){
+    settings.lastBackupNagDismissedAt = new Date().toISOString();
+    await saveSettings();
+    renderBackupNag();
   }
   function handleRestoreFile(e){
     const file = e.target.files[0]; if(!file) return;
@@ -1876,6 +1900,7 @@
     renderRecurringChips();
     renderAddTodayList();
     renderLastBackupNote();
+    renderBackupNag();
     updateBellBadge();
     maybeFireDueNotifications();
   }
@@ -2227,6 +2252,8 @@
     document.getElementById('bell-btn').addEventListener('click', ()=>{ switchTab('insights'); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
     document.getElementById('undo-snackbar-btn').addEventListener('click', undoLastDelete);
+    document.getElementById('backup-nag-now-btn').addEventListener('click', downloadBackup);
+    document.getElementById('backup-nag-later-btn').addEventListener('click', dismissBackupNag);
 
     document.getElementById('global-search-btn').addEventListener('click', openGlobalSearch);
     document.getElementById('close-search-btn').addEventListener('click', ()=> history.back());
