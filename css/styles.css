@@ -163,6 +163,8 @@
   .budget-row-meta.over{ color:var(--debit); }
 
   .debt-card{ background:var(--bg); border-radius:16px; padding:14px 16px; margin-bottom:12px; border-left:4px solid transparent; }
+  .debt-card.clickable-row{ cursor:pointer; transition:background .12s; }
+  .debt-card.clickable-row:active{ background:var(--line); }
   .debt-card.type-emi{ border-left-color:var(--link); }
   .debt-card.type-lump{ border-left-color:var(--gold); }
   .debt-card.paid-off{ opacity:.65; border-left-color:var(--credit); }

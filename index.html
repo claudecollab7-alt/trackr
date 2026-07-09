@@ -743,6 +743,29 @@
   </div>
 </div>
 
+<div class="search-overlay" id="debtdetail-overlay" role="dialog" aria-modal="true" aria-label="Debt detail">
+  <div class="search-overlay-inner">
+    <div class="search-overlay-header">
+      <div style="flex:1;"><strong id="debtdetail-title">Name</strong></div>
+      <button class="icon-btn-sm" id="close-debtdetail-btn" aria-label="Close detail"><span data-icon="x" data-icon-size="16"></span></button>
+    </div>
+    <div class="search-overlay-body">
+      <div class="txdetail-hero">
+        <span class="txdetail-badge" id="debtdetail-badge"><span id="debtdetail-badge-label">EMI Debt</span></span>
+        <div class="txdetail-amount mono-num" id="debtdetail-amount">₹0.00</div>
+        <div class="txdetail-category" id="debtdetail-subtitle">remaining</div>
+      </div>
+      <div class="txdetail-fields" id="debtdetail-fields"></div>
+      <div class="card-label" style="margin:18px 0 10px; display:block;">Payment History</div>
+      <div id="debtdetail-payments-list"></div>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:14px; flex-shrink:0;">
+      <button class="btn-pill btn-black" id="debtdetail-edit-btn" style="flex:1;"><span data-icon="edit" data-icon-size="14"></span> Edit</button>
+      <button class="btn-pill btn-outline" id="debtdetail-delete-btn" style="flex:1; color:var(--debit); border-color:var(--debit);"><span data-icon="trash" data-icon-size="14"></span> Delete</button>
+    </div>
+  </div>
+</div>
+
 <nav class="bottom-nav">
   <button class="tab-btn active" data-tab="home"><span data-icon="home" data-icon-size="20"></span><span class="tab-label">Home</span></button>
   <button class="tab-btn" data-tab="insights"><span data-icon="insights" data-icon-size="20"></span><span class="tab-label">Insights</span></button>
