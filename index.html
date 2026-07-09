@@ -170,15 +170,13 @@
         <canvas id="chart-week-trend"></canvas>
       </div>
 
-      <div class="card" style="margin-top:16px;">
-        <div class="card-header-row"><span class="card-label">Net Worth Trend — last 6 months</span></div>
-        <canvas id="chart-networth-trend"></canvas>
-      </div>
-
-      <div class="card" id="category-trend-card" style="margin-top:16px;">
-        <div class="card-header-row"><span class="card-label">Top Category Trend — last 6 months</span></div>
-        <p class="empty-note" id="category-trend-empty" style="display:none;">Not enough data yet — log a few expenses across some months to see this trend.</p>
-        <canvas id="chart-category-trend"></canvas>
+      <div class="card" id="upcoming-cashflow-card" style="display:none; margin-top:16px;">
+        <div class="card-header-row">
+          <span class="card-label">Upcoming Cash Flow — Next 30 Days</span>
+          <span class="mono-num" id="upcoming-cashflow-total" style="font-weight:800; font-size:14px;">₹0.00</span>
+        </div>
+        <p class="period-hint" style="display:block; margin-bottom:14px;">Reminders, recurring items due, and unpaid EMI installments coming up or already overdue.</p>
+        <div id="upcoming-cashflow-list"></div>
       </div>
     </section>
 
@@ -742,6 +740,29 @@
       <button class="icon-btn-sm" id="close-notifications-btn" aria-label="Close notifications"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="notifications-list"></div></div>
+  </div>
+</div>
+
+<div class="search-overlay" id="debtdetail-overlay" role="dialog" aria-modal="true" aria-label="Debt detail">
+  <div class="search-overlay-inner">
+    <div class="search-overlay-header">
+      <div style="flex:1;"><strong id="debtdetail-title">Name</strong></div>
+      <button class="icon-btn-sm" id="close-debtdetail-btn" aria-label="Close detail"><span data-icon="x" data-icon-size="16"></span></button>
+    </div>
+    <div class="search-overlay-body">
+      <div class="txdetail-hero">
+        <span class="txdetail-badge" id="debtdetail-badge"><span id="debtdetail-badge-label">EMI Debt</span></span>
+        <div class="txdetail-amount mono-num" id="debtdetail-amount">₹0.00</div>
+        <div class="txdetail-category" id="debtdetail-subtitle">remaining</div>
+      </div>
+      <div class="txdetail-fields" id="debtdetail-fields"></div>
+      <div class="card-label" style="margin:18px 0 10px; display:block;">Payment History</div>
+      <div id="debtdetail-payments-list"></div>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:14px; flex-shrink:0;">
+      <button class="btn-pill btn-black" id="debtdetail-edit-btn" style="flex:1;"><span data-icon="edit" data-icon-size="14"></span> Edit</button>
+      <button class="btn-pill btn-outline" id="debtdetail-delete-btn" style="flex:1; color:var(--debit); border-color:var(--debit);"><span data-icon="trash" data-icon-size="14"></span> Delete</button>
+    </div>
   </div>
 </div>
 

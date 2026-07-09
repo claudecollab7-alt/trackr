@@ -48,7 +48,7 @@
   let reminders = [];
   let goals = [];
   let accounts = defaultAccounts();
-  let charts = { weekTrend:null, netWorthTrend:null, categoryTrend:null };
+  let charts = { weekTrend:null };
   let currentReport = null;
   let editingId = null;
   let editingDebtId = null;
@@ -577,8 +577,12 @@
     rows.forEach(r=>{
       const barColor = r.over ? 'var(--debit)' : (r.pct>=80 ? 'var(--gold)' : 'var(--credit)');
       const color = categoryColor(r.cat);
-      const row = document.createElement('div'); row.className='budget-row';
+      const row = document.createElement('div'); row.className='budget-row clickable-row';
       row.innerHTML = `<div class="budget-row-top"><span class="budget-cat-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(r.cat)}</span><span class="budget-cat-name">${escapeHtml(r.cat)}</span></span><span class="mono-num" style="font-size:12.5px;">${fmt(r.spent)} / ${fmt(r.limit)}</span></div><div class="budget-bar-track"><div class="budget-bar-fill" style="width:${r.pct}%; background:${barColor};"></div></div>`;
+      row.addEventListener('click', ()=>{
+        const catTx = monthExpense.filter(t=>t.category===r.cat);
+        openCategoryDetail(r.cat, `${fmt(r.spent)} of ${fmt(r.limit)} budget this month`, catTx);
+      });
       list.appendChild(row);
     });
   }
@@ -618,70 +622,46 @@
     }
   }
 
-  function last6MonthKeys(){
-    const months=[]; const now = new Date();
-    for(let i=5;i>=0;i--){ months.push(toLocalDateStr(new Date(now.getFullYear(), now.getMonth()-i, 1)).slice(0,7)); }
-    return months;
-  }
-  function chartThemeColors(){
-    const themeNow = document.body.getAttribute('data-theme');
-    const isDark = themeNow==='dark';
-    const isMounty = themeNow==='mounty';
-    return {
-      gridColor: isDark ? '#232C42' : (isMounty ? '#123029' : '#E2E8F0'),
-      tickColor: isDark ? '#8B95AC' : (isMounty ? '#8EB69B' : '#64748B'),
-      lineColor: isMounty ? '#5FD98C' : '#2563EB'
-    };
-  }
-  function renderNetWorthTrendChart(){
-    const canvas = document.getElementById('chart-networth-trend');
-    if(!canvas) return;
-    const months = last6MonthKeys();
-    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
-    const data = months.map(m=>{
-      const monthEnd = monthRangeFromDate(m+'-01').end;
-      const balance = transactions.filter(t=> t.date<=monthEnd).reduce((s,t)=> s + (t.type==='income'?t.amount:-t.amount), 0);
-      const outstandingAsOf = (list)=> list.filter(d=> d.startDate <= monthEnd).reduce((s,d)=>{
-        const paidByThen = (d.payments||[]).filter(p=>p.date<=monthEnd).reduce((ps,p)=>ps+p.amount,0);
-        return s + Math.max(0, d.total - paidByThen);
-      }, 0);
-      return balance - outstandingAsOf(debts) + outstandingAsOf(receivables);
+  function computeUpcomingCashFlow(){
+    const todayStr = toLocalDateStr(new Date());
+    const in30 = toLocalDateStr(new Date(Date.now()+30*86400000));
+    const items = [];
+    reminders.forEach(r=>{
+      const status = reminderStatus(r, 30);
+      if(status) items.push({ label:r.title, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount||0, kind:'Reminder', overdue:status.overdue });
     });
-    if(charts.netWorthTrend) charts.netWorthTrend.destroy();
-    if(window.Chart){
-      const { gridColor, tickColor, lineColor } = chartThemeColors();
-      charts.netWorthTrend = new Chart(canvas.getContext('2d'), {
-        type:'line',
-        data:{ labels, datasets:[{ label:'Net Worth', data, borderColor:lineColor, backgroundColor:lineColor+'22', tension:.3, fill:true, pointRadius:3 }] },
-        options:{ responsive:true, plugins:{ legend:{ display:false } }, scales:{ y:{ grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
+    recurring.forEach(r=>{
+      const status = recurringDueStatus(r, 30);
+      if(status) items.push({ label:r.category, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount, kind:'Recurring', overdue:status.overdue });
+    });
+    function pushEmiInstallments(list, kindLabel){
+      list.filter(d=>d.type==='emi').forEach(d=>{
+        buildEmiSchedule(d).forEach(inst=>{
+          if(!inst.paid && inst.dueDate<=in30){
+            items.push({ label:d.name, dueLabel:formatHuman(inst.dueDate), sortDate:inst.dueDate, amount:inst.amount, kind:kindLabel, overdue:inst.dueDate<todayStr });
+          }
+        });
       });
     }
+    pushEmiInstallments(debts, 'EMI Debt');
+    pushEmiInstallments(receivables, 'EMI Receivable');
+    items.sort((a,b)=> a.sortDate.localeCompare(b.sortDate));
+    return items;
   }
-  function renderCategoryTrendChart(){
-    const canvas = document.getElementById('chart-category-trend');
-    const emptyNote = document.getElementById('category-trend-empty');
-    if(!canvas) return;
-    const months = last6MonthKeys();
-    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
-    const expenseInRange = transactions.filter(t=> t.type==='expense' && months.includes(t.date.slice(0,7)));
-    const totals = {}; expenseInRange.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
-    const topCats = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([c])=>c);
-    if(charts.categoryTrend){ charts.categoryTrend.destroy(); charts.categoryTrend = null; }
-    if(topCats.length===0){ canvas.style.display='none'; emptyNote.style.display='block'; return; }
-    canvas.style.display='block'; emptyNote.style.display='none';
-    if(window.Chart){
-      const { gridColor, tickColor } = chartThemeColors();
-      const datasets = topCats.map(cat=>{
-        const data = months.map(m=> sumByType(transactions.filter(t=>t.category===cat && t.date.startsWith(m)), 'expense'));
-        const color = categoryColor(cat);
-        return { label:cat, data, borderColor:color, backgroundColor:color, tension:.3, pointRadius:2, fill:false };
-      });
-      charts.categoryTrend = new Chart(canvas.getContext('2d'), {
-        type:'line',
-        data:{ labels, datasets },
-        options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ font:{family:'Inter', size:11, weight:600}, color:tickColor } } }, scales:{ y:{ beginAtZero:true, grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
-      });
-    }
+  function renderUpcomingCashFlow(){
+    const card = document.getElementById('upcoming-cashflow-card');
+    const list = document.getElementById('upcoming-cashflow-list');
+    if(!card || !list) return;
+    const items = computeUpcomingCashFlow();
+    if(items.length===0){ card.style.display='none'; return; }
+    card.style.display='block';
+    setText('upcoming-cashflow-total', fmt(items.reduce((s,i)=>s+i.amount,0)));
+    list.innerHTML='';
+    items.forEach(i=>{
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(i.label)}</div><div class="reminder-meta">${escapeHtml(i.kind)} · ${i.dueLabel}</div></div><span class="reminder-status ${i.overdue?'overdue':'upcoming'}">${i.overdue?'Overdue':'Upcoming'}</span></div><div class="reminder-meta" style="margin-top:6px; font-weight:700; color:var(--ink);">${fmt(i.amount)}</div>`;
+      list.appendChild(row);
+    });
   }
 
   function populateEntryCategorySelect(type){
@@ -831,7 +811,8 @@
     if(r.type==='expense') checkBudgetCrossing(r.category, today, r.amount);
     refreshAll();
   }
-  function recurringDueStatus(r){
+  function recurringDueStatus(r, maxDiff){
+    maxDiff = maxDiff===undefined ? 3 : maxDiff;
     if(!r.dueDay) return null;
     const today = new Date(); const todayStr = toLocalDateStr(today); const ym = todayStr.slice(0,7);
     if(r.lastDismissedPeriod === ym) return null;
@@ -839,8 +820,8 @@
     const day = Math.min(r.dueDay, lastDayOfMonth);
     const dueDateThisMonth = `${ym}-${String(day).padStart(2,'0')}`;
     const diffDays = Math.round((new Date(dueDateThisMonth+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-    if(diffDays > 3) return null;
-    return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), periodKey: ym };
+    if(diffDays > maxDiff) return null;
+    return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), dueDateISO: dueDateThisMonth, periodKey: ym };
   }
   function renderRecurringDueCard(){
     const card = document.getElementById('recurring-due-card'); const list = document.getElementById('recurring-due-list');
@@ -1046,7 +1027,11 @@
       const paid = debtPaid(d); const remaining = debtRemaining(d); const isPaidOff = remaining<=0.004;
       const pct = d.total>0 ? Math.min(100, paid/d.total*100) : 0;
       const overdue = debtOverdueCount(d);
-      const card = document.createElement('div'); card.className = 'debt-card type-'+d.type+(isPaidOff?' paid-off':'');
+      const card = document.createElement('div'); card.className = 'debt-card clickable-row type-'+d.type+(isPaidOff?' paid-off':'');
+      card.addEventListener('click', (e)=>{
+        if(e.target.closest('button, .log-payment-form, select, input')) return;
+        openDebtDetail(d.id);
+      });
       const typeLabel = d.type==='emi' ? `EMI · ${fmt(d.emiAmount)}/mo` : (isReceivable ? 'One-time receivable' : 'One-time debt');
       const typeColor = d.type==='emi' ? 'var(--link)' : 'var(--gold)';
       const barColor = isPaidOff ? 'var(--credit)' : typeColor;
@@ -1372,29 +1357,34 @@
     const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
     const debt = currentDebtList().find(d=>d.id===debtId); if(!debt) return;
-    debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date });
+    const nowIso = new Date().toISOString();
+    const txId = 'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: nowIso, txId });
     await currentDebtSaveFn()();
     const txType = isReceivable ? 'income' : 'expense';
     const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
     const catList = isReceivable ? categories.income : categories.expense;
     if(!catList.includes(txCategory)) catList.push(txCategory);
-    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: new Date().toISOString() });
+    transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso });
     await saveTransactions(); await saveCategories();
     refreshAll();
   }
 
   async function deleteDebt(id){
-    const isReceivable = activeDebtKind==='receivable';
+    const isReceivable = receivables.some(d=>d.id===id);
+    const list = isReceivable ? receivables : debts;
+    const deletedIds = isReceivable ? recentlyDeletedReceivableIds : recentlyDeletedDebtIds;
+    const saveFn = isReceivable ? saveReceivables : saveDebts;
     const msg = isReceivable
       ? 'Remove this receivable from your tracker? Past collections already recorded in your transactions will NOT be deleted.'
       : 'Remove this debt from your tracker? Past payments already recorded in your transactions will NOT be deleted.';
-    if(!confirm(msg)) return;
-    currentDeletedDebtIds().add(id);
-    const list = currentDebtList();
+    if(!confirm(msg)) return false;
+    deletedIds.add(id);
     const idx = list.findIndex(d=>d.id===id);
     if(idx>-1) list.splice(idx,1);
-    await currentDebtSaveFn()();
+    await saveFn();
     refreshAll();
+    return true;
   }
 
   function ordinalSuffix(n){
@@ -1404,13 +1394,14 @@
     if(n%10===3 && n!==13) return 'rd';
     return 'th';
   }
-  function reminderStatus(r){
+  function reminderStatus(r, maxDiff){
+    maxDiff = maxDiff===undefined ? 3 : maxDiff;
     const today = new Date(); const todayStr = toLocalDateStr(today);
     if(r.repeat === 'once'){
       if(r.lastDismissedPeriod === 'done' || !r.dueDate) return null;
       const diffDays = Math.round((new Date(r.dueDate+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-      if(diffDays > 3) return null;
-      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(r.dueDate), periodKey: 'done' };
+      if(diffDays > maxDiff) return null;
+      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(r.dueDate), dueDateISO: r.dueDate, periodKey: 'done' };
     } else {
       const ym = todayStr.slice(0,7);
       if(r.lastDismissedPeriod === ym) return null;
@@ -1418,8 +1409,8 @@
       const day = Math.min(r.dueDay||1, lastDayOfMonth);
       const dueDateThisMonth = `${ym}-${String(day).padStart(2,'0')}`;
       const diffDays = Math.round((new Date(dueDateThisMonth+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-      if(diffDays > 3) return null;
-      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), periodKey: ym };
+      if(diffDays > maxDiff) return null;
+      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), dueDateISO: dueDateThisMonth, periodKey: ym };
     }
   }
   function reminderStatusLabel(status){
@@ -1835,7 +1826,8 @@
     schedule.forEach(s=>{
       const row = document.createElement('div'); row.className='schedule-row';
       const statusClass = s.paid ? 'paid' : (s.overdue ? 'overdue' : 'upcoming');
-      const statusLabel = s.paid ? `Paid ${formatHuman(s.paidDate)}` : (s.overdue ? 'Overdue' : 'Upcoming');
+      const timeStr = s.paidAt ? formatTime12h(s.paidAt) : null;
+      const statusLabel = s.paid ? `Paid ${formatHuman(s.paidDate)}${timeStr ? ' · '+timeStr : ''}` : (s.overdue ? 'Overdue' : 'Upcoming');
       row.innerHTML = `
         <div class="schedule-row-left">
           <span class="schedule-no">${s.installmentNo}</span>
@@ -1847,6 +1839,107 @@
       container.appendChild(row);
     });
   }
+
+  let debtDetailCurrentId = null;
+  function openDebtDetail(id){
+    const isReceivable = receivables.some(x=>x.id===id);
+    const list = isReceivable ? receivables : debts;
+    const d = list.find(x=>x.id===id); if(!d) return;
+    debtDetailCurrentId = id;
+    const paid = debtPaid(d); const remaining = debtRemaining(d); const isPaidOff = remaining<=0.004;
+    setText('debtdetail-title', d.name);
+    setText('debtdetail-badge-label', (d.type==='emi' ? 'EMI' : 'One-time') + ' ' + (isReceivable ? 'Receivable' : 'Debt'));
+    document.getElementById('debtdetail-amount').style.color = isReceivable ? 'var(--credit)' : 'var(--debit)';
+    setText('debtdetail-amount', fmt(remaining));
+    setText('debtdetail-subtitle', isPaidOff ? (isReceivable ? 'Fully received' : 'Paid off') : 'remaining');
+    const fields = document.getElementById('debtdetail-fields'); fields.innerHTML='';
+    const rows = [
+      ['Type', d.type==='emi' ? 'EMI — fixed monthly' : 'One-time'],
+      ['Start Date', formatHuman(d.startDate)],
+    ];
+    if(d.type==='emi'){ rows.push(['EMI Amount', fmt(d.emiAmount)]); rows.push(['Tenure', d.tenure+' months']); }
+    rows.push(['Total', fmt(d.total)]);
+    rows.push([isReceivable ? 'Received' : 'Paid', fmt(paid)]);
+    rows.push(['Note', d.note ? d.note : '—']);
+    rows.forEach(([label,value])=>{
+      const row = document.createElement('div'); row.className='txdetail-field';
+      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value">${escapeHtml(String(value))}</span>`;
+      fields.appendChild(row);
+    });
+    renderDebtDetailPayments(d, isReceivable);
+    showOverlay('debtdetail-overlay');
+    history.pushState({ debtDetailOpen:true }, '', '');
+  }
+  function closeDebtDetail(){ hideOverlay('debtdetail-overlay'); debtDetailCurrentId=null; }
+  function renderDebtDetailPayments(d, isReceivable){
+    const container = document.getElementById('debtdetail-payments-list'); container.innerHTML='';
+    const payments = [...(d.payments||[])].sort((a,b)=> b.date.localeCompare(a.date));
+    if(payments.length===0){ container.innerHTML = '<p class="empty-note">No payments logged yet.</p>'; return; }
+    payments.forEach(p=>{
+      const timeStr = p.createdAt ? formatTime12h(p.createdAt) : null;
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `
+        <div class="reminder-card-top">
+          <div><div class="reminder-name mono-num">${fmt(p.amount)}</div><div class="reminder-meta">${formatHuman(p.date)} · Logged ${timeStr || 'time not recorded'}</div></div>
+          <div style="display:flex; gap:4px;">
+            <button class="icon-btn-sm edit-payment-btn" data-payment-id="${p.id}" aria-label="Edit payment">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-payment-btn" data-payment-id="${p.id}" aria-label="Delete payment">${icon('trash',14)}</button>
+          </div>
+        </div>
+        <div class="log-payment-form" id="editpay-form-${p.id}" style="display:none;">
+          <label>Amount<input type="number" class="ep-amount" min="0.01" step="0.01" value="${p.amount}"></label>
+          <label>Date<input type="date" class="ep-date" value="${p.date}"></label>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button type="button" class="btn-pill btn-black ep-save" data-payment-id="${p.id}">Save</button>
+            <button type="button" class="btn-pill btn-outline ep-cancel" data-payment-id="${p.id}">Cancel</button>
+          </div>
+        </div>`;
+      container.appendChild(row);
+    });
+    container.querySelectorAll('.edit-payment-btn').forEach(btn=> btn.addEventListener('click', ()=>{
+      const f = document.getElementById('editpay-form-'+btn.dataset.paymentId); if(f) f.style.display = (f.style.display==='none' ? 'block' : 'none');
+    }));
+    container.querySelectorAll('.ep-cancel').forEach(btn=> btn.addEventListener('click', ()=>{
+      const f = document.getElementById('editpay-form-'+btn.dataset.paymentId); if(f) f.style.display='none';
+    }));
+    container.querySelectorAll('.ep-save').forEach(btn=> btn.addEventListener('click', ()=> saveEditedPayment(debtDetailCurrentId, btn.dataset.paymentId)));
+    container.querySelectorAll('.del-payment-btn').forEach(btn=> btn.addEventListener('click', ()=> deletePayment(debtDetailCurrentId, btn.dataset.paymentId)));
+  }
+  async function saveEditedPayment(debtId, paymentId){
+    const isReceivable = receivables.some(x=>x.id===debtId);
+    const list = isReceivable ? receivables : debts;
+    const d = list.find(x=>x.id===debtId); if(!d) return;
+    const payment = (d.payments||[]).find(p=>p.id===paymentId); if(!payment) return;
+    const form = document.getElementById('editpay-form-'+paymentId); if(!form) return;
+    const amount = parseFloat(form.querySelector('.ep-amount').value);
+    const date = form.querySelector('.ep-date').value;
+    if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
+    payment.amount = amount; payment.date = date;
+    await (isReceivable ? saveReceivables() : saveDebts());
+    if(payment.txId){
+      const tx = transactions.find(t=>t.id===payment.txId);
+      if(tx){ tx.amount = amount; tx.date = date; await saveTransactions(); }
+    }
+    openDebtDetail(debtId);
+    refreshAll();
+  }
+  async function deletePayment(debtId, paymentId){
+    if(!confirm('Delete this payment record? Its linked transaction (if found) will be removed too.')) return;
+    const isReceivable = receivables.some(x=>x.id===debtId);
+    const list = isReceivable ? receivables : debts;
+    const d = list.find(x=>x.id===debtId); if(!d) return;
+    const idx = (d.payments||[]).findIndex(p=>p.id===paymentId); if(idx===-1) return;
+    const payment = d.payments[idx];
+    d.payments.splice(idx,1);
+    await (isReceivable ? saveReceivables() : saveDebts());
+    if(payment.txId){
+      const txIdx = transactions.findIndex(t=>t.id===payment.txId);
+      if(txIdx>-1){ recentlyDeletedTxIds.add(payment.txId); transactions.splice(txIdx,1); await saveTransactions(); }
+    }
+    openDebtDetail(debtId);
+    refreshAll();
+  }
+
   function renderGlobalSearchResults(query){
     const container = document.getElementById('global-search-results'); container.innerHTML='';
     const q = query.trim().toLowerCase();
@@ -2024,9 +2117,8 @@
     renderGoalsList();
     renderRemindersUpcoming();
     renderRecurringDueCard();
+    renderUpcomingCashFlow();
     renderTrendChart();
-    renderNetWorthTrendChart();
-    renderCategoryTrendChart();
     renderReports();
     renderHistory();
     renderBudgetSetList();
@@ -2421,6 +2513,20 @@
       if(deleted && document.getElementById('txdetail-overlay').classList.contains('open')) history.back();
     });
 
+    document.getElementById('close-debtdetail-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('debtdetail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='debtdetail-overlay') history.back(); });
+    document.getElementById('debtdetail-edit-btn').addEventListener('click', ()=>{
+      if(!debtDetailCurrentId) return;
+      const id = debtDetailCurrentId;
+      history.back();
+      setTimeout(()=> startEditDebt(id), 50);
+    });
+    document.getElementById('debtdetail-delete-btn').addEventListener('click', async ()=>{
+      if(!debtDetailCurrentId) return;
+      const deleted = await deleteDebt(debtDetailCurrentId);
+      if(deleted && document.getElementById('debtdetail-overlay').classList.contains('open')) history.back();
+    });
+
     document.querySelectorAll('#theme-select [data-theme-choice]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const newTheme = btn.getAttribute('data-theme-choice');
@@ -2430,8 +2536,6 @@
         applyTheme(newTheme);
         renderAllRings();
         renderTrendChart();
-        renderNetWorthTrendChart();
-        renderCategoryTrendChart();
       });
     });
 
@@ -2617,6 +2721,7 @@
       if(!state.catDetailOpen){ closeCategoryDetail(); }
       if(!state.txDetailOpen){ closeTransactionDetail(); }
       if(!state.notificationsOpen){ closeNotificationsOverlay(); }
+      if(!state.debtDetailOpen){ closeDebtDetail(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){

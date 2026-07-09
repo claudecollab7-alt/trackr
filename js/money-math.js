@@ -55,6 +55,8 @@ function buildEmiSchedule(d){
       paid: !!payment,
       paidDate: payment ? payment.date : null,
       paidAmount: payment ? payment.amount : null,
+      paidAt: payment ? (payment.createdAt || null) : null,
+      paymentId: payment ? payment.id : null,
       overdue: !payment && dueDateStr < todayStr
     });
   }
