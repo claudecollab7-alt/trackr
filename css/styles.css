@@ -464,6 +464,14 @@
   .reminder-status.upcoming{ background:rgba(245,158,11,.14); color:var(--gold); }
   .reminder-actions{ display:flex; gap:8px; margin-top:10px; }
 
+  /* ---------- Add Entry desktop side panel ---------- */
+  .add-entry-main{ min-width:0; }
+  @media (min-width:781px){
+    .add-entry-layout{ display:flex; align-items:flex-start; gap:26px; }
+    .add-entry-main{ flex:1 1 480px; max-width:480px; }
+    .add-entry-side{ flex:1 1 380px; min-width:0; }
+  }
+
   @media (max-width:780px){
     body{ flex-direction:column; }
     .spine{ display:none; }

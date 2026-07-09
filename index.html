@@ -106,6 +106,64 @@
         <div class="card-header-row"><span class="card-label">Accounts</span><button class="link-btn" data-tab="more" data-sub="accounts">Manage</button></div>
         <div id="accounts-home-list"></div>
       </div>
+
+      <div id="home-desktop-extra" style="display:none;">
+        <div class="card" id="homedebt-card" style="display:none; margin-top:18px;">
+          <div class="card-header-row"><span class="card-label">Debts &amp; EMIs Overview</span><button class="link-btn" data-tab="more" data-sub="debts">View All</button></div>
+          <div class="debt-overview-grid">
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Committed</span>
+              <span class="debt-overview-amt mono-num" id="homedebt-total-committed">₹0.00</span>
+            </div>
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Paid</span>
+              <span class="debt-overview-amt mono-num" id="homedebt-total-paid" style="color:var(--credit);">₹0.00</span>
+            </div>
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Pending</span>
+              <span class="debt-overview-amt mono-num" id="homedebt-total-pending" style="color:var(--debit);">₹0.00</span>
+            </div>
+          </div>
+          <div class="debt-overview-track"><div class="debt-overview-fill" id="homedebt-overall-fill"></div></div>
+
+          <div class="debt-overview-subsection" id="homedebt-emi-section" style="display:none;">
+            <div class="debt-overview-subtitle">EMI Debts</div>
+            <div class="debt-overview-row"><span>Paid <span class="mono-num" id="homedebt-emi-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="homedebt-emi-pending">₹0.00</span></span></div>
+          </div>
+          <div class="debt-overview-subsection" id="homedebt-lump-section" style="display:none;">
+            <div class="debt-overview-subtitle">One-time Debts</div>
+            <div class="debt-overview-row"><span>Paid <span class="mono-num" id="homedebt-lump-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="homedebt-lump-pending">₹0.00</span></span></div>
+          </div>
+        </div>
+
+        <div class="card" id="homereceivable-card" style="display:none; margin-top:18px;">
+          <div class="card-header-row"><span class="card-label">Receivables Overview</span><button class="link-btn" data-tab="more" data-sub="debts">View All</button></div>
+          <div class="debt-overview-grid">
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Committed</span>
+              <span class="debt-overview-amt mono-num" id="homereceivable-total-committed">₹0.00</span>
+            </div>
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Received</span>
+              <span class="debt-overview-amt mono-num" id="homereceivable-total-paid" style="color:var(--credit);">₹0.00</span>
+            </div>
+            <div class="debt-overview-stat">
+              <span class="debt-overview-label">Total Pending</span>
+              <span class="debt-overview-amt mono-num" id="homereceivable-total-pending" style="color:var(--debit);">₹0.00</span>
+            </div>
+          </div>
+          <div class="debt-overview-track"><div class="debt-overview-fill" id="homereceivable-overall-fill"></div></div>
+
+          <div class="debt-overview-subsection" id="homereceivable-emi-section" style="display:none;">
+            <div class="debt-overview-subtitle">EMI Receivables</div>
+            <div class="debt-overview-row"><span>Received <span class="mono-num" id="homereceivable-emi-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="homereceivable-emi-pending">₹0.00</span></span></div>
+          </div>
+          <div class="debt-overview-subsection" id="homereceivable-lump-section" style="display:none;">
+            <div class="debt-overview-subtitle">One-time Receivables</div>
+            <div class="debt-overview-row"><span>Received <span class="mono-num" id="homereceivable-lump-paid">₹0.00</span></span><span>Pending <span class="mono-num" id="homereceivable-lump-pending">₹0.00</span></span></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="view-insights" class="view">
@@ -181,48 +239,74 @@
     </section>
 
     <section id="view-add" class="view">
-      <div id="recurring-quick-add" style="display:none; max-width:440px;">
-        <div class="card-label" style="display:block; margin-bottom:10px;">Quick Add</div>
-        <div class="recurring-chips" id="recurring-chips"></div>
-      </div>
+      <div class="add-entry-layout" id="add-entry-layout">
+        <div class="add-entry-main">
+          <div id="recurring-quick-add" style="display:none; max-width:440px;">
+            <div class="card-label" style="display:block; margin-bottom:10px;">Quick Add</div>
+            <div class="recurring-chips" id="recurring-chips"></div>
+          </div>
 
-      <form class="card ledger-form" id="entry-form">
-        <div class="type-toggle">
-          <button type="button" class="type-btn credit active" data-type="income"><span data-icon="arrowUp" data-icon-size="14"></span> Credit</button>
-          <button type="button" class="type-btn debit" data-type="expense"><span data-icon="arrowDown" data-icon-size="14"></span> Debit</button>
-        </div>
-        <input type="hidden" id="entry-type" value="income">
+          <form class="card ledger-form" id="entry-form">
+            <div class="type-toggle">
+              <button type="button" class="type-btn credit active" data-type="income"><span data-icon="arrowUp" data-icon-size="14"></span> Credit</button>
+              <button type="button" class="type-btn debit" data-type="expense"><span data-icon="arrowDown" data-icon-size="14"></span> Debit</button>
+            </div>
+            <input type="hidden" id="entry-type" value="income">
 
-        <label>Date
-          <input type="date" id="entry-date" required>
-        </label>
-        <label>Category
-          <select id="entry-category" required></select>
-        </label>
-        <label>Account
-          <select id="entry-account" required></select>
-        </label>
-        <label>Amount
-          <input type="number" id="entry-amount" min="0.01" step="0.01" placeholder="0.00" required>
-        </label>
-        <label>Particulars (optional)
-          <input type="text" id="entry-note" placeholder="e.g. Grocery run">
-        </label>
-        <div class="save-recurring-row">
-          <input type="checkbox" id="entry-save-recurring">
-          <label for="entry-save-recurring" style="margin:0; color:inherit; font-weight:600;">Save as a Quick Add for next time (e.g. salary, rent)</label>
-        </div>
-        <div class="save-recurring-row" id="entry-recurring-remind-row" style="display:none; margin-top:6px;">
-          <input type="checkbox" id="entry-recurring-remind">
-          <label for="entry-recurring-remind" style="margin:0; color:inherit; font-weight:600;">Also remind me monthly, around this day, to log it again</label>
-        </div>
-        <button type="submit" class="btn-pill btn-black stamp-btn">Save Entry</button>
-        <button type="button" id="cancel-edit-link"><span data-icon="x" data-icon-size="13"></span> Cancel edit</button>
-      </form>
+            <label>Date
+              <input type="date" id="entry-date" required>
+            </label>
+            <label>Category
+              <select id="entry-category" required></select>
+            </label>
+            <label>Account
+              <select id="entry-account" required></select>
+            </label>
+            <label>Amount
+              <input type="number" id="entry-amount" min="0.01" step="0.01" placeholder="0.00" required>
+            </label>
+            <label>Particulars (optional)
+              <input type="text" id="entry-note" placeholder="e.g. Grocery run">
+            </label>
+            <div class="save-recurring-row">
+              <input type="checkbox" id="entry-save-recurring">
+              <label for="entry-save-recurring" style="margin:0; color:inherit; font-weight:600;">Save as a Quick Add for next time (e.g. salary, rent)</label>
+            </div>
+            <div class="save-recurring-row" id="entry-recurring-remind-row" style="display:none; margin-top:6px;">
+              <input type="checkbox" id="entry-recurring-remind">
+              <label for="entry-recurring-remind" style="margin:0; color:inherit; font-weight:600;">Also remind me monthly, around this day, to log it again</label>
+            </div>
+            <button type="submit" class="btn-pill btn-black stamp-btn">Save Entry</button>
+            <button type="button" id="cancel-edit-link"><span data-icon="x" data-icon-size="13"></span> Cancel edit</button>
+          </form>
 
-      <div class="today-entries">
-        <h3>Today's Entries</h3>
-        <div class="card" id="today-list-card"><div id="today-list"></div></div>
+          <div class="today-entries">
+            <h3>Today's Entries</h3>
+            <div class="card" id="today-list-card"><div id="today-list"></div></div>
+          </div>
+        </div>
+
+        <div class="add-entry-side" id="add-entry-side" style="display:none;">
+          <div class="card">
+            <div class="card-header-row"><span class="card-label">Debts &amp; Receivables</span></div>
+            <p class="period-hint" style="display:block; margin-bottom:14px;">Add a debt or receivable, or log a payment against an existing one, without leaving Add Entry.</p>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <button type="button" class="btn-pill btn-black" id="addentry-add-debt-btn"><span data-icon="plus" data-icon-size="14"></span> Add Debt</button>
+              <button type="button" class="btn-pill btn-outline" id="addentry-add-receivable-btn"><span data-icon="plus" data-icon-size="14"></span> Add Receivable</button>
+            </div>
+            <div id="add-debt-form-slot"></div>
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <div class="card-header-row"><span class="card-label">Your Debts</span></div>
+            <div id="addentry-debts-list"></div>
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <div class="card-header-row"><span class="card-label">Your Receivables</span></div>
+            <div id="addentry-receivables-list"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -431,6 +515,8 @@
           <div id="debts-list"></div>
         </div>
         <button class="btn-pill btn-black" id="show-add-debt-btn"><span data-icon="plus" data-icon-size="14"></span> <span id="add-debt-btn-label">Add Debt</span></button>
+        <p class="period-hint" id="debt-form-moved-hint" style="display:none;">Add a new debt or receivable from the <button type="button" class="link-btn" id="goto-addentry-link" style="display:inline;">Add Entry</button> tab.</p>
+        <div id="add-debt-form-home-anchor"></div>
         <form class="card ledger-form" id="add-debt-form" style="display:none; margin-top:14px; max-width:none;">
           <label>Name
             <input type="text" id="debt-name" placeholder="e.g. Car Loan - HDFC" required>
