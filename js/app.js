@@ -1,6 +1,22 @@
 (function(){
   "use strict";
 
+  /* ---------- Disable pinch/double-tap zoom everywhere ----------
+     The viewport meta tag + CSS touch-action cover most browsers, but older
+     iOS Safari (and standalone/installed PWA mode) still needs the classic
+     gesturestart/touchend belt-and-suspenders fix. */
+  document.addEventListener('gesturestart', (e)=> e.preventDefault());
+  document.addEventListener('gesturechange', (e)=> e.preventDefault());
+  document.addEventListener('gestureend', (e)=> e.preventDefault());
+  let lastTouchEnd = 0;
+  let lastTouchTarget = null;
+  document.addEventListener('touchend', (e)=>{
+    const now = Date.now();
+    if(now - lastTouchEnd <= 350 && e.target === lastTouchTarget) e.preventDefault();
+    lastTouchEnd = now;
+    lastTouchTarget = e.target;
+  }, { passive:false });
+
   const ICON_PATHS = {
     home: '<path d="M3 9.5 12 3l9 6.5"/><path d="M5 10v9a1 1 0 0 0 1 1h3v-6h6v6h3a1 1 0 0 0 1-1v-9"/>',
     insights: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
@@ -55,6 +71,9 @@
   let editingGoalId = null;
   let editingReminderId = null;
   let notifiedReminderIds = new Set();
+  function clearNotifiedFor(id){
+    Array.from(notifiedReminderIds).forEach(key=>{ if(key===id || key.indexOf(id+'_')===0) notifiedReminderIds.delete(key); });
+  }
   let trendRange = '7d';
   let ringRange = 'month';
   let activeDebtKind = 'debt'; // 'debt' (I Owe) or 'receivable' (Owed to Me) — which list the Debts & EMIs page currently shows
@@ -1525,7 +1544,7 @@
   function renderRemindersUpcoming(){
     const card = document.getElementById('reminders-upcoming-card'); const list = document.getElementById('reminders-upcoming-list');
     if(!card || !list) return;
-    const items = reminders.map(r=> ({ r, status: reminderStatus(r) })).filter(x=>x.status);
+    const items = reminders.map(r=> ({ r, status: reminderStatus(r, Math.max(3, r.remindDaysBefore||0)) })).filter(x=>x.status);
     if(items.length===0){ card.style.display='none'; return; }
     card.style.display='block';
     items.sort((a,b)=> a.status.diffDays - b.status.diffDays);
@@ -1540,7 +1559,7 @@
     const container = document.getElementById('reminders-list'); if(!container) return;
     container.innerHTML='';
     if(reminders.length===0){ container.innerHTML = '<p class="empty-note">No reminders set yet. Add one below.</p>'; return; }
-    const withStatus = reminders.map(r=>({ r, status: reminderStatus(r) }));
+    const withStatus = reminders.map(r=>({ r, status: reminderStatus(r, Math.max(3, r.remindDaysBefore||0)) }));
     withStatus.sort((a,b)=>{
       if(!!a.status !== !!b.status) return a.status ? -1 : 1;
       if(a.status && b.status) return a.status.diffDays - b.status.diffDays;
@@ -1549,11 +1568,12 @@
     withStatus.forEach(({r,status})=>{
       const card = document.createElement('div'); card.className='reminder-card';
       const repeatLabel = r.repeat==='monthly' ? `Every month on the ${r.dueDay}${ordinalSuffix(r.dueDay)}` : `One-time · ${formatHuman(r.dueDate)}`;
+      const remindLabel = r.remindDaysBefore>0 ? ` · Daily nudge from ${r.remindDaysBefore} day${r.remindDaysBefore===1?'':'s'} before` : '';
       card.innerHTML = `
         <div class="reminder-card-top">
           <div>
             <div class="reminder-name">${escapeHtml(r.title)}</div>
-            <div class="reminder-meta">${repeatLabel}${r.amount? ' · '+fmt(r.amount):''}</div>
+            <div class="reminder-meta">${repeatLabel}${r.amount? ' · '+fmt(r.amount):''}${remindLabel}</div>
             ${r.note? `<div class="reminder-meta">${escapeHtml(r.note)}</div>`:''}
           </div>
           ${ status ? `<span class="reminder-status ${status.overdue?'overdue':'upcoming'}">${reminderStatusLabel(status)}</span>` : '' }
@@ -1598,16 +1618,19 @@
       dueDate = document.getElementById('reminder-due-date').value;
       if(!dueDate){ alert('Please pick a due date.'); return; }
     }
+    let remindDaysBefore = parseInt(document.getElementById('reminder-remind-before').value, 10);
+    if(!Number.isFinite(remindDaysBefore) || remindDaysBefore<0) remindDaysBefore = 0;
+    if(remindDaysBefore>30) remindDaysBefore = 30;
     if(editingReminderId){
       const r = reminders.find(x=>x.id===editingReminderId);
       if(r){
-        r.title = title; r.repeat = repeat; r.dueDay = dueDay; r.dueDate = dueDate; r.amount = amount; r.note = note;
+        r.title = title; r.repeat = repeat; r.dueDay = dueDay; r.dueDate = dueDate; r.amount = amount; r.note = note; r.remindDaysBefore = remindDaysBefore;
         r.lastDismissedPeriod = null;
-        notifiedReminderIds.delete(r.id);
+        clearNotifiedFor(r.id);
       }
       editingReminderId = null;
     } else {
-      reminders.push({ id:'rem_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), title, repeat, dueDay, dueDate, amount, note, lastDismissedPeriod:null });
+      reminders.push({ id:'rem_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), title, repeat, dueDay, dueDate, amount, note, remindDaysBefore, lastDismissedPeriod:null });
     }
     await saveReminders();
     document.getElementById('add-reminder-form').reset();
@@ -1626,6 +1649,7 @@
     document.getElementById('reminder-once-field').style.display = isMonthly ? 'none' : 'block';
     document.getElementById('reminder-due-day').value = r.dueDay || 1;
     document.getElementById('reminder-due-date').value = r.dueDate || '';
+    document.getElementById('reminder-remind-before').value = r.remindDaysBefore || '';
     document.getElementById('reminder-amount').value = r.amount || '';
     document.getElementById('reminder-note').value = r.note || '';
     document.querySelector('#add-reminder-form button[type="submit"]').textContent = 'Update Reminder';
@@ -1655,17 +1679,23 @@
   }
   async function maybeFireDueNotifications(){
     if(!('Notification' in window) || Notification.permission!=='granted') return;
+    const todayStr = toLocalDateStr(new Date());
     for(const r of reminders){
-      const status = reminderStatus(r);
-      if(status && (status.overdue || status.diffDays===0) && !notifiedReminderIds.has(r.id)){
+      const windowDays = Math.max(0, r.remindDaysBefore||0);
+      const status = reminderStatus(r, windowDays);
+      if(!status) continue;
+      const shouldNotify = status.overdue || status.diffDays <= windowDays;
+      const key = r.id+'_'+todayStr;
+      if(shouldNotify && !notifiedReminderIds.has(key)){
         await fireNotification('Trackr reminder', `${r.title} — ${reminderStatusLabel(status)}`);
-        notifiedReminderIds.add(r.id);
+        notifiedReminderIds.add(key);
       }
     }
     for(const d of debts){
-      if(d.type==='emi' && debtOverdueCount(d)>0 && debtRemaining(d)>0.004 && !notifiedReminderIds.has('debt_'+d.id)){
+      const key = 'debt_'+d.id+'_'+todayStr;
+      if(d.type==='emi' && debtOverdueCount(d)>0 && debtRemaining(d)>0.004 && !notifiedReminderIds.has(key)){
         await fireNotification('Trackr reminder', `${d.name} — EMI payment due`);
-        notifiedReminderIds.add('debt_'+d.id);
+        notifiedReminderIds.add(key);
       }
     }
   }
@@ -2197,7 +2227,7 @@
       .filter(cat=> budgets[cat]>0 && (spentMap[cat]||0) > budgets[cat])
       .map(cat=> ({ category: cat, spent: spentMap[cat]||0, limit: budgets[cat] }));
     const overdueDebts = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0);
-    const dueReminders = reminders.map(r=> ({ r, status: reminderStatus(r) })).filter(x=>x.status);
+    const dueReminders = reminders.map(r=> ({ r, status: reminderStatus(r, Math.max(3, r.remindDaysBefore||0)) })).filter(x=>x.status);
     const dueRecurring = recurring.map(r=> ({ r, status: recurringDueStatus(r) })).filter(x=>x.status);
     return { overBudget, overdueDebts, dueReminders, dueRecurring };
   }
@@ -2537,6 +2567,9 @@
 
     document.getElementById('pinlock-submit').addEventListener('click', handlePinSubmit);
     document.getElementById('pinlock-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handlePinSubmit(); });
+    document.getElementById('pinlock-input').addEventListener('input', (e)=>{
+      if(/^[0-9]{4}$/.test(e.target.value)) setTimeout(handlePinSubmit, 60);
+    });
     document.getElementById('pinlock-cancel-setup').addEventListener('click', async ()=>{
       hidePinOverlay();
       pendingNewPin = null;
