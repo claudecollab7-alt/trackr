@@ -369,9 +369,21 @@
     });
     return row;
   }
+  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen'];
+  function closeAllOverlaysThenRun(action, stepsLeft){
+    stepsLeft = stepsLeft===undefined ? OVERLAY_STATE_FLAGS.length : stepsLeft;
+    const state = history.state;
+    const hasOpenOverlay = state && OVERLAY_STATE_FLAGS.some(flag=> state[flag]);
+    if(hasOpenOverlay && stepsLeft>0){
+      history.back();
+      setTimeout(()=> closeAllOverlaysThenRun(action, stepsLeft-1), 60);
+    } else {
+      action();
+    }
+  }
   function wireActivityActions(container){
     container.querySelectorAll('.del-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); deleteTransaction(btn.dataset.id); }));
-    container.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); startEditTransaction(btn.dataset.id); }));
+    container.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); closeAllOverlaysThenRun(()=> startEditTransaction(btn.dataset.id)); }));
   }
   const OVERLAY_ANIM_MS = 220;
   function showOverlay(id){
@@ -1918,15 +1930,21 @@
     schedule.forEach(s=>{
       const row = document.createElement('div'); row.className='schedule-row';
       const statusClass = s.paid ? 'paid' : (s.overdue ? 'overdue' : 'upcoming');
+      const statusLabel = s.paid ? 'Paid' : (s.overdue ? 'Overdue' : 'Upcoming');
       const timeStr = s.paidAt ? formatTime12h(s.paidAt) : null;
-      const statusLabel = s.paid ? `Paid ${formatHuman(s.paidDate)}${timeStr ? ' · '+timeStr : ''}` : (s.overdue ? 'Overdue' : 'Upcoming');
+      const metaLine = s.paid ? `Paid ${formatHuman(s.paidDate)}${timeStr ? ' · '+timeStr : ' · time not recorded'}` : '';
       row.innerHTML = `
-        <div class="schedule-row-left">
-          <span class="schedule-no">${s.installmentNo}</span>
-          <span class="schedule-due">${formatHuman(s.dueDate)}</span>
+        <div class="schedule-row-top">
+          <div class="schedule-row-left">
+            <span class="schedule-no">${s.installmentNo}</span>
+            <div>
+              <div class="schedule-due">${formatHuman(s.dueDate)}</div>
+              <div class="schedule-amt mono-num">${fmt(s.amount)}</div>
+            </div>
+          </div>
+          <span class="schedule-status ${statusClass}">${statusLabel}</span>
         </div>
-        <span class="schedule-amt mono-num">${fmt(s.amount)}</span>
-        <span class="schedule-status ${statusClass}">${statusLabel}</span>
+        ${ metaLine ? `<div class="schedule-meta">${metaLine}</div>` : '' }
       `;
       container.appendChild(row);
     });
@@ -2596,8 +2614,7 @@
     document.getElementById('txdetail-edit-btn').addEventListener('click', ()=>{
       if(!txDetailCurrentId) return;
       const id = txDetailCurrentId;
-      history.back();
-      setTimeout(()=> startEditTransaction(id), 50);
+      closeAllOverlaysThenRun(()=> startEditTransaction(id));
     });
     document.getElementById('txdetail-delete-btn').addEventListener('click', async ()=>{
       if(!txDetailCurrentId) return;
@@ -2610,8 +2627,7 @@
     document.getElementById('debtdetail-edit-btn').addEventListener('click', ()=>{
       if(!debtDetailCurrentId) return;
       const id = debtDetailCurrentId;
-      history.back();
-      setTimeout(()=> startEditDebt(id), 50);
+      closeAllOverlaysThenRun(()=> startEditDebt(id));
     });
     document.getElementById('debtdetail-delete-btn').addEventListener('click', async ()=>{
       if(!debtDetailCurrentId) return;
@@ -2624,8 +2640,7 @@
     document.getElementById('goaldetail-edit-btn').addEventListener('click', ()=>{
       if(!goalDetailCurrentId) return;
       const id = goalDetailCurrentId;
-      history.back();
-      setTimeout(()=> startEditGoal(id), 50);
+      closeAllOverlaysThenRun(()=> startEditGoal(id));
     });
     document.getElementById('goaldetail-delete-btn').addEventListener('click', async ()=>{
       if(!goalDetailCurrentId) return;
