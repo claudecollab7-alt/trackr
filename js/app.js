@@ -1187,7 +1187,11 @@
     sorted.forEach(g=>{
       const saved = goalSaved(g); const remaining = goalRemaining(g); const isComplete = remaining<=0.004;
       const pct = g.target>0 ? Math.min(100, saved/g.target*100) : 0;
-      const card = document.createElement('div'); card.className = 'goal-card'+(isComplete?' complete':'');
+      const card = document.createElement('div'); card.className = 'goal-card clickable-row'+(isComplete?' complete':'');
+      card.addEventListener('click', (e)=>{
+        if(e.target.closest('button, .contribution-form, select, input')) return;
+        openGoalDetail(g.id);
+      });
       const metaParts = [];
       if(g.targetDate) metaParts.push(`Target date: ${formatHuman(g.targetDate)}`);
       if(g.note) metaParts.push(escapeHtml(g.note));
@@ -1234,7 +1238,7 @@
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
     const g = goals.find(x=>x.id===goalId); if(!g) return;
     if(!Array.isArray(g.contributions)) g.contributions = [];
-    g.contributions.push({ id:'contrib_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date });
+    g.contributions.push({ id:'contrib_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: new Date().toISOString() });
     await saveGoals();
     refreshAll();
   }
@@ -1275,9 +1279,97 @@
     document.getElementById('add-goal-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   async function deleteGoal(id){
-    if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return;
+    if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return false;
     goals = goals.filter(g=>g.id!==id);
     await saveGoals();
+    refreshAll();
+    return true;
+  }
+
+  let goalDetailCurrentId = null;
+  function openGoalDetail(id){
+    const g = goals.find(x=>x.id===id); if(!g) return;
+    goalDetailCurrentId = id;
+    const saved = goalSaved(g); const remaining = goalRemaining(g); const isComplete = remaining<=0.004;
+    setText('goaldetail-title', g.name);
+    setText('goaldetail-amount', fmt(isComplete ? saved : remaining));
+    setText('goaldetail-subtitle', isComplete ? 'Goal reached' : 'to go');
+    const fields = document.getElementById('goaldetail-fields'); fields.innerHTML='';
+    const rows = [
+      ['Target', fmt(g.target)],
+      ['Saved', fmt(saved)],
+    ];
+    if(g.targetDate) rows.push(['Target Date', formatHuman(g.targetDate)]);
+    rows.push(['Note', g.note ? g.note : '—']);
+    rows.forEach(([label,value])=>{
+      const row = document.createElement('div'); row.className='txdetail-field';
+      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value">${escapeHtml(String(value))}</span>`;
+      fields.appendChild(row);
+    });
+    renderGoalDetailContributions(g);
+    showOverlay('goaldetail-overlay');
+    history.pushState({ goalDetailOpen:true }, '', '');
+  }
+  function closeGoalDetail(){ hideOverlay('goaldetail-overlay'); goalDetailCurrentId=null; }
+  function renderGoalDetailContributions(g){
+    const container = document.getElementById('goaldetail-contributions-list'); container.innerHTML='';
+    const initial = g.initialSaved || 0;
+    const contributions = [...(g.contributions||[])].sort((a,b)=> b.date.localeCompare(a.date));
+    if(contributions.length===0 && initial<=0){ container.innerHTML = '<p class="empty-note">No contributions logged yet.</p>'; return; }
+    if(initial>0){
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name mono-num">${fmt(initial)}</div><div class="reminder-meta">Already saved when goal was created</div></div></div>`;
+      container.appendChild(row);
+    }
+    contributions.forEach(c=>{
+      const timeStr = c.createdAt ? formatTime12h(c.createdAt) : null;
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `
+        <div class="reminder-card-top">
+          <div><div class="reminder-name mono-num">${fmt(c.amount)}</div><div class="reminder-meta">${formatHuman(c.date)} · Logged ${timeStr || 'time not recorded'}</div></div>
+          <div style="display:flex; gap:4px;">
+            <button class="icon-btn-sm edit-contrib-btn" data-contrib-id="${c.id}" aria-label="Edit contribution">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-contrib-btn" data-contrib-id="${c.id}" aria-label="Delete contribution">${icon('trash',14)}</button>
+          </div>
+        </div>
+        <div class="log-payment-form" id="editcontrib-form-${c.id}" style="display:none;">
+          <label>Amount<input type="number" class="ec-amount" min="0.01" step="0.01" value="${c.amount}"></label>
+          <label>Date<input type="date" class="ec-date" value="${c.date}"></label>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button type="button" class="btn-pill btn-black ec-save" data-contrib-id="${c.id}">Save</button>
+            <button type="button" class="btn-pill btn-outline ec-cancel" data-contrib-id="${c.id}">Cancel</button>
+          </div>
+        </div>`;
+      container.appendChild(row);
+    });
+    container.querySelectorAll('.edit-contrib-btn').forEach(btn=> btn.addEventListener('click', ()=>{
+      const f = document.getElementById('editcontrib-form-'+btn.dataset.contribId); if(f) f.style.display = (f.style.display==='none' ? 'block' : 'none');
+    }));
+    container.querySelectorAll('.ec-cancel').forEach(btn=> btn.addEventListener('click', ()=>{
+      const f = document.getElementById('editcontrib-form-'+btn.dataset.contribId); if(f) f.style.display='none';
+    }));
+    container.querySelectorAll('.ec-save').forEach(btn=> btn.addEventListener('click', ()=> saveEditedContribution(goalDetailCurrentId, btn.dataset.contribId)));
+    container.querySelectorAll('.del-contrib-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteContribution(goalDetailCurrentId, btn.dataset.contribId)));
+  }
+  async function saveEditedContribution(goalId, contribId){
+    const g = goals.find(x=>x.id===goalId); if(!g) return;
+    const contrib = (g.contributions||[]).find(c=>c.id===contribId); if(!contrib) return;
+    const form = document.getElementById('editcontrib-form-'+contribId); if(!form) return;
+    const amount = parseFloat(form.querySelector('.ec-amount').value);
+    const date = form.querySelector('.ec-date').value;
+    if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
+    contrib.amount = amount; contrib.date = date;
+    await saveGoals();
+    openGoalDetail(goalId);
+    refreshAll();
+  }
+  async function deleteContribution(goalId, contribId){
+    if(!confirm('Delete this contribution record?')) return;
+    const g = goals.find(x=>x.id===goalId); if(!g) return;
+    const idx = (g.contributions||[]).findIndex(c=>c.id===contribId); if(idx===-1) return;
+    g.contributions.splice(idx,1);
+    await saveGoals();
+    openGoalDetail(goalId);
     refreshAll();
   }
 
@@ -2527,6 +2619,20 @@
       if(deleted && document.getElementById('debtdetail-overlay').classList.contains('open')) history.back();
     });
 
+    document.getElementById('close-goaldetail-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('goaldetail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='goaldetail-overlay') history.back(); });
+    document.getElementById('goaldetail-edit-btn').addEventListener('click', ()=>{
+      if(!goalDetailCurrentId) return;
+      const id = goalDetailCurrentId;
+      history.back();
+      setTimeout(()=> startEditGoal(id), 50);
+    });
+    document.getElementById('goaldetail-delete-btn').addEventListener('click', async ()=>{
+      if(!goalDetailCurrentId) return;
+      const deleted = await deleteGoal(goalDetailCurrentId);
+      if(deleted && document.getElementById('goaldetail-overlay').classList.contains('open')) history.back();
+    });
+
     document.querySelectorAll('#theme-select [data-theme-choice]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const newTheme = btn.getAttribute('data-theme-choice');
@@ -2722,6 +2828,7 @@
       if(!state.txDetailOpen){ closeTransactionDetail(); }
       if(!state.notificationsOpen){ closeNotificationsOverlay(); }
       if(!state.debtDetailOpen){ closeDebtDetail(); }
+      if(!state.goalDetailOpen){ closeGoalDetail(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){
