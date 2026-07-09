@@ -77,6 +77,8 @@
   let trendRange = '7d';
   let ringRange = 'month';
   let activeDebtKind = 'debt'; // 'debt' (I Owe) or 'receivable' (Owed to Me) — which list the Debts & EMIs page currently shows
+  const desktopMql = window.matchMedia('(min-width: 781px)'); // matches the .spine/.bottom-nav breakpoint in styles.css
+  let isDesktop = desktopMql.matches;
   // Cross-tab data safety: if this tab deletes a record, remember its id so a later
   // merge-on-save (which reconciles against whatever another tab may have written)
   // never silently resurrects something this tab intentionally removed.
@@ -1044,9 +1046,10 @@
   function findInAnyDebtList(id){ return debts.find(x=>x.id===id) || receivables.find(x=>x.id===id); }
 
   function renderDebtsList(){
-    const container = document.getElementById('debts-list'); if(!container) return;
-    const isReceivable = activeDebtKind==='receivable';
-    const list = currentDebtList();
+    renderDebtsListInto('debts-list', currentDebtList(), activeDebtKind==='receivable');
+  }
+  function renderDebtsListInto(containerId, list, isReceivable){
+    const container = document.getElementById(containerId); if(!container) return;
     container.innerHTML='';
     if(list.length===0){ container.innerHTML = `<p class="empty-note">No ${isReceivable?'receivables':'debts'} tracked yet. Add one below.</p>`; return; }
     const sorted = [...list].sort((a,b)=>{
@@ -1450,6 +1453,12 @@
     setText('emi-total-preview', `Total: ${fmt(emiAmount * tenure)} over ${tenure || 0} month${tenure===1?'':'s'}`);
   }
   function startEditDebt(id){
+    const isReceivable = receivables.some(x=>x.id===id);
+    if(activeDebtKind !== (isReceivable?'receivable':'debt')){
+      activeDebtKind = isReceivable ? 'receivable' : 'debt';
+      updateDebtKindLabels();
+    }
+    if(isDesktop) switchTab('add');
     const d = currentDebtList().find(x=>x.id===id); if(!d) return;
     editingDebtId = id;
     document.getElementById('add-debt-form').style.display='block';
@@ -1471,19 +1480,34 @@
     document.getElementById('add-debt-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   function resetDebtStartDateDefault(){ const el = document.getElementById('debt-start-date'); if(el) el.value = toLocalDateStr(new Date()); }
+  function openAddDebtForm(kind){
+    if(activeDebtKind !== kind){
+      activeDebtKind = kind;
+      document.querySelectorAll('#debt-kind-toggle .type-btn').forEach(b=> b.classList.toggle('active', b.dataset.debtkind===kind));
+      updateDebtKindLabels();
+      renderDebtsList();
+      renderDebtOverviewInto('debtov', currentDebtList());
+    }
+    editingDebtId = null;
+    document.getElementById('save-debt-btn').textContent = kind==='receivable' ? 'Save Receivable' : 'Save Debt';
+    document.getElementById('add-debt-form').style.display='block';
+    document.getElementById('add-debt-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
+  }
 
   async function confirmLogPayment(debtId){
-    const isReceivable = activeDebtKind==='receivable';
+    const isReceivable = receivables.some(d=>d.id===debtId);
+    const list = isReceivable ? receivables : debts;
+    const saveFn = isReceivable ? saveReceivables : saveDebts;
     const form = document.getElementById('lp-form-'+debtId); if(!form) return;
     const amount = parseFloat(form.querySelector('.lp-amount').value);
     const date = form.querySelector('.lp-date').value;
     const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
-    const debt = currentDebtList().find(d=>d.id===debtId); if(!debt) return;
+    const debt = list.find(d=>d.id===debtId); if(!debt) return;
     const nowIso = new Date().toISOString();
     const txId = 'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: nowIso, txId });
-    await currentDebtSaveFn()();
+    await saveFn();
     const txType = isReceivable ? 'income' : 'expense';
     const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
     const catList = isReceivable ? categories.income : categories.expense;
@@ -2270,6 +2294,43 @@
     renderBackupNag();
     updateBellBadge();
     maybeFireDueNotifications();
+    renderDesktopExtras();
+  }
+
+  // Desktop-only (>=781px, matching the .spine/.bottom-nav breakpoint): mirrors the debt/receivable
+  // overview cards onto Home, and mounts the same Add Debt/Add Receivable form + a compact debts and
+  // receivables list on Add Entry's now-empty right-hand column. Mobile is untouched — see applyDesktopLayout.
+  function renderDesktopExtras(){
+    if(!isDesktop) return;
+    renderDebtOverviewInto('homedebt', debts);
+    renderDebtOverviewInto('homereceivable', receivables);
+    renderDebtsListInto('addentry-debts-list', debts, false);
+    renderDebtsListInto('addentry-receivables-list', receivables, true);
+  }
+
+  function applyDesktopLayout(){
+    isDesktop = desktopMql.matches;
+    const homeExtra = document.getElementById('home-desktop-extra');
+    const addSide = document.getElementById('add-entry-side');
+    const showAddDebtBtn = document.getElementById('show-add-debt-btn');
+    const movedHint = document.getElementById('debt-form-moved-hint');
+    const form = document.getElementById('add-debt-form');
+    if(isDesktop){
+      if(homeExtra) homeExtra.style.display = 'block';
+      if(addSide) addSide.style.display = 'block';
+      if(showAddDebtBtn) showAddDebtBtn.style.display = 'none';
+      if(movedHint) movedHint.style.display = 'block';
+      const slot = document.getElementById('add-debt-form-slot');
+      if(form && slot) slot.appendChild(form);
+    } else {
+      if(homeExtra) homeExtra.style.display = 'none';
+      if(addSide) addSide.style.display = 'none';
+      if(showAddDebtBtn) showAddDebtBtn.style.display = '';
+      if(movedHint) movedHint.style.display = 'none';
+      const anchor = document.getElementById('add-debt-form-home-anchor');
+      if(form && anchor) anchor.parentElement.insertBefore(form, anchor.nextSibling);
+    }
+    renderDesktopExtras();
   }
 
   function applyTheme(theme){
@@ -2741,11 +2802,10 @@
       await fireNotification('Trackr test', 'If you can see this, notifications are working on this device.');
     });
 
-    document.getElementById('show-add-debt-btn').addEventListener('click', ()=>{
-      editingDebtId = null;
-      document.getElementById('save-debt-btn').textContent = activeDebtKind==='receivable' ? 'Save Receivable' : 'Save Debt';
-      document.getElementById('add-debt-form').style.display='block';
-    });
+    document.getElementById('show-add-debt-btn').addEventListener('click', ()=> openAddDebtForm(activeDebtKind));
+    document.getElementById('addentry-add-debt-btn').addEventListener('click', ()=> openAddDebtForm('debt'));
+    document.getElementById('addentry-add-receivable-btn').addEventListener('click', ()=> openAddDebtForm('receivable'));
+    document.getElementById('goto-addentry-link').addEventListener('click', ()=> switchTab('add'));
     document.querySelectorAll('#debt-kind-toggle .type-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         if(activeDebtKind===btn.dataset.debtkind) return;
@@ -2865,6 +2925,8 @@
     syncHideBalancesUI();
     syncAppLockUI();
     updateNotifPermissionStatus();
+    applyDesktopLayout();
+    desktopMql.addEventListener('change', applyDesktopLayout);
     refreshAll();
     renderCategoriesView();
     history.replaceState({ tab:'home', sub:null }, '', '');
