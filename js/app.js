@@ -577,8 +577,12 @@
     rows.forEach(r=>{
       const barColor = r.over ? 'var(--debit)' : (r.pct>=80 ? 'var(--gold)' : 'var(--credit)');
       const color = categoryColor(r.cat);
-      const row = document.createElement('div'); row.className='budget-row';
+      const row = document.createElement('div'); row.className='budget-row clickable-row';
       row.innerHTML = `<div class="budget-row-top"><span class="budget-cat-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(r.cat)}</span><span class="budget-cat-name">${escapeHtml(r.cat)}</span></span><span class="mono-num" style="font-size:12.5px;">${fmt(r.spent)} / ${fmt(r.limit)}</span></div><div class="budget-bar-track"><div class="budget-bar-fill" style="width:${r.pct}%; background:${barColor};"></div></div>`;
+      row.addEventListener('click', ()=>{
+        const catTx = monthExpense.filter(t=>t.category===r.cat);
+        openCategoryDetail(r.cat, `${fmt(r.spent)} of ${fmt(r.limit)} budget this month`, catTx);
+      });
       list.appendChild(row);
     });
   }
