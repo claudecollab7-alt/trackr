@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Trackr — Track. Manage. Grow.</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1B2A4D">
@@ -495,6 +495,10 @@
               <input type="date" id="reminder-due-date">
             </label>
           </div>
+          <label>Start reminding (days before due, optional)
+            <input type="number" id="reminder-remind-before" min="0" max="30" step="1" placeholder="0">
+          </label>
+          <p class="period-hint" style="display:block; margin:-8px 0 0;">Leave at 0 to only be reminded on the due date. Set to e.g. 2 to get a daily nudge starting 2 days before, every day until it's due (only while the app is open).</p>
           <label>Amount (optional)
             <input type="number" id="reminder-amount" min="0" step="0.01" placeholder="0.00">
           </label>
