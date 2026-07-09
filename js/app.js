@@ -48,7 +48,7 @@
   let reminders = [];
   let goals = [];
   let accounts = defaultAccounts();
-  let charts = { weekTrend:null, netWorthTrend:null, categoryTrend:null };
+  let charts = { weekTrend:null };
   let currentReport = null;
   let editingId = null;
   let editingDebtId = null;
@@ -622,70 +622,46 @@
     }
   }
 
-  function last6MonthKeys(){
-    const months=[]; const now = new Date();
-    for(let i=5;i>=0;i--){ months.push(toLocalDateStr(new Date(now.getFullYear(), now.getMonth()-i, 1)).slice(0,7)); }
-    return months;
-  }
-  function chartThemeColors(){
-    const themeNow = document.body.getAttribute('data-theme');
-    const isDark = themeNow==='dark';
-    const isMounty = themeNow==='mounty';
-    return {
-      gridColor: isDark ? '#232C42' : (isMounty ? '#123029' : '#E2E8F0'),
-      tickColor: isDark ? '#8B95AC' : (isMounty ? '#8EB69B' : '#64748B'),
-      lineColor: isMounty ? '#5FD98C' : '#2563EB'
-    };
-  }
-  function renderNetWorthTrendChart(){
-    const canvas = document.getElementById('chart-networth-trend');
-    if(!canvas) return;
-    const months = last6MonthKeys();
-    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
-    const data = months.map(m=>{
-      const monthEnd = monthRangeFromDate(m+'-01').end;
-      const balance = transactions.filter(t=> t.date<=monthEnd).reduce((s,t)=> s + (t.type==='income'?t.amount:-t.amount), 0);
-      const outstandingAsOf = (list)=> list.filter(d=> d.startDate <= monthEnd).reduce((s,d)=>{
-        const paidByThen = (d.payments||[]).filter(p=>p.date<=monthEnd).reduce((ps,p)=>ps+p.amount,0);
-        return s + Math.max(0, d.total - paidByThen);
-      }, 0);
-      return balance - outstandingAsOf(debts) + outstandingAsOf(receivables);
+  function computeUpcomingCashFlow(){
+    const todayStr = toLocalDateStr(new Date());
+    const in30 = toLocalDateStr(new Date(Date.now()+30*86400000));
+    const items = [];
+    reminders.forEach(r=>{
+      const status = reminderStatus(r, 30);
+      if(status) items.push({ label:r.title, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount||0, kind:'Reminder', overdue:status.overdue });
     });
-    if(charts.netWorthTrend) charts.netWorthTrend.destroy();
-    if(window.Chart){
-      const { gridColor, tickColor, lineColor } = chartThemeColors();
-      charts.netWorthTrend = new Chart(canvas.getContext('2d'), {
-        type:'line',
-        data:{ labels, datasets:[{ label:'Net Worth', data, borderColor:lineColor, backgroundColor:lineColor+'22', tension:.3, fill:true, pointRadius:3 }] },
-        options:{ responsive:true, plugins:{ legend:{ display:false } }, scales:{ y:{ grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
+    recurring.forEach(r=>{
+      const status = recurringDueStatus(r, 30);
+      if(status) items.push({ label:r.category, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount, kind:'Recurring', overdue:status.overdue });
+    });
+    function pushEmiInstallments(list, kindLabel){
+      list.filter(d=>d.type==='emi').forEach(d=>{
+        buildEmiSchedule(d).forEach(inst=>{
+          if(!inst.paid && inst.dueDate<=in30){
+            items.push({ label:d.name, dueLabel:formatHuman(inst.dueDate), sortDate:inst.dueDate, amount:inst.amount, kind:kindLabel, overdue:inst.dueDate<todayStr });
+          }
+        });
       });
     }
+    pushEmiInstallments(debts, 'EMI Debt');
+    pushEmiInstallments(receivables, 'EMI Receivable');
+    items.sort((a,b)=> a.sortDate.localeCompare(b.sortDate));
+    return items;
   }
-  function renderCategoryTrendChart(){
-    const canvas = document.getElementById('chart-category-trend');
-    const emptyNote = document.getElementById('category-trend-empty');
-    if(!canvas) return;
-    const months = last6MonthKeys();
-    const labels = months.map(m=>{ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString('en-IN',{month:'short'}); });
-    const expenseInRange = transactions.filter(t=> t.type==='expense' && months.includes(t.date.slice(0,7)));
-    const totals = {}; expenseInRange.forEach(t=> totals[t.category] = (totals[t.category]||0) + t.amount);
-    const topCats = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([c])=>c);
-    if(charts.categoryTrend){ charts.categoryTrend.destroy(); charts.categoryTrend = null; }
-    if(topCats.length===0){ canvas.style.display='none'; emptyNote.style.display='block'; return; }
-    canvas.style.display='block'; emptyNote.style.display='none';
-    if(window.Chart){
-      const { gridColor, tickColor } = chartThemeColors();
-      const datasets = topCats.map(cat=>{
-        const data = months.map(m=> sumByType(transactions.filter(t=>t.category===cat && t.date.startsWith(m)), 'expense'));
-        const color = categoryColor(cat);
-        return { label:cat, data, borderColor:color, backgroundColor:color, tension:.3, pointRadius:2, fill:false };
-      });
-      charts.categoryTrend = new Chart(canvas.getContext('2d'), {
-        type:'line',
-        data:{ labels, datasets },
-        options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ font:{family:'Inter', size:11, weight:600}, color:tickColor } } }, scales:{ y:{ beginAtZero:true, grid:{ color:gridColor }, ticks:{ color:tickColor } }, x:{ grid:{ display:false }, ticks:{ color:tickColor } } } }
-      });
-    }
+  function renderUpcomingCashFlow(){
+    const card = document.getElementById('upcoming-cashflow-card');
+    const list = document.getElementById('upcoming-cashflow-list');
+    if(!card || !list) return;
+    const items = computeUpcomingCashFlow();
+    if(items.length===0){ card.style.display='none'; return; }
+    card.style.display='block';
+    setText('upcoming-cashflow-total', fmt(items.reduce((s,i)=>s+i.amount,0)));
+    list.innerHTML='';
+    items.forEach(i=>{
+      const row = document.createElement('div'); row.className='reminder-card';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(i.label)}</div><div class="reminder-meta">${escapeHtml(i.kind)} · ${i.dueLabel}</div></div><span class="reminder-status ${i.overdue?'overdue':'upcoming'}">${i.overdue?'Overdue':'Upcoming'}</span></div><div class="reminder-meta" style="margin-top:6px; font-weight:700; color:var(--ink);">${fmt(i.amount)}</div>`;
+      list.appendChild(row);
+    });
   }
 
   function populateEntryCategorySelect(type){
@@ -835,7 +811,8 @@
     if(r.type==='expense') checkBudgetCrossing(r.category, today, r.amount);
     refreshAll();
   }
-  function recurringDueStatus(r){
+  function recurringDueStatus(r, maxDiff){
+    maxDiff = maxDiff===undefined ? 3 : maxDiff;
     if(!r.dueDay) return null;
     const today = new Date(); const todayStr = toLocalDateStr(today); const ym = todayStr.slice(0,7);
     if(r.lastDismissedPeriod === ym) return null;
@@ -843,8 +820,8 @@
     const day = Math.min(r.dueDay, lastDayOfMonth);
     const dueDateThisMonth = `${ym}-${String(day).padStart(2,'0')}`;
     const diffDays = Math.round((new Date(dueDateThisMonth+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-    if(diffDays > 3) return null;
-    return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), periodKey: ym };
+    if(diffDays > maxDiff) return null;
+    return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), dueDateISO: dueDateThisMonth, periodKey: ym };
   }
   function renderRecurringDueCard(){
     const card = document.getElementById('recurring-due-card'); const list = document.getElementById('recurring-due-list');
@@ -1408,13 +1385,14 @@
     if(n%10===3 && n!==13) return 'rd';
     return 'th';
   }
-  function reminderStatus(r){
+  function reminderStatus(r, maxDiff){
+    maxDiff = maxDiff===undefined ? 3 : maxDiff;
     const today = new Date(); const todayStr = toLocalDateStr(today);
     if(r.repeat === 'once'){
       if(r.lastDismissedPeriod === 'done' || !r.dueDate) return null;
       const diffDays = Math.round((new Date(r.dueDate+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-      if(diffDays > 3) return null;
-      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(r.dueDate), periodKey: 'done' };
+      if(diffDays > maxDiff) return null;
+      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(r.dueDate), dueDateISO: r.dueDate, periodKey: 'done' };
     } else {
       const ym = todayStr.slice(0,7);
       if(r.lastDismissedPeriod === ym) return null;
@@ -1422,8 +1400,8 @@
       const day = Math.min(r.dueDay||1, lastDayOfMonth);
       const dueDateThisMonth = `${ym}-${String(day).padStart(2,'0')}`;
       const diffDays = Math.round((new Date(dueDateThisMonth+'T00:00:00') - new Date(todayStr+'T00:00:00'))/86400000);
-      if(diffDays > 3) return null;
-      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), periodKey: ym };
+      if(diffDays > maxDiff) return null;
+      return { overdue: diffDays < 0, diffDays, dueLabel: formatHuman(dueDateThisMonth), dueDateISO: dueDateThisMonth, periodKey: ym };
     }
   }
   function reminderStatusLabel(status){
@@ -2028,9 +2006,8 @@
     renderGoalsList();
     renderRemindersUpcoming();
     renderRecurringDueCard();
+    renderUpcomingCashFlow();
     renderTrendChart();
-    renderNetWorthTrendChart();
-    renderCategoryTrendChart();
     renderReports();
     renderHistory();
     renderBudgetSetList();
@@ -2434,8 +2411,6 @@
         applyTheme(newTheme);
         renderAllRings();
         renderTrendChart();
-        renderNetWorthTrendChart();
-        renderCategoryTrendChart();
       });
     });
 

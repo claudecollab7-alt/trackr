@@ -170,15 +170,13 @@
         <canvas id="chart-week-trend"></canvas>
       </div>
 
-      <div class="card" style="margin-top:16px;">
-        <div class="card-header-row"><span class="card-label">Net Worth Trend — last 6 months</span></div>
-        <canvas id="chart-networth-trend"></canvas>
-      </div>
-
-      <div class="card" id="category-trend-card" style="margin-top:16px;">
-        <div class="card-header-row"><span class="card-label">Top Category Trend — last 6 months</span></div>
-        <p class="empty-note" id="category-trend-empty" style="display:none;">Not enough data yet — log a few expenses across some months to see this trend.</p>
-        <canvas id="chart-category-trend"></canvas>
+      <div class="card" id="upcoming-cashflow-card" style="display:none; margin-top:16px;">
+        <div class="card-header-row">
+          <span class="card-label">Upcoming Cash Flow — Next 30 Days</span>
+          <span class="mono-num" id="upcoming-cashflow-total" style="font-weight:800; font-size:14px;">₹0.00</span>
+        </div>
+        <p class="period-hint" style="display:block; margin-bottom:14px;">Reminders, recurring items due, and unpaid EMI installments coming up or already overdue.</p>
+        <div id="upcoming-cashflow-list"></div>
       </div>
     </section>
 
