@@ -250,6 +250,7 @@
       }
       await window.storage.set('receivables', JSON.stringify(receivables));
     } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
   }
 
   function renderTabUI(tabName){
@@ -1623,7 +1624,7 @@
     const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
     const catList = isReceivable ? categories.income : categories.expense;
     if(!catList.includes(txCategory)) catList.push(txCategory);
-    transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso });
+    transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso, debtId: debtId });
     await saveTransactions(); await saveCategories();
     refreshAll();
     return true;
@@ -1650,7 +1651,7 @@
     const idx = list.findIndex(d=>d.id===id);
     if(idx>-1) list.splice(idx,1);
     await saveFn();
-    if(currentUser && !isReceivable) window.trackrSync.syncDeleteDebt(id);
+    if(currentUser) window.trackrSync.syncDeleteDebt(id);
     refreshAll();
     return true;
   }
@@ -3332,10 +3333,11 @@
     syncAccountStatusUI();
     if(!currentUser) return;
     try{
-      await window.trackrSync.migrateLocalDataToCloudIfNeeded(currentUser.id, { transactions, debts, goals, budgets });
+      await window.trackrSync.migrateLocalDataToCloudIfNeeded(currentUser.id, { transactions, debts, receivables, goals, budgets });
       const cloud = await window.trackrSync.pullCloudData(currentUser.id);
       if(cloud.transactions!==null){ transactions = cloud.transactions; await saveTransactions(); }
       if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveDebts(); }
+      if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveReceivables(); }
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); await saveGoals(); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; await saveBudgets(); }
       window.trackrSync.retryPendingWrites();

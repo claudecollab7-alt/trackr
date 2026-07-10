@@ -1,38 +1,82 @@
   /* ---------- Supabase-backed cloud sync ----------
-     Column mapping assumption (I can't query your project's schema from this
-     environment, so this mirrors the app's own field names as closely as
-     possible — if your first test transaction doesn't show up correctly in
-     the Table Editor, this mapping is the first place to check):
-       transactions: id, user_id, type, category, account, amount, note, date, created_at
-       debts:        id, user_id, name, type, total, emi_amount, tenure, start_date, note, payments (jsonb)
-       goals:        id, user_id, name, target, initial_saved, target_date, note, contributions (jsonb)
-       budgets:      user_id, category, limit_amount  — needs a unique constraint on (user_id, category)
-     Only these four tables exist server-side, so receivables/reminders/recurring/
-     accounts/categories/settings stay local-only for now. */
+     Verified column mapping (per the real schema):
+       transactions: id, user_id, type(credit/debit), date, category, account, amount, particulars, debt_id, created_at
+       debts:        id, user_id, name, direction(i_owe/owed_to_me), debt_type(emi/one_time), total_amount, monthly_amount, installments, start_date, created_at
+       goals:        id, user_id, name, target_amount, saved_amount, deadline, created_at
+       budgets:      id, user_id, category, monthly_limit, created_at
+     Debts and receivables share the "debts" table, split by direction.
+     There's no payments/contributions storage in this schema — see the notes
+     on fromDebtRow/toGoalRow below for how those are handled.
+     Only these four tables exist server-side, so reminders/recurring/accounts/
+     categories/settings stay local-only. */
   const supabaseClient = window.supabase.createClient(
     'https://jjnxtmfntixysqvoighh.supabase.co',
     'sb_publishable_5GivZn5OcSCKBpO_75INFQ_2yDEl3jr'
   );
 
-  const SYNC_TABLES = ['transactions', 'debts', 'goals', 'budgets'];
-
   function toTransactionRow(t, userId){
-    return { id:t.id, user_id:userId, type:t.type, category:t.category, account:t.account, amount:t.amount, note:t.note||'', date:t.date, created_at:t.createdAt||null };
-  }
-  function toDebtRow(d, userId){
-    return { id:d.id, user_id:userId, name:d.name, type:d.type, total:d.total, emi_amount:d.emiAmount||0, tenure:d.tenure||0, start_date:d.startDate, note:d.note||'', payments:d.payments||[] };
-  }
-  function toGoalRow(g, userId){
-    return { id:g.id, user_id:userId, name:g.name, target:g.target, initial_saved:g.initialSaved||0, target_date:g.targetDate||null, note:g.note||'', contributions:g.contributions||[] };
+    return {
+      id: t.id, user_id: userId,
+      type: t.type==='income' ? 'credit' : 'debit',
+      date: t.date, category: t.category, account: t.account, amount: t.amount,
+      particulars: t.note || '',
+      debt_id: t.debtId || null,
+      created_at: t.createdAt || null
+    };
   }
   function fromTransactionRow(r){
-    return { id:r.id, type:r.type, category:r.category, account:r.account, amount:r.amount, note:r.note||'', date:r.date, createdAt:r.created_at||new Date().toISOString() };
+    return {
+      id: r.id, type: r.type==='credit' ? 'income' : 'expense',
+      category: r.category, account: r.account, amount: r.amount,
+      note: r.particulars || '', date: r.date,
+      createdAt: r.created_at || new Date().toISOString(),
+      debtId: r.debt_id || null
+    };
   }
-  function fromDebtRow(r){
-    return { id:r.id, name:r.name, type:r.type, total:r.total, emiAmount:r.emi_amount||0, tenure:r.tenure||0, startDate:r.start_date, note:r.note||'', payments:Array.isArray(r.payments)?r.payments:[] };
+  function toDebtRow(d, userId, isReceivable){
+    // No payments column here — a debt/receivable's payment history lives in
+    // transactions.debt_id, not on this row. See fromDebtRow.
+    return {
+      id: d.id, user_id: userId, name: d.name,
+      direction: isReceivable ? 'owed_to_me' : 'i_owe',
+      debt_type: d.type==='emi' ? 'emi' : 'one_time',
+      total_amount: d.total, monthly_amount: d.emiAmount || 0, installments: d.tenure || 0,
+      start_date: d.startDate
+    };
   }
+  // linkedPayments = payments array already reconstructed (by the caller) from
+  // whichever pulled transactions have debt_id === r.id.
+  function fromDebtRow(r, linkedPayments){
+    return {
+      id: r.id, name: r.name,
+      type: r.debt_type==='emi' ? 'emi' : 'lump',
+      total: r.total_amount, emiAmount: r.monthly_amount || 0, tenure: r.installments || 0,
+      startDate: r.start_date, note: '',
+      payments: linkedPayments || []
+    };
+  }
+  function toGoalRow(g, userId){
+    // No contributions column — only a single running total is stored, so we
+    // send the computed current total (initialSaved + all contributions),
+    // not just initialSaved. goalSaved() comes from money-math.js.
+    return {
+      id: g.id, user_id: userId, name: g.name,
+      target_amount: g.target, saved_amount: goalSaved(g),
+      deadline: g.targetDate || null
+    };
+  }
+  // Contribution-by-contribution history can't be recovered from a single
+  // saved_amount column, so a pulled goal starts a fresh local baseline:
+  // initialSaved = the cloud total, contributions = []. The running total is
+  // still correct going forward; only the itemized history doesn't carry
+  // across devices. (Flagged to the user — would need a goal_id column on
+  // transactions, mirroring debt_id, to do better.)
   function fromGoalRow(r){
-    return { id:r.id, name:r.name, target:r.target, initialSaved:r.initial_saved||0, targetDate:r.target_date||null, note:r.note||'', contributions:Array.isArray(r.contributions)?r.contributions:[] };
+    return {
+      id: r.id, name: r.name, target: r.target_amount,
+      initialSaved: r.saved_amount || 0, targetDate: r.deadline || null,
+      note: '', contributions: []
+    };
   }
 
   /* ---------- Offline pending-write queue ----------
@@ -98,16 +142,20 @@
   /* ---------- Upsert / delete entry points, one per table ---------- */
   function syncUpsertTransactions(userId, rows){ return syncOrQueue({ kind:'upsert', table:'transactions', rows: rows.map(t=>toTransactionRow(t,userId)) }); }
   function syncDeleteTransaction(id){ return syncOrQueue({ kind:'delete', table:'transactions', match:{ id } }); }
-  function syncUpsertDebts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'debts', rows: rows.map(d=>toDebtRow(d,userId)) }); }
+  function syncUpsertDebts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'debts', rows: rows.map(d=>toDebtRow(d,userId,false)) }); }
+  function syncUpsertReceivables(userId, rows){ return syncOrQueue({ kind:'upsert', table:'debts', rows: rows.map(d=>toDebtRow(d,userId,true)) }); }
   function syncDeleteDebt(id){ return syncOrQueue({ kind:'delete', table:'debts', match:{ id } }); }
   function syncUpsertGoals(userId, rows){ return syncOrQueue({ kind:'upsert', table:'goals', rows: rows.map(g=>toGoalRow(g,userId)) }); }
   function syncDeleteGoal(id){ return syncOrQueue({ kind:'delete', table:'goals', match:{ id } }); }
   async function syncBudgets(userId, budgetsObj){
     // Budgets have no local id/delete-tracking of their own (it's a plain
     // {category: limit} map) — reconcile against whatever's on the server
-    // instead: upsert the current categories, delete any server-side category
-    // that's no longer present locally.
-    const rows = Object.keys(budgetsObj).map(cat=> ({ user_id:userId, category:cat, limit_amount:budgetsObj[cat] }));
+    // instead: blind-upsert the current categories (relies on a DB-level
+    // unique constraint on (user_id, category) to update in place rather
+    // than insert a duplicate row — see the note in the chat reply), then
+    // separately fetch what's on the server and delete any category that's
+    // no longer present locally.
+    const rows = Object.keys(budgetsObj).map(cat=> ({ user_id:userId, category:cat, monthly_limit:budgetsObj[cat] }));
     if(rows.length>0) await syncOrQueue({ kind:'upsert', table:'budgets', rows });
     if(!navigator.onLine) return;
     try{
@@ -128,17 +176,30 @@
     return data || [];
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, goals:null, budgets:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null };
     try{
       const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
         pullTable('transactions', userId), pullTable('debts', userId),
         pullTable('goals', userId), pullTable('budgets', userId)
       ]);
-      result.transactions = txRows.map(fromTransactionRow);
-      result.debts = debtRows.map(fromDebtRow);
+      const transactions = txRows.map(fromTransactionRow);
+      const paymentsByDebtId = {};
+      transactions.forEach(t=>{
+        if(t.debtId){
+          (paymentsByDebtId[t.debtId] = paymentsByDebtId[t.debtId] || []).push({ id:t.id, amount:t.amount, date:t.date, createdAt:t.createdAt, txId:t.id });
+        }
+      });
+      const debts = [], receivables = [];
+      debtRows.forEach(r=>{
+        const obj = fromDebtRow(r, paymentsByDebtId[r.id]);
+        if(r.direction==='owed_to_me') receivables.push(obj); else debts.push(obj);
+      });
+      result.transactions = transactions;
+      result.debts = debts;
+      result.receivables = receivables;
       result.goals = goalRows.map(fromGoalRow);
       const budgetsObj = {};
-      budgetRows.forEach(r=>{ budgetsObj[r.category] = r.limit_amount; });
+      budgetRows.forEach(r=>{ budgetsObj[r.category] = r.monthly_limit; });
       result.budgets = budgetsObj;
     }catch(e){ console.error('Cloud fetch failed, staying on local cache:', e); }
     return result;
@@ -152,9 +213,10 @@
     }catch(e){}
     try{
       if(localData.transactions.length) await runOp({ kind:'upsert', table:'transactions', rows: localData.transactions.map(t=>toTransactionRow(t,userId)) });
-      if(localData.debts.length) await runOp({ kind:'upsert', table:'debts', rows: localData.debts.map(d=>toDebtRow(d,userId)) });
+      if(localData.debts.length) await runOp({ kind:'upsert', table:'debts', rows: localData.debts.map(d=>toDebtRow(d,userId,false)) });
+      if(localData.receivables && localData.receivables.length) await runOp({ kind:'upsert', table:'debts', rows: localData.receivables.map(d=>toDebtRow(d,userId,true)) });
       if(localData.goals.length) await runOp({ kind:'upsert', table:'goals', rows: localData.goals.map(g=>toGoalRow(g,userId)) });
-      const budgetRows = Object.keys(localData.budgets).map(cat=> ({ user_id:userId, category:cat, limit_amount:localData.budgets[cat] }));
+      const budgetRows = Object.keys(localData.budgets).map(cat=> ({ user_id:userId, category:cat, monthly_limit:localData.budgets[cat] }));
       if(budgetRows.length) await runOp({ kind:'upsert', table:'budgets', rows: budgetRows });
       await window.storage.set('migrated_to_cloud', 'true');
     }catch(e){
@@ -165,7 +227,7 @@
   window.trackrSync = {
     client: supabaseClient,
     syncUpsertTransactions, syncDeleteTransaction,
-    syncUpsertDebts, syncDeleteDebt,
+    syncUpsertDebts, syncUpsertReceivables, syncDeleteDebt,
     syncUpsertGoals, syncDeleteGoal,
     syncBudgets,
     pullCloudData,
