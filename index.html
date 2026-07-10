@@ -706,6 +706,14 @@
             <button type="button" data-theme-choice="mounty">Mounty</button>
           </div>
         </div>
+        <div class="card settings-row" style="margin-top:14px;">
+          <div><label style="display:block; margin-bottom:2px;">Show Net Worth</label><span class="period-hint">Show the "Net worth (after debt)" stat on Home</span></div>
+          <button class="theme-toggle" id="show-networth-toggle" role="switch" aria-checked="true" aria-label="Toggle showing net worth after debt"><span class="theme-toggle-thumb"></span></button>
+        </div>
+        <div class="card settings-row" style="margin-top:14px;">
+          <div><label style="display:block; margin-bottom:2px;">Sound Effects</label><span class="period-hint">Play a short sound when you log a credit or debit, and for a few other moments</span></div>
+          <button class="theme-toggle" id="sfx-toggle" role="switch" aria-checked="true" aria-label="Toggle sound effects"><span class="theme-toggle-thumb"></span></button>
+        </div>
         <div class="card settings-row" style="margin-top:14px; flex-direction:column; align-items:stretch;">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:14px;">
             <div><label style="display:block; margin-bottom:2px;">Hide Balances</label><span class="period-hint">Mask Net Balance, Net Worth and credited amount until you tap to reveal</span></div>
@@ -740,6 +748,7 @@
               <option value="30">30 min</option>
             </select>
           </div>
+          <button class="btn-pill btn-outline" id="change-pin-btn" style="display:none; margin-top:14px;"><span data-icon="lock" data-icon-size="14"></span> Change PIN</button>
         </div>
         <div class="card settings-row" style="margin-top:14px;">
           <div class="settings-actions">
@@ -767,9 +776,18 @@
   <h2 id="pinlock-title" style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Enter PIN</h2>
   <p id="pinlock-subtitle" style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your 4-digit PIN to unlock Trackr.</p>
   <input type="password" id="pinlock-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" style="width:150px; text-align:center; letter-spacing:14px; font-size:22px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
+  <input type="text" id="pinlock-recovery-input" autocapitalize="characters" autocomplete="off" placeholder="XXXX-XXXX-XXXX" style="display:none; width:220px; text-align:center; letter-spacing:2px; font-size:17px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); text-transform:uppercase;">
   <p id="pinlock-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0;">Incorrect PIN. Try again.</p>
+  <p id="pinlock-attempts" style="display:none; color:var(--gold); font-size:12px; font-weight:700; margin:0;"></p>
   <button class="btn-pill btn-black" id="pinlock-submit" style="width:150px; justify-content:center;">Continue</button>
+  <button class="link-btn" id="pinlock-forgot-link" style="display:none;">Forgotten your PIN?</button>
   <button class="link-btn" id="pinlock-cancel-setup" style="display:none;">Cancel</button>
+
+  <div id="pinlock-recovery-display" style="display:none; flex-direction:column; align-items:center; gap:14px;">
+    <p style="margin:0; color:var(--debit); font-size:13px; font-weight:700; max-width:280px;">Save this recovery code somewhere safe — you won't see it again. If you forget your PIN, this is the only way back in.</p>
+    <div id="pinlock-recovery-code" class="mono-num" style="font-size:20px; font-weight:800; letter-spacing:1px; background:var(--card); border:1.5px dashed var(--line); border-radius:12px; padding:14px 18px; color:var(--ink);">XXXX-XXXX-XXXX</div>
+    <button class="btn-pill btn-black" id="pinlock-recovery-continue-btn" style="width:220px; justify-content:center;">I've saved it — Continue</button>
+  </div>
 </div>
 
 <div class="search-overlay" id="search-overlay" role="dialog" aria-modal="true" aria-label="Search">

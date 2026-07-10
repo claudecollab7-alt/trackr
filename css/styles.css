@@ -441,6 +441,23 @@
   .schedule-status.upcoming{ background:var(--bg); color:var(--ink-soft); }
   .schedule-meta{ font-size:11px; color:var(--ink-soft); font-weight:600; margin-top:6px; padding-left:36px; }
 
+  /* Desktop-only: the mobile single-column list gets a narrow, heavily-visible native
+     scrollbar once there are more than a handful of installments. On wide screens there's
+     room to lay rows out two-up (fewer inner scrolls needed) and to give any scrolling
+     that remains a slim, custom-styled scrollbar instead of the stock OS one. Mobile is
+     untouched — everything here lives behind the same 781px breakpoint as the rest of
+     the desktop layout work. */
+  @media (min-width:781px){
+    #schedule-overlay .search-overlay-inner{ max-width:760px; }
+    #schedule-list{ display:grid; grid-template-columns:1fr 1fr; gap:2px 24px; align-content:start; }
+    #schedule-overlay .schedule-row{ border-bottom:none; background:var(--bg); border-radius:12px; padding:11px 14px; margin-bottom:8px; }
+    #schedule-overlay .search-overlay-body{ scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+    #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:8px; }
+    #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
+    #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
+    #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
+  }
+
   /* ---------- Recurring quick-add ---------- */
   .recurring-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .recurring-chip{ display:flex; align-items:center; gap:7px; background:var(--bg); border:1.5px solid var(--line); border-radius:999px; padding:8px 10px 8px 6px; font-size:12.5px; font-weight:600; color:var(--ink); }
@@ -451,8 +468,9 @@
   .save-recurring-row input[type="checkbox"]{ width:16px; height:16px; accent-color:var(--binder); }
 
   /* ---------- Net worth ---------- */
-  .networth-row{ display:flex; justify-content:space-between; align-items:center; padding-top:12px; margin-top:4px; border-top:1px solid var(--line); }
-  .networth-row .card-label{ font-size:11px; }
+  .networth-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding-top:12px; margin-top:4px; border-top:1px solid var(--line); }
+  .networth-row .card-label{ font-size:11px; line-height:1.4; padding-top:2px; }
+  .networth-row .mono-num{ line-height:1.4; flex-shrink:0; }
 
   /* ---------- Reminders ---------- */
   .reminder-card{ background:var(--bg); border-radius:16px; padding:14px 16px; margin-bottom:12px; }

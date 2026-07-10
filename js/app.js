@@ -483,11 +483,33 @@
     stamp.textContent = type==='income' ? 'CREDITED ✓' : 'DEBITED ✓';
     overlay.classList.add('show');
     setTimeout(()=> overlay.classList.remove('show'), 1100);
+    playSfx(type==='income' ? 'credit' : 'debit');
+  }
+
+  /* ---------- Sound effects ---------- */
+  const SFX_FILES = { credit: 'sfx/sfx-credit-chime.mp3', debit: 'sfx/sfx-debit-tap.mp3' };
+  const sfxCache = {};
+  function playSfx(name){
+    if(settings.sfxEnabled===false) return;
+    const src = SFX_FILES[name]; if(!src) return;
+    try{
+      let audio = sfxCache[name];
+      if(!audio){ audio = new Audio(src); audio.volume = 0.55; sfxCache[name] = audio; }
+      audio.currentTime = 0;
+      audio.play().catch(()=>{}); // browsers may block autoplay before any user gesture — safe to ignore
+    }catch(e){}
+  }
+  function syncSfxToggleUI(){
+    const toggle = document.getElementById('sfx-toggle');
+    if(!toggle) return;
+    const on = settings.sfxEnabled!==false;
+    toggle.classList.toggle('on', on);
+    toggle.setAttribute('aria-checked', on);
   }
 
   function renderHomeBalance(){
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
-    const masked = settings.hideBalances && !balancesRevealed;
+    const masked = !!(settings.hideBalances && !balancesRevealed);
     setText('home-balance', masked ? maskAmount(fmt(netBalance)) : fmt(netBalance));
     document.getElementById('home-balance').classList.toggle('negative', netBalance<0);
     document.getElementById('home-balance').classList.toggle('masked-amount', masked);
@@ -507,6 +529,7 @@
   }
   function renderNetWorth(){
     const row = document.getElementById('networth-row'); if(!row) return;
+    if(settings.showNetWorth===false){ row.style.display='none'; return; }
     const totalDebt = debts.reduce((s,d)=> s + debtRemaining(d), 0);
     const totalReceivable = receivables.reduce((s,d)=> s + debtRemaining(d), 0);
     if(totalDebt <= 0.004 && totalReceivable <= 0.004){ row.style.display='none'; return; }
@@ -514,7 +537,7 @@
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
     const netWorth = netBalance - totalDebt + totalReceivable;
     const el = document.getElementById('networth-amount');
-    const masked = settings.hideBalances && !balancesRevealed;
+    const masked = !!(settings.hideBalances && !balancesRevealed);
     setText('networth-amount', masked ? maskAmount(fmt(netWorth)) : fmt(netWorth));
     el.classList.toggle('negative', netWorth<0);
     el.classList.toggle('masked-amount', masked);
@@ -1271,8 +1294,10 @@
     const date = form.querySelector('.contrib-date').value;
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
     const g = goals.find(x=>x.id===goalId); if(!g) return;
+    const wasComplete = goalRemaining(g) <= 0.004;
     if(!Array.isArray(g.contributions)) g.contributions = [];
     g.contributions.push({ id:'contrib_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: new Date().toISOString() });
+    if(!wasComplete && goalRemaining(g) <= 0.004) playSfx('credit');
     await saveGoals();
     refreshAll();
   }
@@ -1504,6 +1529,7 @@
     const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
     if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
     const debt = list.find(d=>d.id===debtId); if(!debt) return;
+    const wasPaidOff = debtRemaining(debt) <= 0.004;
     const nowIso = new Date().toISOString();
     const txId = 'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: nowIso, txId });
@@ -1514,6 +1540,10 @@
     if(!catList.includes(txCategory)) catList.push(txCategory);
     transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso });
     await saveTransactions(); await saveCategories();
+    // A fully-paid debt/receivable is a bigger moment than a routine payment — play the
+    // completion chime instead of stacking it with the routine credit/debit sound.
+    if(!wasPaidOff && debtRemaining(debt) <= 0.004) playSfx('credit');
+    else playSfx(txType==='income' ? 'credit' : 'debit');
     refreshAll();
   }
 
@@ -1905,7 +1935,7 @@
         populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
         applyTheme(settings.theme);
         balancesRevealed = false; isAppLocked = false;
-        syncHideBalancesUI(); syncAppLockUI();
+        syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
         resetHideBalancesTimer(); resetAppLockTimer();
         refreshAll();
         renderCategoriesView();
@@ -2374,6 +2404,13 @@
       }, mins*60000);
     }
   }
+  function syncNetWorthToggleUI(){
+    const toggle = document.getElementById('show-networth-toggle');
+    if(!toggle) return;
+    const on = settings.showNetWorth!==false;
+    toggle.classList.toggle('on', on);
+    toggle.setAttribute('aria-checked', on);
+  }
   function syncHideBalancesUI(){
     const toggle = document.getElementById('hide-balances-toggle');
     const row = document.getElementById('hide-balances-timeout-row');
@@ -2391,10 +2428,87 @@
   let appLockTimer = null;
   let pinMode = 'unlock';
   let pendingNewPin = null;
+  // Tracks *why* we're in setup-new/setup-confirm, so Cancel and the final success step
+  // know whether we're enabling app lock for the first time, changing an existing PIN
+  // (leave everything else alone on cancel), or forcing a reset after a recovery code
+  // was accepted (fall back to disabling app lock if abandoned mid-way).
+  let pinFlowContext = 'toggle-enable';
+  let pinLockoutInterval = null;
+  const PIN_LOCKOUT_SCHEDULE_SEC = [30, 120, 300]; // 30s, 2min, then 5min for every attempt after that
   function hashPin(pin){
     let hash = 0;
     for(let i=0;i<pin.length;i++){ hash = (hash*31 + pin.charCodeAt(i)) >>> 0; }
     return hash.toString(16);
+  }
+  function generateRecoveryCode(){
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
+    let code = '';
+    for(let g=0; g<3; g++){
+      if(g>0) code += '-';
+      for(let i=0;i<4;i++) code += chars[Math.floor(Math.random()*chars.length)];
+    }
+    return code;
+  }
+  // Dashes are just for readability — accept the code with or without them, any case.
+  function canonicalizeRecoveryCode(str){ return String(str).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+  // Recovery code is the only reset path today since there's no account/server. Once Supabase
+  // login exists, a second path ("reset via account email") can be layered on top of this.
+  function isPinLockedOut(){
+    return !!(settings.pinLockoutUntil && new Date(settings.pinLockoutUntil).getTime() > Date.now());
+  }
+  async function registerFailedPinAttempt(){
+    settings.failedPinAttempts = (settings.failedPinAttempts||0) + 1;
+    if(settings.failedPinAttempts >= 5){
+      const idx = Math.min(settings.failedPinAttempts - 5, PIN_LOCKOUT_SCHEDULE_SEC.length - 1);
+      settings.pinLockoutUntil = new Date(Date.now() + PIN_LOCKOUT_SCHEDULE_SEC[idx]*1000).toISOString();
+    }
+    await saveSettings();
+    updatePinAttemptsUI();
+  }
+  async function resetPinAttempts(){
+    settings.failedPinAttempts = 0;
+    settings.pinLockoutUntil = null;
+    await saveSettings();
+  }
+  function updatePinAttemptsUI(){
+    const attemptsEl = document.getElementById('pinlock-attempts');
+    const forgotLink = document.getElementById('pinlock-forgot-link');
+    const input = document.getElementById('pinlock-input');
+    const submitBtn = document.getElementById('pinlock-submit');
+    if(pinLockoutInterval){ clearInterval(pinLockoutInterval); pinLockoutInterval = null; }
+    if(pinMode!=='unlock'){
+      attemptsEl.style.display = 'none';
+      forgotLink.style.display = 'none';
+      return;
+    }
+    const attempts = settings.failedPinAttempts || 0;
+    forgotLink.style.display = attempts>=3 ? 'inline' : 'none';
+    if(isPinLockedOut()){
+      input.disabled = true; submitBtn.disabled = true;
+      const tick = ()=>{
+        const remaining = Math.max(0, Math.ceil((new Date(settings.pinLockoutUntil).getTime() - Date.now())/1000));
+        if(remaining<=0){
+          clearInterval(pinLockoutInterval); pinLockoutInterval = null;
+          input.disabled = false; submitBtn.disabled = false;
+          attemptsEl.style.display = 'none';
+          input.value=''; input.focus();
+        } else {
+          attemptsEl.textContent = `Too many attempts. Try again in ${remaining}s.`;
+          attemptsEl.style.display = 'block';
+        }
+      };
+      tick();
+      pinLockoutInterval = setInterval(tick, 1000);
+    } else {
+      input.disabled = false; submitBtn.disabled = false;
+      if(attempts>0 && attempts<5){
+        const remaining = 5 - attempts;
+        attemptsEl.textContent = `${remaining} attempt${remaining===1?'':'s'} remaining.`;
+        attemptsEl.style.display = 'block';
+      } else {
+        attemptsEl.style.display = 'none';
+      }
+    }
   }
   function showPinOverlay(mode){
     pinMode = mode;
@@ -2403,44 +2517,110 @@
     const subtitle = document.getElementById('pinlock-subtitle');
     const cancelBtn = document.getElementById('pinlock-cancel-setup');
     const submitBtn = document.getElementById('pinlock-submit');
+    const pinInput = document.getElementById('pinlock-input');
+    const recoveryInput = document.getElementById('pinlock-recovery-input');
+
     document.getElementById('pinlock-error').style.display = 'none';
-    document.getElementById('pinlock-input').value = '';
-    if(mode==='unlock'){
-      title.textContent = 'Enter PIN';
-      subtitle.textContent = 'Enter your 4-digit PIN to unlock Trackr.';
-      cancelBtn.style.display = 'none';
-      submitBtn.textContent = 'Unlock';
-    } else if(mode==='setup-new'){
-      title.textContent = 'Set a PIN';
-      subtitle.textContent = 'Choose a 4-digit PIN to lock Trackr. This is a local deterrent, not real security — there’s no server, so the PIN can’t be recovered, and it isn’t protection against someone with access to this device’s storage.';
+    document.getElementById('pinlock-attempts').style.display = 'none';
+    document.getElementById('pinlock-recovery-display').style.display = 'none';
+    pinInput.value = ''; recoveryInput.value = '';
+    pinInput.disabled = false; submitBtn.disabled = false;
+    submitBtn.style.display = 'inline-flex';
+
+    if(mode==='recover'){
+      pinInput.style.display = 'none';
+      recoveryInput.style.display = 'block';
+      title.textContent = 'Enter Recovery Code';
+      subtitle.textContent = 'Enter the recovery code you saved when you set up your PIN.';
+      cancelBtn.textContent = 'Back';
       cancelBtn.style.display = 'inline-flex';
       submitBtn.textContent = 'Continue';
-    } else if(mode==='setup-confirm'){
-      title.textContent = 'Confirm PIN';
-      subtitle.textContent = 'Enter the same PIN again to confirm.';
-      cancelBtn.style.display = 'inline-flex';
-      submitBtn.textContent = 'Confirm';
+    } else {
+      pinInput.style.display = 'block';
+      recoveryInput.style.display = 'none';
+      cancelBtn.textContent = 'Cancel';
+      if(mode==='unlock'){
+        title.textContent = 'Enter PIN';
+        subtitle.textContent = 'Enter your 4-digit PIN to unlock Trackr.';
+        cancelBtn.style.display = 'none';
+        submitBtn.textContent = 'Unlock';
+      } else if(mode==='setup-new'){
+        title.textContent = 'Set a PIN';
+        subtitle.textContent = 'Choose a 4-digit PIN to lock Trackr. This is a local deterrent, not real security — there’s no server, so the PIN can’t be recovered by us, and it isn’t protection against someone with access to this device’s storage.';
+        cancelBtn.style.display = 'inline-flex';
+        submitBtn.textContent = 'Continue';
+      } else if(mode==='setup-confirm'){
+        title.textContent = 'Confirm PIN';
+        subtitle.textContent = 'Enter the same PIN again to confirm.';
+        cancelBtn.style.display = 'inline-flex';
+        submitBtn.textContent = 'Confirm';
+      } else if(mode==='change-verify'){
+        title.textContent = 'Change PIN';
+        subtitle.textContent = 'Enter your current PIN to continue.';
+        cancelBtn.style.display = 'inline-flex';
+        submitBtn.textContent = 'Continue';
+      }
     }
     overlay.style.display = 'flex';
-    setTimeout(()=>{ const i = document.getElementById('pinlock-input'); if(i) i.focus(); }, 60);
+    updatePinAttemptsUI();
+    setTimeout(()=>{ const i = mode==='recover' ? recoveryInput : pinInput; if(i) i.focus(); }, 60);
   }
-  function hidePinOverlay(){ document.getElementById('pinlock-overlay').style.display = 'none'; }
+  function hidePinOverlay(){
+    document.getElementById('pinlock-overlay').style.display = 'none';
+    if(pinLockoutInterval){ clearInterval(pinLockoutInterval); pinLockoutInterval = null; }
+  }
   function showPinError(msg){
     const err = document.getElementById('pinlock-error');
     err.textContent = msg; err.style.display = 'block';
-    document.getElementById('pinlock-input').value = '';
-    document.getElementById('pinlock-input').focus();
+    const input = pinMode==='recover' ? document.getElementById('pinlock-recovery-input') : document.getElementById('pinlock-input');
+    input.value = ''; input.focus();
+  }
+  function showRecoveryCodeOnce(code){
+    pinMode = 'show-recovery';
+    document.getElementById('pinlock-title').textContent = 'Save Your Recovery Code';
+    document.getElementById('pinlock-subtitle').textContent = "You won't see this again — it's the only way back into Trackr if you forget your PIN.";
+    document.getElementById('pinlock-input').style.display = 'none';
+    document.getElementById('pinlock-recovery-input').style.display = 'none';
+    document.getElementById('pinlock-error').style.display = 'none';
+    document.getElementById('pinlock-attempts').style.display = 'none';
+    document.getElementById('pinlock-forgot-link').style.display = 'none';
+    document.getElementById('pinlock-cancel-setup').style.display = 'none';
+    document.getElementById('pinlock-submit').style.display = 'none';
+    document.getElementById('pinlock-recovery-code').textContent = code;
+    document.getElementById('pinlock-recovery-display').style.display = 'flex';
+    document.getElementById('pinlock-overlay').style.display = 'flex';
   }
   async function handlePinSubmit(){
+    if(pinMode==='recover'){
+      const code = canonicalizeRecoveryCode(document.getElementById('pinlock-recovery-input').value);
+      if(!code){ showPinError('Enter your recovery code.'); return; }
+      if(settings.recoveryCodeHash && hashPin(code) === settings.recoveryCodeHash){
+        await resetPinAttempts();
+        pinFlowContext = 'recovery-reset';
+        showPinOverlay('setup-new');
+      } else {
+        showPinError('That recovery code is incorrect.');
+      }
+      return;
+    }
     const val = document.getElementById('pinlock-input').value.trim();
     if(!/^[0-9]{4}$/.test(val)){ showPinError('Enter a 4-digit PIN.'); return; }
     if(pinMode==='unlock'){
+      if(isPinLockedOut()) return;
       if(hashPin(val) === settings.appLockPin){
+        await resetPinAttempts();
         isAppLocked = false;
         hidePinOverlay();
         resetAppLockTimer();
       } else {
-        showPinError('Incorrect PIN. Try again.');
+        await registerFailedPinAttempt();
+        showPinError('Incorrect PIN.');
+      }
+    } else if(pinMode==='change-verify'){
+      if(hashPin(val) === settings.appLockPin){
+        showPinOverlay('setup-new');
+      } else {
+        showPinError('Incorrect current PIN.');
       }
     } else if(pinMode==='setup-new'){
       pendingNewPin = val;
@@ -2449,11 +2629,14 @@
       if(val === pendingNewPin){
         settings.appLockPin = hashPin(val);
         settings.appLockEnabled = true;
+        const recoveryCode = generateRecoveryCode();
+        settings.recoveryCodeHash = hashPin(canonicalizeRecoveryCode(recoveryCode));
+        await resetPinAttempts();
         await saveSettings();
         pendingNewPin = null;
-        hidePinOverlay();
         syncAppLockUI();
         resetAppLockTimer();
+        showRecoveryCodeOnce(recoveryCode);
       } else {
         pendingNewPin = null;
         showPinOverlay('setup-new');
@@ -2478,11 +2661,13 @@
     const toggle = document.getElementById('app-lock-toggle');
     const row = document.getElementById('app-lock-timeout-row');
     const select = document.getElementById('app-lock-timeout');
+    const changeBtn = document.getElementById('change-pin-btn');
     if(!toggle) return;
     toggle.classList.toggle('on', !!settings.appLockEnabled);
     toggle.setAttribute('aria-checked', !!settings.appLockEnabled);
     if(row) row.style.display = settings.appLockEnabled ? 'flex' : 'none';
     if(select) select.value = String(settings.appLockTimeoutMin || 5);
+    if(changeBtn) changeBtn.style.display = settings.appLockEnabled ? 'inline-flex' : 'none';
   }
 
   function runIntegrityCheck(){
@@ -2609,6 +2794,7 @@
           syncAppLockUI();
           resetAppLockTimer();
         } else {
+          pinFlowContext = 'toggle-enable';
           showPinOverlay('setup-new');
         }
       } else {
@@ -2625,18 +2811,42 @@
       await saveSettings();
       resetAppLockTimer();
     });
+    document.getElementById('change-pin-btn').addEventListener('click', ()=>{
+      pinFlowContext = 'change';
+      showPinOverlay('change-verify');
+    });
 
     document.getElementById('pinlock-submit').addEventListener('click', handlePinSubmit);
     document.getElementById('pinlock-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handlePinSubmit(); });
     document.getElementById('pinlock-input').addEventListener('input', (e)=>{
       if(/^[0-9]{4}$/.test(e.target.value)) setTimeout(handlePinSubmit, 60);
     });
+    document.getElementById('pinlock-recovery-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handlePinSubmit(); });
+    document.getElementById('pinlock-forgot-link').addEventListener('click', ()=>{
+      if(!settings.recoveryCodeHash){
+        alert("No recovery code was ever saved for this PIN, so there's no way to recover it automatically — sorry.");
+        return;
+      }
+      showPinOverlay('recover');
+    });
+    document.getElementById('pinlock-recovery-continue-btn').addEventListener('click', ()=>{
+      document.getElementById('pinlock-recovery-display').style.display = 'none';
+      document.getElementById('pinlock-submit').style.display = 'inline-flex';
+      hidePinOverlay();
+    });
     document.getElementById('pinlock-cancel-setup').addEventListener('click', async ()=>{
+      if(pinMode==='recover'){
+        showPinOverlay('unlock');
+        return;
+      }
       hidePinOverlay();
       pendingNewPin = null;
-      settings.appLockEnabled = false;
-      await saveSettings();
-      syncAppLockUI();
+      if(pinFlowContext!=='change'){
+        settings.appLockEnabled = false;
+        await saveSettings();
+        syncAppLockUI();
+      }
+      pinFlowContext = 'toggle-enable';
     });
 
     ['click','touchstart','keydown','scroll'].forEach(evt=>{
@@ -2752,6 +2962,20 @@
         renderAllRings();
         renderTrendChart();
       });
+    });
+
+    document.getElementById('show-networth-toggle').addEventListener('click', async ()=>{
+      settings.showNetWorth = settings.showNetWorth===false ? true : false;
+      await saveSettings();
+      syncNetWorthToggleUI();
+      renderNetWorth();
+    });
+
+    document.getElementById('sfx-toggle').addEventListener('click', async ()=>{
+      settings.sfxEnabled = settings.sfxEnabled===false ? true : false;
+      await saveSettings();
+      syncSfxToggleUI();
+      if(settings.sfxEnabled) playSfx('credit');
     });
 
     document.getElementById('show-add-reminder-btn').addEventListener('click', ()=>{
@@ -2904,7 +3128,7 @@
       balancesRevealed = false; isAppLocked = false;
       if(hideBalancesTimer){ clearTimeout(hideBalancesTimer); hideBalancesTimer = null; }
       if(appLockTimer){ clearTimeout(appLockTimer); appLockTimer = null; }
-      syncHideBalancesUI(); syncAppLockUI();
+      syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
       refreshAll();
       renderCategoriesView();
     });
@@ -2924,6 +3148,8 @@
     bindCrossTabSync();
     syncHideBalancesUI();
     syncAppLockUI();
+    syncNetWorthToggleUI();
+    syncSfxToggleUI();
     updateNotifPermissionStatus();
     applyDesktopLayout();
     desktopMql.addEventListener('change', applyDesktopLayout);
