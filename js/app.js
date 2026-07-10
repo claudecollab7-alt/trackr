@@ -487,8 +487,25 @@
   }
 
   /* ---------- Sound effects ---------- */
-  const SFX_FILES = { credit: 'sfx/sfx-credit-chime.mp3', debit: 'sfx/sfx-debit-tap.mp3' };
+  const SFX_FILES = {
+    credit: 'sfx/sfx-credit-chime.mp3',
+    debit: 'sfx/sfx-debit-tap.mp3',
+    reminder: 'sfx/sfx-reminder-done.wav',
+    goal: 'sfx/sfx-goal-complete.wav',
+    toggle: 'sfx/sfx-toggle-click.wav'
+  };
   const sfxCache = {};
+  // Construct + load every clip once up front so the very first play of each sound doesn't
+  // pay a fetch/decode delay — a fresh `new Audio(src)` per play call is what caused the lag.
+  function preloadSfx(){
+    Object.keys(SFX_FILES).forEach(name=>{
+      const audio = new Audio(SFX_FILES[name]);
+      audio.preload = 'auto';
+      audio.volume = 0.55;
+      try{ audio.load(); }catch(e){}
+      sfxCache[name] = audio;
+    });
+  }
   function playSfx(name){
     if(settings.sfxEnabled===false) return;
     const src = SFX_FILES[name]; if(!src) return;
@@ -684,23 +701,23 @@
     const items = [];
     reminders.forEach(r=>{
       const status = reminderStatus(r, 30);
-      if(status) items.push({ label:r.title, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount||0, kind:'Reminder', overdue:status.overdue });
+      if(status) items.push({ type:'reminder', id:r.id, label:r.title, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount||0, kind:'Reminder', overdue:status.overdue });
     });
     recurring.forEach(r=>{
       const status = recurringDueStatus(r, 30);
-      if(status) items.push({ label:r.category, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount, kind:'Recurring', overdue:status.overdue });
+      if(status) items.push({ type:'recurring', id:r.id, label:r.category, dueLabel:status.dueLabel, sortDate:status.dueDateISO, amount:r.amount, kind:'Recurring', overdue:status.overdue });
     });
-    function pushEmiInstallments(list, kindLabel){
+    function pushEmiInstallments(list, kindLabel, itemType){
       list.filter(d=>d.type==='emi').forEach(d=>{
         buildEmiSchedule(d).forEach(inst=>{
           if(!inst.paid && inst.dueDate<=in30){
-            items.push({ label:d.name, dueLabel:formatHuman(inst.dueDate), sortDate:inst.dueDate, amount:inst.amount, kind:kindLabel, overdue:inst.dueDate<todayStr });
+            items.push({ type:itemType, id:d.id, label:d.name, dueLabel:formatHuman(inst.dueDate), sortDate:inst.dueDate, amount:inst.amount, kind:kindLabel, overdue:inst.dueDate<todayStr, installmentDate:inst.dueDate });
           }
         });
       });
     }
-    pushEmiInstallments(debts, 'EMI Debt');
-    pushEmiInstallments(receivables, 'EMI Receivable');
+    pushEmiInstallments(debts, 'EMI Debt', 'emiDebt');
+    pushEmiInstallments(receivables, 'EMI Receivable', 'emiReceivable');
     items.sort((a,b)=> a.sortDate.localeCompare(b.sortDate));
     return items;
   }
@@ -713,11 +730,54 @@
     card.style.display='block';
     setText('upcoming-cashflow-total', fmt(items.reduce((s,i)=>s+i.amount,0)));
     list.innerHTML='';
-    items.forEach(i=>{
-      const row = document.createElement('div'); row.className='reminder-card';
-      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(i.label)}</div><div class="reminder-meta">${escapeHtml(i.kind)} · ${i.dueLabel}</div></div><span class="reminder-status ${i.overdue?'overdue':'upcoming'}">${i.overdue?'Overdue':'Upcoming'}</span></div><div class="reminder-meta" style="margin-top:6px; font-weight:700; color:var(--ink);">${fmt(i.amount)}</div>`;
+    items.forEach((i,idx)=>{
+      const row = document.createElement('div'); row.className='reminder-card clickable-row'; row.dataset.upcomingIdx = idx;
+      const actionLabel = i.type==='reminder' ? 'Mark Done' : 'Mark Paid';
+      row.innerHTML = `
+        <div class="reminder-card-top">
+          <div><div class="reminder-name">${escapeHtml(i.label)}</div><div class="reminder-meta">${escapeHtml(i.kind)} · ${i.dueLabel}</div></div>
+          <span class="reminder-status ${i.overdue?'overdue':'upcoming'}">${i.overdue?'Overdue':'Upcoming'}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:6px;">
+          <span class="reminder-meta" style="font-weight:700; color:var(--ink);">${fmt(i.amount)}</span>
+          <button type="button" class="btn-pill btn-outline upcoming-resolve-btn" data-idx="${idx}">${actionLabel}</button>
+        </div>
+      `;
+      row.addEventListener('click', (e)=>{
+        if(e.target.closest('button')) return;
+        openUpcomingItemDetail(items[idx]);
+      });
       list.appendChild(row);
     });
+    list.querySelectorAll('.upcoming-resolve-btn').forEach(btn=>{
+      btn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        resolveUpcomingItem(items[parseInt(btn.dataset.idx,10)]);
+      });
+    });
+  }
+  async function resolveUpcomingItem(item){
+    if(item.type==='reminder'){
+      await dismissReminder(item.id);
+    } else if(item.type==='recurring'){
+      await quickAddRecurring(item.id);
+    } else {
+      const isReceivable = item.type==='emiReceivable';
+      const list = isReceivable ? receivables : debts;
+      const debt = list.find(d=>d.id===item.id); if(!debt) return;
+      const account = accounts[0] ? accounts[0].name : 'Cash';
+      await logDebtPayment(item.id, debt.emiAmount, item.installmentDate || toLocalDateStr(new Date()), account);
+    }
+  }
+  function openUpcomingItemDetail(item){
+    if(item.type==='reminder'){
+      goToMoreSub('more','reminders');
+      startEditReminder(item.id);
+    } else if(item.type==='recurring'){
+      switchTab('add');
+    } else {
+      openSchedule(item.id);
+    }
   }
 
   function populateEntryCategorySelect(type){
@@ -814,10 +874,10 @@
     if(editingId){
       const idx = transactions.findIndex(t=>t.id===editingId);
       if(idx>-1) transactions[idx] = { ...transactions[idx], type, date, category, account, amount, note };
-      await saveTransactions(); showStamp(type); cancelEdit();
+      showStamp(type); await saveTransactions(); cancelEdit();
     } else {
       transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type, date, category, account, amount, note, createdAt: new Date().toISOString() });
-      await saveTransactions(); showStamp(type);
+      showStamp(type); await saveTransactions();
       if(type==='expense') checkBudgetCrossing(category, date, amount);
       if(saveRecurringChecked){
         const exists = recurring.some(r=> r.type===type && r.category===category && r.amount===amount && (r.note||'')===note);
@@ -861,9 +921,9 @@
     const today = toLocalDateStr(new Date());
     transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:today, category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
     if(r.dueDay) r.lastDismissedPeriod = today.slice(0,7);
+    showStamp(r.type);
     await saveTransactions();
     await saveRecurring();
-    showStamp(r.type);
     if(r.type==='expense') checkBudgetCrossing(r.category, today, r.amount);
     refreshAll();
   }
@@ -1194,8 +1254,18 @@
   }
   function renderDebtOverview(){
     renderDebtOverviewInto('debtov', currentDebtList());
-    renderDebtOverviewInto('reportsdebt', debts);
-    renderDebtOverviewInto('reportsreceivable', receivables);
+    // Desktop drops these from Reports — Home's own overview + active-debt list (see
+    // renderDesktopExtras) covers this now, and debts aren't date-scoped like the rest
+    // of a report anyway. Mobile is unchanged.
+    if(isDesktop){
+      const reportsDebtCard = document.getElementById('reportsdebt-card');
+      const reportsReceivableCard = document.getElementById('reportsreceivable-card');
+      if(reportsDebtCard) reportsDebtCard.style.display = 'none';
+      if(reportsReceivableCard) reportsReceivableCard.style.display = 'none';
+    } else {
+      renderDebtOverviewInto('reportsdebt', debts);
+      renderDebtOverviewInto('reportsreceivable', receivables);
+    }
   }
   function updateDebtKindLabels(){
     const isReceivable = activeDebtKind==='receivable';
@@ -1297,7 +1367,7 @@
     const wasComplete = goalRemaining(g) <= 0.004;
     if(!Array.isArray(g.contributions)) g.contributions = [];
     g.contributions.push({ id:'contrib_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: new Date().toISOString() });
-    if(!wasComplete && goalRemaining(g) <= 0.004) playSfx('credit');
+    if(!wasComplete && goalRemaining(g) <= 0.004) playSfx('goal');
     await saveGoals();
     refreshAll();
   }
@@ -1321,6 +1391,7 @@
     } else {
       goals.push({ id:'goal_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, target, initialSaved, targetDate, note, contributions: [] });
     }
+    playSfx('goal');
     await saveGoals();
     resetGoalForm();
     refreshAll();
@@ -1519,32 +1590,41 @@
     document.getElementById('add-debt-form').scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
 
-  async function confirmLogPayment(debtId){
+  // Core payment-logging logic shared by the debt card's inline form (confirmLogPayment)
+  // and any other quick action that wants to log a payment without a form, e.g. the
+  // Upcoming Cash Flow card's one-tap "Mark Paid".
+  async function logDebtPayment(debtId, amount, date, account){
     const isReceivable = receivables.some(d=>d.id===debtId);
     const list = isReceivable ? receivables : debts;
     const saveFn = isReceivable ? saveReceivables : saveDebts;
-    const form = document.getElementById('lp-form-'+debtId); if(!form) return;
-    const amount = parseFloat(form.querySelector('.lp-amount').value);
-    const date = form.querySelector('.lp-date').value;
-    const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
-    if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
-    const debt = list.find(d=>d.id===debtId); if(!debt) return;
+    if(isNaN(amount) || amount<=0 || !date) return false;
+    const debt = list.find(d=>d.id===debtId); if(!debt) return false;
     const wasPaidOff = debtRemaining(debt) <= 0.004;
     const nowIso = new Date().toISOString();
     const txId = 'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: nowIso, txId });
-    await saveFn();
     const txType = isReceivable ? 'income' : 'expense';
+    // Play immediately, before the saves below — a fully-paid debt/receivable is a bigger
+    // moment than a routine payment, so it gets the completion chime instead of stacking
+    // it with the routine credit/debit sound.
+    if(!wasPaidOff && debtRemaining(debt) <= 0.004) playSfx('credit');
+    else playSfx(txType==='income' ? 'credit' : 'debit');
+    await saveFn();
     const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
     const catList = isReceivable ? categories.income : categories.expense;
     if(!catList.includes(txCategory)) catList.push(txCategory);
     transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso });
     await saveTransactions(); await saveCategories();
-    // A fully-paid debt/receivable is a bigger moment than a routine payment — play the
-    // completion chime instead of stacking it with the routine credit/debit sound.
-    if(!wasPaidOff && debtRemaining(debt) <= 0.004) playSfx('credit');
-    else playSfx(txType==='income' ? 'credit' : 'debit');
     refreshAll();
+    return true;
+  }
+  async function confirmLogPayment(debtId){
+    const form = document.getElementById('lp-form-'+debtId); if(!form) return;
+    const amount = parseFloat(form.querySelector('.lp-amount').value);
+    const date = form.querySelector('.lp-date').value;
+    const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
+    if(isNaN(amount) || amount<=0 || !date){ alert('Please enter a valid amount and date.'); return; }
+    await logDebtPayment(debtId, amount, date, account);
   }
 
   async function deleteDebt(id){
@@ -1648,6 +1728,7 @@
     const r = reminders.find(x=>x.id===id); if(!r) return;
     const status = reminderStatus(r);
     r.lastDismissedPeriod = status ? status.periodKey : (r.repeat==='once' ? 'done' : toLocalDateStr(new Date()).slice(0,7));
+    playSfx('reminder');
     await saveReminders();
     refreshAll();
   }
@@ -2336,6 +2417,15 @@
     renderDebtOverviewInto('homereceivable', receivables);
     renderDebtsListInto('addentry-debts-list', debts, false);
     renderDebtsListInto('addentry-receivables-list', receivables, true);
+
+    const activeDebts = debts.filter(d=> debtRemaining(d) > 0.004);
+    const activeReceivables = receivables.filter(d=> debtRemaining(d) > 0.004);
+    const homeDebtListCard = document.getElementById('homedebt-list-card');
+    const homeReceivableListCard = document.getElementById('homereceivable-list-card');
+    if(homeDebtListCard) homeDebtListCard.style.display = activeDebts.length ? 'block' : 'none';
+    if(homeReceivableListCard) homeReceivableListCard.style.display = activeReceivables.length ? 'block' : 'none';
+    renderDebtsListInto('homedebt-list', activeDebts, false);
+    renderDebtsListInto('homereceivable-list', activeReceivables, true);
   }
 
   function applyDesktopLayout(){
@@ -2773,6 +2863,7 @@
     if(hideToggle) hideToggle.addEventListener('click', async ()=>{
       settings.hideBalances = !settings.hideBalances;
       balancesRevealed = false;
+      playSfx('toggle');
       await saveSettings();
       syncHideBalancesUI();
       renderHomeBalance(); renderNetWorth();
@@ -2790,6 +2881,7 @@
       if(!settings.appLockEnabled){
         if(settings.appLockPin){
           settings.appLockEnabled = true;
+          playSfx('toggle');
           await saveSettings();
           syncAppLockUI();
           resetAppLockTimer();
@@ -2800,6 +2892,7 @@
       } else {
         settings.appLockEnabled = false;
         isAppLocked = false;
+        playSfx('toggle');
         await saveSettings();
         syncAppLockUI();
         if(appLockTimer){ clearTimeout(appLockTimer); appLockTimer = null; }
@@ -2966,16 +3059,17 @@
 
     document.getElementById('show-networth-toggle').addEventListener('click', async ()=>{
       settings.showNetWorth = settings.showNetWorth===false ? true : false;
-      await saveSettings();
+      playSfx('toggle');
       syncNetWorthToggleUI();
       renderNetWorth();
+      await saveSettings();
     });
 
     document.getElementById('sfx-toggle').addEventListener('click', async ()=>{
       settings.sfxEnabled = settings.sfxEnabled===false ? true : false;
-      await saveSettings();
       syncSfxToggleUI();
-      if(settings.sfxEnabled) playSfx('credit');
+      if(settings.sfxEnabled) playSfx('toggle');
+      await saveSettings();
     });
 
     document.getElementById('show-add-reminder-btn').addEventListener('click', ()=>{
@@ -3135,6 +3229,7 @@
   }
 
   async function init(){
+    preloadSfx();
     try{ await loadData(); }catch(e){ console.error(e); }
     injectIcons();
     applyTheme(settings.theme || 'light');
