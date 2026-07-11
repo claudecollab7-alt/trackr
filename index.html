@@ -805,23 +805,44 @@
 </div>
 
 <div id="auth-overlay" style="display:none; position:fixed; inset:0; z-index:4000; background:var(--bg); flex-direction:column; align-items:center; justify-content:flex-start; gap:16px; padding:14vh 24px 24px; text-align:center; overflow-y:auto;">
-  <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--ink);"><span data-icon="wallet" data-icon-size="24"></span></div>
-  <h2 id="auth-title" style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Log In</h2>
-  <p id="auth-subtitle" style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Log in to back up and sync your data across devices.</p>
-  <form id="auth-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
-    <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Email
-      <input type="email" id="auth-email" autocomplete="email" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
-    </label>
-    <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Password
-      <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
-    </label>
-    <p id="auth-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
-    <p id="auth-info" style="display:none; color:var(--credit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
-    <button type="submit" class="btn-pill btn-black" id="auth-submit-btn" style="justify-content:center;">Log In</button>
-  </form>
-  <button class="link-btn" id="auth-toggle-mode-btn">Don't have an account? Sign up</button>
-  <button class="link-btn" id="auth-skip-btn" style="color:var(--ink-soft);">Skip for now, use offline</button>
-  <p style="margin:8px 0 0; color:var(--ink-soft); font-size:11.5px; max-width:280px;">Your data always stays on this device too — logging in just adds automatic backup and sync across devices.</p>
+  <div id="auth-form-view" style="display:flex; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--ink);"><span data-icon="wallet" data-icon-size="24"></span></div>
+    <h2 id="auth-title" style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Log In</h2>
+    <p id="auth-subtitle" style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Log in to back up and sync your data across devices.</p>
+    <form id="auth-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
+      <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Email
+        <input type="email" id="auth-email" autocomplete="email" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
+      </label>
+      <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Password
+        <div style="position:relative; margin-top:4px;">
+          <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" style="width:100%; padding:12px 42px 12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
+          <button type="button" id="auth-password-toggle" aria-label="Show password" style="position:absolute; right:4px; top:0; bottom:0; background:none; border:none; padding:0 8px; color:var(--ink-soft); display:flex; align-items:center; cursor:pointer;"><span data-icon="eye" data-icon-size="18"></span></button>
+        </div>
+      </label>
+      <p id="auth-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
+      <p id="auth-info" style="display:none; color:var(--credit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
+      <button type="submit" class="btn-pill btn-black" id="auth-submit-btn" style="justify-content:center;">Log In</button>
+    </form>
+    <button class="link-btn" id="auth-toggle-mode-btn">Don't have an account? Sign up</button>
+    <button class="link-btn" id="auth-skip-btn" style="color:var(--ink-soft);">Skip for now, use offline</button>
+    <p style="margin:8px 0 0; color:var(--ink-soft); font-size:11.5px; max-width:280px;">Your data always stays on this device too — logging in just adds automatic backup and sync across devices.</p>
+  </div>
+
+  <div id="auth-checkinbox-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="bell" data-icon-size="24"></span></div>
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Check your inbox</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">We sent a confirmation link to <strong id="auth-checkinbox-email" style="color:var(--ink);"></strong>. Confirm your email, then log in.</p>
+    <button class="btn-pill btn-outline" id="auth-resend-btn" style="justify-content:center; width:100%; max-width:280px;">Resend confirmation email</button>
+    <p id="auth-resend-note" style="display:none; margin:0; color:var(--ink-soft); font-size:12px;"></p>
+    <button class="link-btn" id="auth-checkinbox-back-btn">Back to Log In</button>
+  </div>
+
+  <div id="auth-confirmed-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="target" data-icon-size="24"></span></div>
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Email confirmed</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Your email is confirmed — you can log in now.</p>
+    <button class="btn-pill btn-black" id="auth-confirmed-login-btn" style="justify-content:center; width:100%; max-width:280px;">Log In</button>
+  </div>
 </div>
 
 <div class="search-overlay" id="search-overlay" role="dialog" aria-modal="true" aria-label="Search">
