@@ -209,14 +209,21 @@
       }
       await window.storage.set('transactions', JSON.stringify(transactions));
     } catch(e){ console.error(e); alert('Could not save your entry. Please check your connection and try again.'); }
+    if(currentUser) window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
   }
   async function saveCategories(){ try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); } }
   async function saveSettings(){ try{ await window.storage.set('settings', JSON.stringify(settings)); } catch(e){ console.error(e); } }
   async function saveRecurring(){ try{ await window.storage.set('recurring', JSON.stringify(recurring)); } catch(e){ console.error(e); } }
   async function saveReminders(){ try{ await window.storage.set('reminders', JSON.stringify(reminders)); } catch(e){ console.error(e); } }
-  async function saveGoals(){ try{ await window.storage.set('goals', JSON.stringify(goals)); } catch(e){ console.error(e); } }
+  async function saveGoals(){
+    try{ await window.storage.set('goals', JSON.stringify(goals)); } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertGoals(currentUser.id, goals);
+  }
   async function saveAccounts(){ try{ await window.storage.set('accounts', JSON.stringify(accounts)); } catch(e){ console.error(e); } }
-  async function saveBudgets(){ try{ await window.storage.set('budgets', JSON.stringify(budgets)); } catch(e){ console.error(e); } }
+  async function saveBudgets(){
+    try{ await window.storage.set('budgets', JSON.stringify(budgets)); } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncBudgets(currentUser.id, budgets);
+  }
   async function saveDebts(){
     try{
       const disk = await window.storage.get('debts');
@@ -229,6 +236,7 @@
       }
       await window.storage.set('debts', JSON.stringify(debts));
     } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertDebts(currentUser.id, debts);
   }
   async function saveReceivables(){
     try{
@@ -242,6 +250,7 @@
       }
       await window.storage.set('receivables', JSON.stringify(receivables));
     } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
   }
 
   function renderTabUI(tabName){
@@ -810,6 +819,7 @@
     recentlyDeletedTxIds.add(id);
     transactions = transactions.filter(t=>t.id!==id);
     await saveTransactions();
+    if(currentUser) window.trackrSync.syncDeleteTransaction(id);
     refreshAll();
     return true;
   }
@@ -1412,6 +1422,7 @@
     if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return false;
     goals = goals.filter(g=>g.id!==id);
     await saveGoals();
+    if(currentUser) window.trackrSync.syncDeleteGoal(id);
     refreshAll();
     return true;
   }
@@ -1613,7 +1624,7 @@
     const txCategory = isReceivable ? 'Loan Repayment Received' : 'EMI / Loan';
     const catList = isReceivable ? categories.income : categories.expense;
     if(!catList.includes(txCategory)) catList.push(txCategory);
-    transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso });
+    transactions.push({ id:txId, type:txType, category:txCategory, date, account, amount, note: debt.name+(isReceivable?' — received':' — payment'), createdAt: nowIso, debtId: debtId });
     await saveTransactions(); await saveCategories();
     refreshAll();
     return true;
@@ -1640,6 +1651,7 @@
     const idx = list.findIndex(d=>d.id===id);
     if(idx>-1) list.splice(idx,1);
     await saveFn();
+    if(currentUser) window.trackrSync.syncDeleteDebt(id);
     refreshAll();
     return true;
   }
@@ -2513,6 +2525,76 @@
     updateBalanceRevealUI();
   }
 
+  /* ---------- Cloud auth (Supabase) ---------- */
+  let currentUser = null;
+  let authMode = 'login';
+  let appStarted = false;
+
+  function showAuthOverlay(mode){
+    authMode = mode || 'login';
+    const overlay = document.getElementById('auth-overlay');
+    const title = document.getElementById('auth-title');
+    const subtitle = document.getElementById('auth-subtitle');
+    const submitBtn = document.getElementById('auth-submit-btn');
+    const toggleBtn = document.getElementById('auth-toggle-mode-btn');
+    document.getElementById('auth-error').style.display = 'none';
+    document.getElementById('auth-info').style.display = 'none';
+    if(authMode==='signup'){
+      title.textContent = 'Sign Up';
+      subtitle.textContent = 'Create an account to back up and sync your data across devices.';
+      submitBtn.textContent = 'Sign Up';
+      toggleBtn.textContent = 'Already have an account? Log in';
+    } else {
+      title.textContent = 'Log In';
+      subtitle.textContent = 'Log in to back up and sync your data across devices.';
+      submitBtn.textContent = 'Log In';
+      toggleBtn.textContent = "Don't have an account? Sign up";
+    }
+    overlay.style.display = 'flex';
+  }
+  function hideAuthOverlay(){ document.getElementById('auth-overlay').style.display = 'none'; }
+  function showAuthError(msg){
+    const err = document.getElementById('auth-error');
+    err.textContent = msg; err.style.display = 'block';
+    document.getElementById('auth-info').style.display = 'none';
+  }
+  function showAuthInfo(msg){
+    const info = document.getElementById('auth-info');
+    info.textContent = msg; info.style.display = 'block';
+    document.getElementById('auth-error').style.display = 'none';
+  }
+  async function handleAuthSubmit(e){
+    e.preventDefault();
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    if(!email || !password){ showAuthError('Enter an email and password.'); return; }
+    const submitBtn = document.getElementById('auth-submit-btn');
+    submitBtn.disabled = true;
+    try{
+      if(authMode==='signup'){
+        const { data, error } = await window.trackrSync.client.auth.signUp({ email, password });
+        if(error){ showAuthError(error.message); return; }
+        if(data.session){
+          await startAppForUser(data.session.user);
+        } else {
+          showAuthInfo('Check your email to confirm your account, then log in.');
+          showAuthOverlay('login');
+        }
+      } else {
+        const { data, error } = await window.trackrSync.client.auth.signInWithPassword({ email, password });
+        if(error){ showAuthError(error.message); return; }
+        await startAppForUser(data.session.user);
+      }
+    } catch(e){
+      showAuthError('Something went wrong. Check your connection and try again.');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  }
+  async function logOutUser(){
+    try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
+  }
+
   /* ---------- Privacy: App Lock (PIN) ---------- */
   let isAppLocked = false;
   let appLockTimer = null;
@@ -3205,6 +3287,9 @@
       await saveSettings(); refreshAll();
     });
 
+    document.getElementById('account-action-btn').addEventListener('click', ()=>{
+      if(currentUser) logOutUser(); else showAuthOverlay('login');
+    });
     document.getElementById('backup-btn').addEventListener('click', downloadBackup);
     document.getElementById('restore-btn').addEventListener('click', ()=> document.getElementById('restore-file-input').click());
     document.getElementById('integrity-check-btn').addEventListener('click', runIntegrityCheck);
@@ -3228,9 +3313,47 @@
     });
   }
 
-  async function init(){
-    preloadSfx();
+  function syncAccountStatusUI(){
+    const note = document.getElementById('account-status-note');
+    const btn = document.getElementById('account-action-btn');
+    if(!note || !btn) return;
+    if(currentUser){
+      note.textContent = `Logged in as ${currentUser.email} — synced across devices.`;
+      btn.textContent = 'Log Out';
+    } else {
+      note.textContent = 'Not logged in — using this device only.';
+      btn.textContent = 'Log In';
+    }
+  }
+  // Attaches (or detaches, if user is null) a Supabase user to the already-running app —
+  // used both during the very first boot and when someone who chose "Skip for now" earlier
+  // logs in later from Settings, without re-running the one-time UI bootstrap below.
+  async function attachUserAndSync(user, refreshAfter){
+    currentUser = user || null;
+    syncAccountStatusUI();
+    if(!currentUser) return;
+    try{
+      await window.trackrSync.migrateLocalDataToCloudIfNeeded(currentUser.id, { transactions, debts, receivables, goals, budgets });
+      const cloud = await window.trackrSync.pullCloudData(currentUser.id);
+      if(cloud.transactions!==null){ transactions = cloud.transactions; await saveTransactions(); }
+      if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveDebts(); }
+      if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveReceivables(); }
+      if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); await saveGoals(); }
+      if(cloud.budgets!==null){ budgets = cloud.budgets; await saveBudgets(); }
+      window.trackrSync.retryPendingWrites();
+    }catch(e){ console.error('Cloud sync failed, continuing with local cache:', e); }
+    if(refreshAfter) refreshAll();
+  }
+  async function startAppForUser(user){
+    if(appStarted){
+      hideAuthOverlay();
+      await attachUserAndSync(user, true);
+      return;
+    }
+    appStarted = true;
+    hideAuthOverlay();
     try{ await loadData(); }catch(e){ console.error(e); }
+    await attachUserAndSync(user, false);
     injectIcons();
     applyTheme(settings.theme || 'light');
     populateEntryCategorySelect('income');
@@ -3271,6 +3394,38 @@
     if(settings.appLockEnabled && settings.appLockPin){ lockApp(); } else { resetAppLockTimer(); }
     resetHideBalancesTimer();
     setInterval(maybeFireDueNotifications, 5*60*1000);
+    window.addEventListener('online', ()=>{ if(currentUser) window.trackrSync.retryPendingWrites(); });
+  }
+
+  async function init(){
+    preloadSfx();
+    injectIcons(); // auth screen needs its icon before a session check even resolves
+    document.getElementById('auth-form').addEventListener('submit', handleAuthSubmit);
+    document.getElementById('auth-toggle-mode-btn').addEventListener('click', ()=> showAuthOverlay(authMode==='login' ? 'signup' : 'login'));
+    document.getElementById('auth-skip-btn').addEventListener('click', ()=> startAppForUser(null));
+
+    window.trackrSync.client.auth.onAuthStateChange((event, session)=>{
+      if(event==='SIGNED_IN' && session && session.user && !appStarted){
+        startAppForUser(session.user);
+      } else if(event==='SIGNED_OUT'){
+        appStarted = false;
+        currentUser = null;
+        location.reload();
+      }
+    });
+
+    let session = null;
+    try{
+      const { data } = await window.trackrSync.client.auth.getSession();
+      session = data && data.session;
+    }catch(e){ console.error(e); }
+
+    if(session && session.user){
+      await startAppForUser(session.user);
+    } else {
+      document.getElementById('loading-overlay').style.display = 'none';
+      showAuthOverlay('login');
+    }
   }
 
   if ('serviceWorker' in navigator) {
