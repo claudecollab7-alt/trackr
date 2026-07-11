@@ -54,6 +54,16 @@
     });
   }
 
+  // Every transaction/debt/receivable/goal id must be a real UUID — the Supabase
+  // schema declares id as uuid, and upserting a non-UUID string fails outright.
+  function uuid(){
+    if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
+      const r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
+      return v.toString(16);
+    });
+  }
+
   let transactions = [];
   let categories = defaultCategories();
   let settings = { currency: '₹' };
@@ -195,6 +205,40 @@
     if(categories.expense.includes('EMI / Loan') && !transactions.some(t=> t.category==='EMI / Loan')){
       categories.expense = categories.expense.filter(c=> c!=='EMI / Loan');
       await saveCategories();
+    }
+    // Migration: ids used to be generated as 'tx_<timestamp>_<rand>' etc, but the
+    // Supabase schema declares id as uuid — those strings fail every sync upsert
+    // outright. Reassign a real uuid to any record still carrying an old-format id,
+    // rewriting every cross-reference (a transaction's debtId, a payment's txId) to match.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const txIdMap = {}, debtIdMap = {};
+    let legacyIdsRemapped = false;
+    transactions.forEach(t=>{
+      if(t && t.id && !UUID_RE.test(t.id)){ const fresh = uuid(); txIdMap[t.id] = fresh; t.id = fresh; legacyIdsRemapped = true; }
+    });
+    debts.concat(receivables).forEach(d=>{
+      if(d && d.id && !UUID_RE.test(d.id)){ const fresh = uuid(); debtIdMap[d.id] = fresh; d.id = fresh; legacyIdsRemapped = true; }
+    });
+    goals.forEach(g=>{ if(g && g.id && !UUID_RE.test(g.id)) { g.id = uuid(); legacyIdsRemapped = true; } });
+    if(legacyIdsRemapped){
+      transactions.forEach(t=>{ if(t.debtId && debtIdMap[t.debtId]) t.debtId = debtIdMap[t.debtId]; });
+      debts.concat(receivables).forEach(d=>{
+        (d.payments||[]).forEach(p=>{ if(p.txId && txIdMap[p.txId]) p.txId = txIdMap[p.txId]; });
+      });
+      // Written directly rather than via saveTransactions()/saveDebts()/etc — those merge
+      // by id against whatever's still on disk (for cross-tab safety during live use), which
+      // would treat a renamed record as a brand-new one alongside the stale old-id copy
+      // instead of replacing it. loadData() just read this data fresh, so a plain overwrite
+      // here is safe and is what actually makes the rename stick.
+      try{ await window.storage.set('transactions', JSON.stringify(transactions)); }catch(e){}
+      try{ await window.storage.set('debts', JSON.stringify(debts)); }catch(e){}
+      try{ await window.storage.set('receivables', JSON.stringify(receivables)); }catch(e){}
+      try{ await window.storage.set('goals', JSON.stringify(goals)); }catch(e){}
+      // Any previously-queued sync write for these tables was built from the old,
+      // permanently-invalid ids — drop it, since the app will resend the corrected
+      // full state on the next save anyway. Left in place, a dead op like this blocks
+      // every later queued write behind it (the queue retries strictly in order).
+      if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(['transactions','debts','goals']);
     }
   }
   async function saveTransactions(){
@@ -886,7 +930,7 @@
       if(idx>-1) transactions[idx] = { ...transactions[idx], type, date, category, account, amount, note };
       showStamp(type); await saveTransactions(); cancelEdit();
     } else {
-      transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type, date, category, account, amount, note, createdAt: new Date().toISOString() });
+      transactions.push({ id:uuid(), type, date, category, account, amount, note, createdAt: new Date().toISOString() });
       showStamp(type); await saveTransactions();
       if(type==='expense') checkBudgetCrossing(category, date, amount);
       if(saveRecurringChecked){
@@ -929,7 +973,7 @@
     const accountSelect = document.getElementById('entry-account');
     const account = (accountSelect && accountSelect.value) || (accounts[0] ? accounts[0].name : 'Cash');
     const today = toLocalDateStr(new Date());
-    transactions.push({ id:'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), type:r.type, date:today, category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
+    transactions.push({ id:uuid(), type:r.type, date:today, category:r.category, account, amount:r.amount, note:r.note||'', createdAt: new Date().toISOString() });
     if(r.dueDay) r.lastDismissedPeriod = today.slice(0,7);
     showStamp(r.type);
     await saveTransactions();
@@ -1203,13 +1247,18 @@
     container.querySelectorAll('.view-schedule-btn').forEach(btn=> btn.addEventListener('click', ()=> openSchedule(btn.dataset.id)));
     container.querySelectorAll('.edit-debt-btn').forEach(btn=> btn.addEventListener('click', ()=> startEditDebt(btn.dataset.id)));
     container.querySelectorAll('.del-debt-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteDebt(btn.dataset.id)));
+    // Scoped to the clicked button's own card (not a global getElementById lookup) — on
+    // desktop the same debt/receivable can render into multiple containers at once
+    // (Home, Add Entry, More all show it simultaneously), which would otherwise produce
+    // duplicate lp-form-<id> elements and always resolve to whichever copy is first in
+    // the document, regardless of which card the user actually clicked.
     container.querySelectorAll('.log-payment-btn').forEach(btn=> btn.addEventListener('click', ()=>{
-      const f = document.getElementById('lp-form-'+btn.dataset.id); if(f) f.style.display = (f.style.display==='none' ? 'block' : 'none');
+      const f = btn.closest('.debt-card').querySelector('.log-payment-form'); if(f) f.style.display = (f.style.display==='none' ? 'block' : 'none');
     }));
     container.querySelectorAll('.lp-cancel').forEach(btn=> btn.addEventListener('click', ()=>{
-      const f = document.getElementById('lp-form-'+btn.dataset.id); if(f) f.style.display='none';
+      const f = btn.closest('.debt-card').querySelector('.log-payment-form'); if(f) f.style.display='none';
     }));
-    container.querySelectorAll('.lp-confirm').forEach(btn=> btn.addEventListener('click', ()=> confirmLogPayment(btn.dataset.id)));
+    container.querySelectorAll('.lp-confirm').forEach(btn=> btn.addEventListener('click', ()=> confirmLogPayment(btn.dataset.id, btn.closest('.log-payment-form'))));
   }
 
   function renderDebtSummaryInsights(){
@@ -1399,7 +1448,7 @@
       const idx = goals.findIndex(g=>g.id===editingGoalId);
       if(idx>-1) goals[idx] = { ...goals[idx], name, target, initialSaved, targetDate, note };
     } else {
-      goals.push({ id:'goal_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, target, initialSaved, targetDate, note, contributions: [] });
+      goals.push({ id:uuid(), name, target, initialSaved, targetDate, note, contributions: [] });
     }
     playSfx('goal');
     await saveGoals();
@@ -1535,7 +1584,7 @@
         list[idx] = { ...list[idx], name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note };
       }
     } else {
-      list.push({ id:(isReceivable?'rcv_':'debt_')+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note, payments: [] });
+      list.push({ id:uuid(), name, type, total, emiAmount: type==='emi'?emiAmount:0, tenure: type==='emi'?tenure:0, startDate, note, payments: [] });
     }
     await currentDebtSaveFn()();
     resetDebtForm();
@@ -1612,7 +1661,7 @@
     const debt = list.find(d=>d.id===debtId); if(!debt) return false;
     const wasPaidOff = debtRemaining(debt) <= 0.004;
     const nowIso = new Date().toISOString();
-    const txId = 'tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    const txId = uuid();
     debt.payments.push({ id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), amount, date, createdAt: nowIso, txId });
     const txType = isReceivable ? 'income' : 'expense';
     // Play immediately, before the saves below — a fully-paid debt/receivable is a bigger
@@ -1629,8 +1678,8 @@
     refreshAll();
     return true;
   }
-  async function confirmLogPayment(debtId){
-    const form = document.getElementById('lp-form-'+debtId); if(!form) return;
+  async function confirmLogPayment(debtId, form){
+    if(!form) return;
     const amount = parseFloat(form.querySelector('.lp-amount').value);
     const date = form.querySelector('.lp-date').value;
     const account = form.querySelector('.lp-account') ? form.querySelector('.lp-account').value : (accounts[0] ? accounts[0].name : 'Cash');
@@ -2529,10 +2578,34 @@
   let currentUser = null;
   let authMode = 'login';
   let appStarted = false;
+  let pendingConfirmEmail = null;
+  let resendCooldownUntil = 0;
+  let resendCooldownTimer = null;
 
+  function showAuthFormView(){
+    document.getElementById('auth-overlay').style.display = 'flex';
+    document.getElementById('auth-form-view').style.display = 'flex';
+    document.getElementById('auth-checkinbox-view').style.display = 'none';
+    document.getElementById('auth-confirmed-view').style.display = 'none';
+  }
+  function showAuthCheckInboxView(email){
+    document.getElementById('auth-overlay').style.display = 'flex';
+    document.getElementById('auth-form-view').style.display = 'none';
+    document.getElementById('auth-checkinbox-view').style.display = 'flex';
+    document.getElementById('auth-confirmed-view').style.display = 'none';
+    document.getElementById('auth-checkinbox-email').textContent = email;
+    pendingConfirmEmail = email;
+    resendCooldownUntil = 0;
+    updateResendButtonState();
+  }
+  function showAuthConfirmedView(){
+    document.getElementById('auth-overlay').style.display = 'flex';
+    document.getElementById('auth-form-view').style.display = 'none';
+    document.getElementById('auth-checkinbox-view').style.display = 'none';
+    document.getElementById('auth-confirmed-view').style.display = 'flex';
+  }
   function showAuthOverlay(mode){
     authMode = mode || 'login';
-    const overlay = document.getElementById('auth-overlay');
     const title = document.getElementById('auth-title');
     const subtitle = document.getElementById('auth-subtitle');
     const submitBtn = document.getElementById('auth-submit-btn');
@@ -2550,7 +2623,7 @@
       submitBtn.textContent = 'Log In';
       toggleBtn.textContent = "Don't have an account? Sign up";
     }
-    overlay.style.display = 'flex';
+    showAuthFormView();
   }
   function hideAuthOverlay(){ document.getElementById('auth-overlay').style.display = 'none'; }
   function showAuthError(msg){
@@ -2563,6 +2636,60 @@
     info.textContent = msg; info.style.display = 'block';
     document.getElementById('auth-error').style.display = 'none';
   }
+  // Supabase returns generic PostgrestError-style messages — map the ones users
+  // actually hit to distinct, actionable copy instead of one generic error for all of them.
+  function authErrorMessage(error, context){
+    const msg = ((error && error.message) || '').toLowerCase();
+    if(context==='signup' && msg.includes('already registered')) return 'This email is already registered — log in instead.';
+    if(context==='login' && msg.includes('email not confirmed')) return 'Please confirm your email before logging in.';
+    if(context==='login' && msg.includes('invalid login credentials')) return 'Incorrect email or password.';
+    return (error && error.message) || 'Something went wrong. Please try again.';
+  }
+  function updateResendButtonState(){
+    const btn = document.getElementById('auth-resend-btn');
+    const note = document.getElementById('auth-resend-note');
+    const remaining = Math.ceil((resendCooldownUntil - Date.now())/1000);
+    if(remaining > 0){
+      btn.disabled = true;
+      note.style.display = 'block';
+      note.textContent = `You can resend in ${remaining}s.`;
+    } else {
+      btn.disabled = false;
+      note.style.display = 'none';
+    }
+  }
+  async function handleResendConfirmation(){
+    if(!pendingConfirmEmail || Date.now() < resendCooldownUntil) return;
+    const note = document.getElementById('auth-resend-note');
+    document.getElementById('auth-resend-btn').disabled = true;
+    try{
+      const { error } = await window.trackrSync.client.auth.resend({ type:'signup', email: pendingConfirmEmail });
+      if(error){
+        note.style.display = 'block'; note.textContent = 'Could not resend — try again shortly.';
+        updateResendButtonState();
+        return;
+      }
+    }catch(e){
+      note.style.display = 'block'; note.textContent = 'Could not resend — check your connection.';
+      updateResendButtonState();
+      return;
+    }
+    resendCooldownUntil = Date.now() + 30000;
+    if(resendCooldownTimer) clearInterval(resendCooldownTimer);
+    resendCooldownTimer = setInterval(()=>{
+      updateResendButtonState();
+      if(Date.now() >= resendCooldownUntil){ clearInterval(resendCooldownTimer); resendCooldownTimer = null; }
+    }, 1000);
+    updateResendButtonState();
+  }
+  function togglePasswordVisibility(){
+    const input = document.getElementById('auth-password');
+    const btn = document.getElementById('auth-password-toggle');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.innerHTML = icon(showing ? 'eye' : 'eyeOff', 18);
+    btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  }
   async function handleAuthSubmit(e){
     e.preventDefault();
     const email = document.getElementById('auth-email').value.trim();
@@ -2573,16 +2700,15 @@
     try{
       if(authMode==='signup'){
         const { data, error } = await window.trackrSync.client.auth.signUp({ email, password });
-        if(error){ showAuthError(error.message); return; }
+        if(error){ showAuthError(authErrorMessage(error, 'signup')); return; }
         if(data.session){
           await startAppForUser(data.session.user);
         } else {
-          showAuthInfo('Check your email to confirm your account, then log in.');
-          showAuthOverlay('login');
+          showAuthCheckInboxView(email);
         }
       } else {
         const { data, error } = await window.trackrSync.client.auth.signInWithPassword({ email, password });
-        if(error){ showAuthError(error.message); return; }
+        if(error){ showAuthError(authErrorMessage(error, 'login')); return; }
         await startAppForUser(data.session.user);
       }
     } catch(e){
@@ -3403,6 +3529,22 @@
     document.getElementById('auth-form').addEventListener('submit', handleAuthSubmit);
     document.getElementById('auth-toggle-mode-btn').addEventListener('click', ()=> showAuthOverlay(authMode==='login' ? 'signup' : 'login'));
     document.getElementById('auth-skip-btn').addEventListener('click', ()=> startAppForUser(null));
+    document.getElementById('auth-password-toggle').addEventListener('click', togglePasswordVisibility);
+    document.getElementById('auth-resend-btn').addEventListener('click', handleResendConfirmation);
+    document.getElementById('auth-checkinbox-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    document.getElementById('auth-confirmed-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+
+    // A confirmation-link click lands back here with the email-verification token still
+    // in the URL — createClient() above auto-detects it and would otherwise silently log
+    // the user straight into a live session. Discard that session and show an explicit
+    // "confirmed, now log in" screen instead, per the redesigned flow.
+    if(window.trackrSync.cameFromEmailConfirmation){
+      try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
+      if(history.replaceState) history.replaceState(null, '', location.pathname);
+      document.getElementById('loading-overlay').style.display = 'none';
+      showAuthConfirmedView();
+      return;
+    }
 
     window.trackrSync.client.auth.onAuthStateChange((event, session)=>{
       if(event==='SIGNED_IN' && session && session.user && !appStarted){

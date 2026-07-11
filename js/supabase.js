@@ -9,6 +9,13 @@
      on fromDebtRow/toGoalRow below for how those are handled.
      Only these four tables exist server-side, so reminders/recurring/accounts/
      categories/settings stay local-only. */
+
+  // Captured before createClient() below, which asynchronously parses and strips
+  // this same hash to auto-establish a session (detectSessionInUrl, on by default) —
+  // app.js uses this to show a distinct "email confirmed" screen instead of silently
+  // dropping the user straight into a live session from a confirmation-link click.
+  const cameFromEmailConfirmation = /type=signup/.test(location.hash) || /type=signup/.test(location.search);
+
   const supabaseClient = window.supabase.createClient(
     'https://jjnxtmfntixysqvoighh.supabase.co',
     'sb_publishable_5GivZn5OcSCKBpO_75INFQ_2yDEl3jr'
@@ -137,6 +144,15 @@
       }
     } finally { retryInFlight = false; }
   }
+  // Drops any queued write for the given tables — used when the caller is about to
+  // resend the full, corrected state for those tables anyway (e.g. after remapping
+  // ids that made every earlier queued write for them permanently fail), so a dead
+  // op doesn't sit at the front of the queue blocking every other write behind it.
+  async function purgeQueuedTables(tableNames){
+    await loadPendingQueue();
+    pendingQueue = pendingQueue.filter(op=> !tableNames.includes(op.table));
+    await savePendingQueue();
+  }
   window.addEventListener('online', retryPendingWrites);
 
   /* ---------- Upsert / delete entry points, one per table ---------- */
@@ -226,11 +242,13 @@
 
   window.trackrSync = {
     client: supabaseClient,
+    cameFromEmailConfirmation,
     syncUpsertTransactions, syncDeleteTransaction,
     syncUpsertDebts, syncUpsertReceivables, syncDeleteDebt,
     syncUpsertGoals, syncDeleteGoal,
     syncBudgets,
     pullCloudData,
     migrateLocalDataToCloudIfNeeded,
-    retryPendingWrites
+    retryPendingWrites,
+    purgeQueuedTables
   };
