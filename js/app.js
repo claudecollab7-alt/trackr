@@ -2046,9 +2046,21 @@
     if(!shouldShowBackupNag()){ banner.style.display='none'; return; }
     banner.style.display='block';
     const text = document.getElementById('backup-nag-text');
-    text.textContent = settings.lastBackupAt
-      ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last backup — everything you've entered only lives on this device.`
-      : "You haven't backed up yet — everything you've entered only lives on this device.";
+    if(currentUser){
+      text.textContent = settings.lastBackupAt
+        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last local backup — your data is already synced to the cloud, but a local copy is a good extra safety net.`
+        : "You haven't made a local backup yet — your data is already synced to the cloud, but a local copy is a good extra safety net.";
+    } else {
+      text.textContent = settings.lastBackupAt
+        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last backup — everything you've entered only lives on this device.`
+        : "You haven't backed up yet — everything you've entered only lives on this device.";
+    }
+  }
+  function renderBackupContextNote(){
+    const el = document.getElementById('backup-context-note'); if(!el) return;
+    el.textContent = currentUser
+      ? 'Your data syncs automatically to the cloud. This also saves a local copy to your device if you want one.'
+      : "You're not logged in, so this is your only backup — download a copy regularly so you don't lose data if this device is lost.";
   }
   async function dismissBackupNag(){
     settings.lastBackupNagDismissedAt = new Date().toISOString();
@@ -3450,6 +3462,7 @@
       note.textContent = 'Not logged in — using this device only.';
       btn.textContent = 'Log In';
     }
+    renderBackupContextNote();
   }
   // Attaches (or detaches, if user is null) a Supabase user to the already-running app —
   // used both during the very first boot and when someone who chose "Skip for now" earlier
@@ -3528,7 +3541,10 @@
     injectIcons(); // auth screen needs its icon before a session check even resolves
     document.getElementById('auth-form').addEventListener('submit', handleAuthSubmit);
     document.getElementById('auth-toggle-mode-btn').addEventListener('click', ()=> showAuthOverlay(authMode==='login' ? 'signup' : 'login'));
-    document.getElementById('auth-skip-btn').addEventListener('click', ()=> startAppForUser(null));
+    document.getElementById('auth-skip-btn').addEventListener('click', async ()=>{
+      try{ await window.storage.set('skippedLogin', 'true'); }catch(e){}
+      startAppForUser(null);
+    });
     document.getElementById('auth-password-toggle').addEventListener('click', togglePasswordVisibility);
     document.getElementById('auth-resend-btn').addEventListener('click', handleResendConfirmation);
     document.getElementById('auth-checkinbox-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
@@ -3564,14 +3580,78 @@
 
     if(session && session.user){
       await startAppForUser(session.user);
+      return;
+    }
+
+    // Only ever show the login gate on a genuine first-ever open (no session, and no prior
+    // "Skip for now" choice recorded) - someone who already chose to use Trackr offline
+    // shouldn't be re-prompted to log in every single time they open the app. They can still
+    // log in later, deliberately, from the Log In action in Account & Backup.
+    let skippedLogin = false;
+    try{
+      const flag = await window.storage.get('skippedLogin');
+      skippedLogin = !!(flag && flag.value === 'true');
+    }catch(e){}
+
+    if(skippedLogin){
+      await startAppForUser(null);
     } else {
       document.getElementById('loading-overlay').style.display = 'none';
       showAuthOverlay('login');
     }
   }
 
+  /* ---------- PWA update detection ----------
+     Only ever touches the Cache Storage API (via sw.js) - never localStorage or
+     IndexedDB, so local data and the Supabase session are untouched by an update. */
+  let updateInProgress = false; // only reload on controllerchange if WE asked for this activation
+  function showUpdateBanner(reg){
+    const el = document.getElementById('sw-update-banner');
+    if(!el || !reg.waiting) return;
+    el.style.display = 'flex';
+    const btn = document.getElementById('sw-update-btn');
+    btn.onclick = () => {
+      btn.disabled = true;
+      btn.textContent = 'Updating…';
+      updateInProgress = true;
+      reg.waiting.postMessage({ type:'SKIP_WAITING' });
+    };
+  }
+  function hideUpdateBanner(){
+    const el = document.getElementById('sw-update-banner');
+    if(el) el.style.display = 'none';
+  }
+
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+    document.getElementById('sw-update-dismiss').addEventListener('click', hideUpdateBanner);
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').then(reg => {
+        // A worker may already be waiting if it installed while this tab was
+        // closed/backgrounded - only prompt if something is already actively
+        // controlling the page (i.e. this is a genuine update, not the very
+        // first-ever install, which also transiently has no controller yet).
+        if(reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
+        reg.addEventListener('updatefound', () => {
+          const installing = reg.installing;
+          if(!installing) return;
+          installing.addEventListener('statechange', () => {
+            if(installing.state === 'installed' && navigator.serviceWorker.controller){
+              showUpdateBanner(reg);
+            }
+          });
+        });
+      }).catch(()=>{});
+    });
+    // clients.claim() in sw.js's activate handler fires controllerchange on the very
+    // first-ever activation too (an ordinary first visit, not an update - there's no
+    // "old" version to move away from) - only reload here if the user actually clicked
+    // Update above, otherwise every fresh install would silently reload itself once.
+    let reloadedForUpdate = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if(!updateInProgress || reloadedForUpdate) return;
+      reloadedForUpdate = true;
+      location.reload();
+    });
   }
 
   init();
