@@ -42,7 +42,8 @@
     creditCard: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
     eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3.2"/>',
     eyeOff: '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.4 21.4 0 0 1 5.06-6.06M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 8 11 8a21.4 21.4 0 0 1-3.22 4.36M14.12 14.12a3.2 3.2 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
-    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
   };
   function icon(name, size){
     size = size || 18;
@@ -105,6 +106,13 @@
       expense: ['Food & Groceries','Transport','Rent','Utilities & Bills','Shopping','Entertainment','Healthcare','Education','Investments','Insurance','Other Expense']
     };
   }
+  // These two categories are only ever meant to be applied automatically by logDebtPayment() -
+  // manually picking them on a plain transaction produces a row that looks debt-linked (same
+  // category text) but has no debt_id, which is indistinguishable from a real linked payment
+  // anywhere else in the app. logDebtPayment() still pushes them into categories.income/expense
+  // so they exist as valid category values on the transaction itself; this only hides them from
+  // the manual entry-form picker.
+  const NON_MANUAL_CATEGORIES = ['EMI / Loan', 'Loan Repayment Received'];
   function defaultAccounts(){
     return [
       { id:'acc_cash', name:'Cash' },
@@ -835,7 +843,7 @@
 
   function populateEntryCategorySelect(type){
     const sel = document.getElementById('entry-category'); sel.innerHTML='';
-    categories[type].forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
+    categories[type].filter(c=> !NON_MANUAL_CATEGORIES.includes(c)).forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
   }
   function populateEntryAccountSelect(){
     const sel = document.getElementById('entry-account'); if(!sel) return;
@@ -3207,6 +3215,7 @@
     document.getElementById('close-notifications-btn').addEventListener('click', ()=> history.back());
     document.getElementById('notifications-overlay').addEventListener('click', (e)=>{ if(e.target.id==='notifications-overlay') history.back(); });
     document.getElementById('settings-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'settings'); });
+    document.getElementById('profile-btn').addEventListener('click', ()=>{ goToMoreSub('more', 'account'); });
     document.getElementById('backup-nag-now-btn').addEventListener('click', downloadBackup);
     document.getElementById('backup-nag-later-btn').addEventListener('click', dismissBackupNag);
     document.getElementById('app-toast-close').addEventListener('click', hideAppToast);
@@ -3474,13 +3483,24 @@
     try{
       await window.trackrSync.migrateLocalDataToCloudIfNeeded(currentUser.id, { transactions, debts, receivables, goals, budgets });
       const cloud = await window.trackrSync.pullCloudData(currentUser.id);
+      // pullCloudData leaves a field null ONLY when that table's fetch actually threw (it always
+      // returns [] / {} for a genuinely empty-but-successful query) - so this is an unambiguous
+      // signal the cloud read failed, as opposed to "there's just no data yet". Previously this
+      // was only ever logged to the console: the UI would silently keep showing whatever was in
+      // local cache (empty, on a device that had never synced before) with zero indication to the
+      // user that the numbers on screen didn't reflect what's actually in Supabase.
+      const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null;
       if(cloud.transactions!==null){ transactions = cloud.transactions; await saveTransactions(); }
       if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveDebts(); }
       if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveReceivables(); }
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); await saveGoals(); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; await saveBudgets(); }
       window.trackrSync.retryPendingWrites();
-    }catch(e){ console.error('Cloud sync failed, continuing with local cache:', e); }
+      if(pullFailed) showAppToast("Couldn't load your latest data from the cloud — showing what's saved on this device.");
+    }catch(e){
+      console.error('Cloud sync failed, continuing with local cache:', e);
+      showAppToast("Couldn't load your latest data from the cloud — showing what's saved on this device.");
+    }
     if(refreshAfter) refreshAll();
   }
   async function startAppForUser(user){
@@ -3586,7 +3606,7 @@
     // Only ever show the login gate on a genuine first-ever open (no session, and no prior
     // "Skip for now" choice recorded) - someone who already chose to use Trackr offline
     // shouldn't be re-prompted to log in every single time they open the app. They can still
-    // log in later, deliberately, from the Log In action in Account & Backup.
+    // log in later, deliberately, from the Log In action in Profile & Backup.
     let skippedLogin = false;
     try{
       const flag = await window.storage.get('skippedLogin');
