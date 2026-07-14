@@ -304,6 +304,30 @@
     } catch(e){ console.error(e); }
     if(currentUser) window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
   }
+  // saveTransactions/saveDebts/saveReceivables merge against whatever's currently on disk (by
+  // id) rather than overwriting outright - that's deliberate for ordinary edits (protects a
+  // concurrent write from a different tab), but it means simply setting an array to [] and
+  // calling the normal save function does NOT actually clear it: the merge reads the still-full
+  // disk copy back in and resurrects every row. Anywhere that means "wipe this collection for
+  // real" (Reset Everything; declining to add pre-login local data to a cloud account) needs to
+  // mark every existing id as deleted first so the merge doesn't undo the clear.
+  async function markAllKnownIdsDeletedForHardClear(){
+    try{
+      const diskTx = await window.storage.get('transactions');
+      (diskTx ? JSON.parse(diskTx.value) : []).forEach(t=>{ if(t && t.id) recentlyDeletedTxIds.add(t.id); });
+    }catch(e){}
+    transactions.forEach(t=>{ if(t && t.id) recentlyDeletedTxIds.add(t.id); });
+    try{
+      const diskDebts = await window.storage.get('debts');
+      (diskDebts ? JSON.parse(diskDebts.value) : []).forEach(d=>{ if(d && d.id) recentlyDeletedDebtIds.add(d.id); });
+    }catch(e){}
+    debts.forEach(d=>{ if(d && d.id) recentlyDeletedDebtIds.add(d.id); });
+    try{
+      const diskRcv = await window.storage.get('receivables');
+      (diskRcv ? JSON.parse(diskRcv.value) : []).forEach(d=>{ if(d && d.id) recentlyDeletedReceivableIds.add(d.id); });
+    }catch(e){}
+    receivables.forEach(d=>{ if(d && d.id) recentlyDeletedReceivableIds.add(d.id); });
+  }
 
   function renderTabUI(tabName){
     document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.dataset.tab===tabName));
@@ -3229,7 +3253,12 @@
 
   function bindEvents(){
     document.querySelectorAll('.tab-btn').forEach(btn=> btn.addEventListener('click', ()=> switchTab(btn.dataset.tab)));
-    document.querySelectorAll('.link-btn').forEach(btn=>{
+    // Scoped to [data-tab] specifically - .link-btn is also used for several buttons that
+    // aren't tab-navigation links at all (auth mode toggle, PIN forgot/cancel, etc). Binding
+    // this to every .link-btn indiscriminately meant clicking any of those also ran
+    // goToMoreSub(undefined, undefined), which threw inside renderTabUI (getElementById('view-undefined')
+    // is null) after already stripping .active off every view section as a side effect.
+    document.querySelectorAll('.link-btn[data-tab]').forEach(btn=>{
       btn.addEventListener('click', ()=>{ goToMoreSub(btn.dataset.tab, btn.dataset.sub); });
     });
     document.querySelectorAll('.more-row').forEach(btn=> btn.addEventListener('click', ()=> showMoreSub(btn.dataset.sub)));
@@ -3468,6 +3497,7 @@
 
     document.getElementById('reset-data-btn').addEventListener('click', async ()=>{
       if(!confirm('This will permanently delete all entries, categories, budgets, debts, goals, accounts, recurring templates, and reminders you have saved. Continue?')) return;
+      await markAllKnownIdsDeletedForHardClear();
       transactions = []; categories = defaultCategories(); settings = { currency:'₹', theme:'light' }; budgets = {}; debts = []; recurring = []; reminders = []; goals = []; accounts = defaultAccounts();
       await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
       populateEntryCategorySelect(document.getElementById('entry-type').value);
@@ -3500,12 +3530,46 @@
   // Attaches (or detaches, if user is null) a Supabase user to the already-running app —
   // used both during the very first boot and when someone who chose "Skip for now" earlier
   // logs in later from Settings, without re-running the one-time UI bootstrap below.
+  // Asks before uploading any pre-existing on-device data into the account being logged
+  // into - this device may have been used by someone else, or offline, before this login,
+  // so silently absorbing whatever's sitting in local storage was a real leak/surprise risk.
+  // Only ever asked once per device (mirrors migrateLocalDataToCloudIfNeeded's own flag) -
+  // declining doesn't leave the prompt resurfacing on every future login here.
+  async function maybeOfferLocalDataMerge(userId){
+    try{
+      const flag = await window.storage.get('migrated_to_cloud');
+      if(flag && flag.value==='true') return;
+    }catch(e){}
+    const localCount = transactions.length + debts.length + receivables.length + goals.length;
+    if(localCount===0){
+      try{ await window.trackrSync.skipMigration(); }catch(e){}
+      return;
+    }
+    const noun = localCount===1 ? 'entry' : 'entries';
+    const wantsMerge = confirm(
+      `You have ${localCount} ${noun} saved on this device from before logging in.\n\n` +
+      `Add them to your account so they sync across your devices?\n\n` +
+      `Choosing Cancel won't add them, and this device will switch to showing your account's existing cloud data instead.`
+    );
+    if(wantsMerge){
+      await window.trackrSync.migrateLocalDataToCloudIfNeeded(userId, { transactions, debts, receivables, goals, budgets });
+    } else {
+      await window.trackrSync.skipMigration();
+      // Clear this device's declined data now, before the cloud pull below overwrites transactions/
+      // debts/receivables/goals/budgets — otherwise saveTransactions()/saveDebts()/saveReceivables()'s
+      // disk-merge (see markAllKnownIdsDeletedForHardClear) would read the still-on-disk declined
+      // rows back into memory right after and upload them anyway, silently defeating "Cancel".
+      await markAllKnownIdsDeletedForHardClear();
+      transactions = []; debts = []; receivables = []; goals = []; budgets = {};
+      await saveTransactions(); await saveDebts(); await saveReceivables(); await saveGoals(); await saveBudgets();
+    }
+  }
   async function attachUserAndSync(user, refreshAfter){
     currentUser = user || null;
     syncAccountStatusUI();
     if(!currentUser) return;
     try{
-      await window.trackrSync.migrateLocalDataToCloudIfNeeded(currentUser.id, { transactions, debts, receivables, goals, budgets });
+      await maybeOfferLocalDataMerge(currentUser.id);
       const cloud = await window.trackrSync.pullCloudData(currentUser.id);
       // pullCloudData leaves a field null ONLY when that table's fetch actually threw (it always
       // returns [] / {} for a genuinely empty-but-successful query) - so this is an unambiguous
@@ -3645,10 +3709,75 @@
     }
   }
 
+  /* ---------- Diagnostic log (shared with sw.js) ----------
+     sw.js writes lifecycle events (install/activate/fetch) to this same
+     IndexedDB store from its own execution context, independent of whether
+     this page is even open. This side adds the registration-side events
+     (register called/resolved/failed, controllerchange) and exposes a
+     reader so Profile & Backup can display/copy the combined timeline -
+     the whole point being to have something to inspect *after* a failed
+     install, rather than only ever being able to theorize about timing. */
+  const DIAG_DB_NAME = 'trackrDiagnostics';
+  const DIAG_STORE_NAME = 'events';
+  function diagLogPage(event, detail){
+    try{
+      const req = indexedDB.open(DIAG_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+          req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        try{
+          const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+          tx.objectStore(DIAG_STORE_NAME).add({
+            ts: Date.now(), source:'page', event,
+            detail: detail==null ? null : (typeof detail==='string' ? detail : JSON.stringify(detail))
+          });
+          tx.oncomplete = () => db.close();
+          tx.onerror = () => db.close();
+        }catch(e){ try{ db.close(); }catch(e2){} }
+      };
+      req.onerror = () => {};
+    }catch(e){}
+  }
+  function readDiagLog(){
+    return new Promise((resolve) => {
+      try{
+        const req = indexedDB.open(DIAG_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+            req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+          }
+        };
+        req.onsuccess = () => {
+          const db = req.result;
+          try{
+            const tx = db.transaction(DIAG_STORE_NAME, 'readonly');
+            const getAll = tx.objectStore(DIAG_STORE_NAME).getAll();
+            getAll.onsuccess = () => { db.close(); resolve(getAll.result || []); };
+            getAll.onerror = () => { db.close(); resolve([]); };
+          }catch(e){ try{ db.close(); }catch(e2){} resolve([]); }
+        };
+        req.onerror = () => resolve([]);
+      }catch(e){ resolve([]); }
+    });
+  }
+  function formatDiagLog(entries){
+    if(!entries.length) return 'No diagnostic events recorded yet on this device.';
+    return entries
+      .sort((a,b)=> a.ts-b.ts)
+      .map(e => `${new Date(e.ts).toISOString()} [${e.source}] ${e.event}${e.detail ? ' — '+e.detail : ''}`)
+      .join('\n');
+  }
+  diagLogPage('page:script-start');
+
   /* ---------- PWA update detection ----------
      Only ever touches the Cache Storage API (via sw.js) - never localStorage or
      IndexedDB, so local data and the Supabase session are untouched by an update. */
   let updateInProgress = false; // only reload on controllerchange if WE asked for this activation
+  let swRegistration = null;
   function showUpdateBanner(reg){
     const el = document.getElementById('sw-update-banner');
     if(!el || !reg.waiting) return;
@@ -3674,7 +3803,13 @@
     // tab before the service worker ever got a chance to register at all, leaving nothing
     // able to serve the app offline afterward - not a cache bug at that point, just no
     // service worker in existence yet to consult.
+    diagLogPage('page:sw-register-called');
     navigator.serviceWorker.register('sw.js').then(reg => {
+      swRegistration = reg;
+      diagLogPage('page:sw-register-resolved', {
+        hasController: !!navigator.serviceWorker.controller,
+        active: !!reg.active, installing: !!reg.installing, waiting: !!reg.waiting
+      });
       // A worker may already be waiting if it installed while this tab was
       // closed/backgrounded - only prompt if something is already actively
       // controlling the page (i.e. this is a genuine update, not the very
@@ -3683,22 +3818,86 @@
       reg.addEventListener('updatefound', () => {
         const installing = reg.installing;
         if(!installing) return;
+        diagLogPage('page:updatefound');
         installing.addEventListener('statechange', () => {
+          diagLogPage('page:installing-statechange', installing.state);
           if(installing.state === 'installed' && navigator.serviceWorker.controller){
             showUpdateBanner(reg);
           }
         });
       });
-    }).catch(()=>{});
+    }).catch(err => diagLogPage('page:sw-register-failed', err && err.message));
     // clients.claim() in sw.js's activate handler fires controllerchange on the very
     // first-ever activation too (an ordinary first visit, not an update - there's no
     // "old" version to move away from) - only reload here if the user actually clicked
     // Update above, otherwise every fresh install would silently reload itself once.
     let reloadedForUpdate = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
+      diagLogPage('page:controllerchange', { updateInProgress });
       if(!updateInProgress || reloadedForUpdate) return;
       reloadedForUpdate = true;
       location.reload();
+    });
+  }
+
+  /* ---------- Manual "Check for Updates" (Profile & Backup) ---------- */
+  const checkUpdateBtn = document.getElementById('check-update-btn');
+  const appVersionNote = document.getElementById('app-version-note');
+  if(checkUpdateBtn){
+    checkUpdateBtn.addEventListener('click', async () => {
+      if(!('serviceWorker' in navigator) || !swRegistration){
+        if(appVersionNote) appVersionNote.textContent = "Updates aren't available in this browser.";
+        return;
+      }
+      checkUpdateBtn.disabled = true;
+      const originalText = checkUpdateBtn.textContent;
+      checkUpdateBtn.textContent = 'Checking…';
+      try{
+        await swRegistration.update();
+        // update() resolves once the browser has checked sw.js for changes - if that
+        // produced a new worker, it'll be sitting in .installing or .waiting by now.
+        await new Promise(r => setTimeout(r, 800));
+        if(swRegistration.waiting && navigator.serviceWorker.controller){
+          showUpdateBanner(swRegistration);
+          if(appVersionNote) appVersionNote.textContent = 'A new version is available below.';
+        } else if(swRegistration.installing){
+          if(appVersionNote) appVersionNote.textContent = 'Downloading an update — check back in a moment.';
+        } else {
+          if(appVersionNote) appVersionNote.textContent = "You're on the latest version.";
+        }
+      }catch(e){
+        if(appVersionNote) appVersionNote.textContent = "Couldn't check for updates — check your connection.";
+      } finally {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = originalText;
+      }
+    });
+  }
+
+  /* ---------- Install diagnostics viewer (Profile & Backup) ---------- */
+  const viewDiagLogBtn = document.getElementById('view-diag-log-btn');
+  const copyDiagLogBtn = document.getElementById('copy-diag-log-btn');
+  const diagLogResults = document.getElementById('diag-log-results');
+  if(viewDiagLogBtn){
+    viewDiagLogBtn.addEventListener('click', async () => {
+      const entries = await readDiagLog();
+      if(diagLogResults){
+        diagLogResults.textContent = formatDiagLog(entries);
+        diagLogResults.style.display = 'block';
+      }
+    });
+  }
+  if(copyDiagLogBtn){
+    copyDiagLogBtn.addEventListener('click', async () => {
+      const entries = await readDiagLog();
+      const text = formatDiagLog(entries);
+      try{
+        await navigator.clipboard.writeText(text);
+        showAppToast('Diagnostic log copied.');
+      }catch(e){
+        if(diagLogResults){ diagLogResults.textContent = text; diagLogResults.style.display = 'block'; }
+        showAppToast("Couldn't copy automatically — log is shown below, select and copy manually.");
+      }
     });
   }
 

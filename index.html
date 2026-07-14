@@ -25,8 +25,8 @@
   <button id="app-toast-close" type="button" aria-label="Dismiss">×</button>
 </div>
 
-<div id="sw-update-banner" role="status" style="display:none; position:fixed; left:50%; bottom:calc(14px + env(safe-area-inset-bottom)); transform:translateX(-50%); z-index:4500; background:var(--card); color:var(--ink); border:1.5px solid var(--line); box-shadow:var(--shadow); border-radius:14px; padding:10px 10px 10px 16px; align-items:center; gap:10px; max-width:calc(100vw - 32px); font-size:13.5px; font-weight:600;">
-  <span>A new version of Trackr is available</span>
+<div id="sw-update-banner" role="status" style="display:none; position:fixed; left:50%; top:calc(64px + env(safe-area-inset-top)); transform:translateX(-50%); z-index:4500; background:var(--card); color:var(--ink); border:1.5px solid var(--line); box-shadow:var(--shadow); border-radius:14px; padding:10px 10px 10px 16px; align-items:center; gap:10px; max-width:calc(100vw - 32px); font-size:13.5px; font-weight:600;">
+  <span style="white-space:nowrap;">Update available</span>
   <button type="button" class="btn-pill btn-black" id="sw-update-btn" style="padding:6px 14px; font-size:12.5px; white-space:nowrap;">Update</button>
   <button type="button" id="sw-update-dismiss" aria-label="Dismiss" style="background:none; border:none; color:var(--ink-soft); font-size:16px; line-height:1; padding:0 2px; cursor:pointer;">×</button>
 </div>
@@ -731,6 +731,18 @@
           <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Data Integrity Check</label><span class="period-hint">Scans for likely duplicate entries and debt/transaction mismatches — worth running if you've used Trackr in more than one tab or device around the same time.</span></div>
           <button class="btn-pill btn-outline" id="integrity-check-btn" style="align-self:flex-start;"><span data-icon="search" data-icon-size="14"></span> Run Check</button>
           <div id="integrity-check-results" style="display:none; margin-top:14px;"></div>
+        </div>
+        <div class="card settings-row" style="margin-top:16px; flex-direction:column; align-items:stretch;">
+          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">App Version</label><span class="period-hint" id="app-version-note">Trackr checks for updates automatically, or you can check now.</span></div>
+          <button class="btn-pill btn-outline" id="check-update-btn" style="align-self:flex-start;">Check for Updates</button>
+        </div>
+        <div class="card settings-row" style="margin-top:16px; flex-direction:column; align-items:stretch;">
+          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Install Diagnostics</label><span class="period-hint">A timestamped log of this device's service-worker install/update activity — useful if Trackr fails to open after installing to your home screen.</span></div>
+          <div class="settings-actions">
+            <button class="btn-pill btn-outline" id="view-diag-log-btn"><span data-icon="search" data-icon-size="14"></span> View Log</button>
+            <button class="btn-pill btn-outline" id="copy-diag-log-btn"><span data-icon="download" data-icon-size="14"></span> Copy Log</button>
+          </div>
+          <div id="diag-log-results" style="display:none; margin-top:14px; max-height:260px; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.5; white-space:pre-wrap; word-break:break-all; background:var(--bg); border-radius:10px; padding:10px;"></div>
         </div>
       </div>
 
