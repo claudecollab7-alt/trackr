@@ -129,6 +129,13 @@
     try{ await runOp(op); }
     catch(e){ await queuePendingWrite(op); }
   }
+  // Used by logout to decide whether it's safe to clear this device's local copy of the
+  // account's data - a non-zero count means there's still something made offline (or that
+  // failed to reach the server) that only exists on this device right now.
+  async function getPendingWriteCount(){
+    await loadPendingQueue();
+    return pendingQueue.length;
+  }
   async function retryPendingWrites(){
     if(retryInFlight) return;
     retryInFlight = true;
@@ -247,6 +254,16 @@
     }
   }
 
+  // Used by "Reset Everything" when the user explicitly confirms they also want their
+  // cloud-stored copy deleted (asked fresh every time - never remembered as a default,
+  // since this is destructive). debts/receivables share the same server-side table, so
+  // deleting by user_id here correctly removes both in one pass.
+  async function deleteAllCloudDataForUser(userId){
+    for(const table of ['transactions','debts','goals','budgets']){
+      await syncOrQueue({ kind:'delete', table, match:{ user_id:userId } });
+    }
+  }
+
   window.trackrSync = {
     client: supabaseClient,
     cameFromEmailConfirmation,
@@ -258,5 +275,7 @@
     migrateLocalDataToCloudIfNeeded,
     skipMigration,
     retryPendingWrites,
+    getPendingWriteCount,
+    deleteAllCloudDataForUser,
     purgeQueuedTables
   };

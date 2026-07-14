@@ -2782,7 +2782,32 @@
       submitBtn.disabled = false;
     }
   }
+  // Trackr is often shared across devices/people - logging out must not leave the previous
+  // account's data sitting in local storage for whoever uses the device next. But this device
+  // may hold edits made offline that never reached the cloud, so clearing local data outright
+  // could destroy real, unsynced work. Approach taken: flush the pending-write queue, then only
+  // proceed if it's confirmed empty afterward - if anything's still queued (or we can't tell,
+  // e.g. no connection right now), block the logout entirely with a clear message rather than
+  // guess. This is simpler to reason about than "clear and hope the sync finishes in time",
+  // and never leaves local storage in an ambiguous half-synced state.
   async function logOutUser(){
+    try{ await window.trackrSync.retryPendingWrites(); }catch(e){}
+    let pendingCount = -1;
+    try{ pendingCount = await window.trackrSync.getPendingWriteCount(); }catch(e){}
+    if(pendingCount !== 0){
+      alert("Couldn't confirm all your changes have synced to your account yet. Connect to the internet and try again before logging out, so nothing gets lost.");
+      return;
+    }
+    // Clear this device's copy of the account's data before actually signing out, so there's
+    // no window where the SIGNED_OUT-triggered reload (see the auth listener in init()) could
+    // land mid-clear and leave some keys wiped and others not.
+    await markAllKnownIdsDeletedForHardClear();
+    transactions = []; debts = []; receivables = []; goals = []; budgets = {};
+    categories = defaultCategories(); recurring = []; reminders = []; accounts = defaultAccounts();
+    await saveTransactions(); await saveDebts(); await saveReceivables(); await saveGoals(); await saveBudgets();
+    await saveCategories(); await saveRecurring(); await saveReminders(); await saveAccounts();
+    try{ await window.storage.set('migrated_to_cloud', 'false'); }catch(e){}
+    try{ await window.storage.set('skippedLogin', 'false'); }catch(e){}
     try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
   }
 
@@ -3497,9 +3522,18 @@
 
     document.getElementById('reset-data-btn').addEventListener('click', async ()=>{
       if(!confirm('This will permanently delete all entries, categories, budgets, debts, goals, accounts, recurring templates, and reminders you have saved. Continue?')) return;
+      // Asked fresh every time (never a remembered default) since this is destructive and
+      // irreversible - someone could reasonably expect either answer, so don't guess.
+      const alsoDeleteCloud = currentUser ? confirm(
+        "Also permanently delete this data from your account in the cloud?\n\n" +
+        "If you cancel, only this device is cleared — your account keeps its cloud copy."
+      ) : false;
       await markAllKnownIdsDeletedForHardClear();
       transactions = []; categories = defaultCategories(); settings = { currency:'₹', theme:'light' }; budgets = {}; debts = []; recurring = []; reminders = []; goals = []; accounts = defaultAccounts();
       await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
+      if(alsoDeleteCloud && currentUser){
+        try{ await window.trackrSync.deleteAllCloudDataForUser(currentUser.id); }catch(e){}
+      }
       populateEntryCategorySelect(document.getElementById('entry-type').value);
       populateEntryAccountSelect();
       populateFilterCategorySelect(document.getElementById('filter-type').value);
@@ -3546,10 +3580,12 @@
       return;
     }
     const noun = localCount===1 ? 'entry' : 'entries';
+    // Question first, consequence second - matches every other confirm() in the app (e.g.
+    // "Delete this entry? This cannot be undone."), and reads faster on a small screen than
+    // opening with context before ever getting to the actual yes/no being asked.
     const wantsMerge = confirm(
-      `You have ${localCount} ${noun} saved on this device from before logging in.\n\n` +
-      `Add them to your account so they sync across your devices?\n\n` +
-      `Choosing Cancel won't add them, and this device will switch to showing your account's existing cloud data instead.`
+      `Add the ${localCount} ${noun} saved on this device to your account?\n\n` +
+      `If you cancel, they won't be added, and this device will show your account's cloud data instead.`
     );
     if(wantsMerge){
       await window.trackrSync.migrateLocalDataToCloudIfNeeded(userId, { transactions, debts, receivables, goals, budgets });

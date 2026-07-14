@@ -2,7 +2,7 @@
   "name": "Trackr — Track. Manage. Grow.",
   "short_name": "Trackr",
   "description": "Your personal money tracker — income, expenses, budgets, and debts in one place",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
