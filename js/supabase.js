@@ -222,6 +222,13 @@
   }
 
   /* ---------- One-time migration of pre-existing local data ---------- */
+  // Records the same "handled" flag as an actual migration would, without uploading
+  // anything - used when the user is asked "add this device's data to your account?"
+  // and declines. Without this, the same prompt would resurface on every future login
+  // on this device (migrateLocalDataToCloudIfNeeded would keep seeing no flag set).
+  async function skipMigration(){
+    try{ await window.storage.set('migrated_to_cloud', 'true'); }catch(e){}
+  }
   async function migrateLocalDataToCloudIfNeeded(userId, localData){
     try{
       const flag = await window.storage.get('migrated_to_cloud');
@@ -249,6 +256,7 @@
     syncBudgets,
     pullCloudData,
     migrateLocalDataToCloudIfNeeded,
+    skipMigration,
     retryPendingWrites,
     purgeQueuedTables
   };
