@@ -742,7 +742,6 @@
             <button class="btn-pill btn-outline" id="view-diag-log-btn"><span data-icon="search" data-icon-size="14"></span> View Log</button>
             <button class="btn-pill btn-outline" id="copy-diag-log-btn"><span data-icon="download" data-icon-size="14"></span> Copy Log</button>
           </div>
-          <div id="diag-log-results" style="display:none; margin-top:14px; max-height:260px; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.5; white-space:pre-wrap; word-break:break-all; background:var(--bg); border-radius:10px; padding:10px;"></div>
         </div>
       </div>
 
@@ -922,6 +921,16 @@
       <button class="btn-pill btn-black" id="txdetail-edit-btn" style="flex:1;"><span data-icon="edit" data-icon-size="14"></span> Edit</button>
       <button class="btn-pill btn-outline" id="txdetail-delete-btn" style="flex:1; color:var(--debit); border-color:var(--debit);"><span data-icon="trash" data-icon-size="14"></span> Delete</button>
     </div>
+  </div>
+</div>
+
+<div class="search-overlay" id="diaglog-overlay" role="dialog" aria-modal="true" aria-label="Install diagnostics log">
+  <div class="search-overlay-inner">
+    <div class="search-overlay-header">
+      <div style="flex:1;"><strong>Install Diagnostics</strong></div>
+      <button class="icon-btn-sm" id="close-diaglog-btn" aria-label="Close diagnostics log"><span data-icon="x" data-icon-size="16"></span></button>
+    </div>
+    <div class="search-overlay-body"><div id="diag-log-results" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.5; white-space:pre-wrap; word-break:break-all; background:var(--bg); border-radius:10px; padding:10px;"></div></div>
   </div>
 </div>
 

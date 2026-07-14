@@ -328,6 +328,39 @@
     }catch(e){}
     receivables.forEach(d=>{ if(d && d.id) recentlyDeletedReceivableIds.add(d.id); });
   }
+  // Clears every local collection to its empty/default state and persists that directly to
+  // storage, deliberately WITHOUT going through saveTransactions/saveDebts/.../saveBudgets -
+  // those have currentUser-conditional cloud side effects (upserts, and for budgets
+  // specifically a reconcile-by-diff that deletes any cloud category not present locally),
+  // which would silently push this "just wipe the device" action out to the cloud too. Used by
+  // both logout (never intended to touch cloud data at all) and Reset Everything's local-clear
+  // step (cloud deletion, if the user opts into it, is a separate, explicit, direct call).
+  async function persistLocalKeys(pairs){
+    for(const [key, value] of pairs){
+      try{ await window.storage.set(key, JSON.stringify(value)); }catch(e){}
+    }
+  }
+  // Just the financial-history collections - used when declining to merge pre-login local
+  // data into a freshly-logged-in account, where categories/accounts/recurring/reminders
+  // aren't in scope.
+  async function clearFinancialDataNoSync(){
+    await markAllKnownIdsDeletedForHardClear();
+    transactions = []; debts = []; receivables = []; goals = []; budgets = {};
+    await persistLocalKeys([
+      ['transactions', transactions], ['debts', debts], ['receivables', receivables],
+      ['goals', goals], ['budgets', budgets]
+    ]);
+  }
+  // Everything Reset Everything/logout consider "this account's data" on this device.
+  // Deliberately leaves settings (theme/currency/etc) alone - those are a device preference,
+  // not account data, and logout (the other caller of this) has no reason to touch them.
+  async function hardClearAllLocalDataNoSync(){
+    await clearFinancialDataNoSync();
+    categories = defaultCategories(); recurring = []; reminders = []; accounts = defaultAccounts();
+    await persistLocalKeys([
+      ['categories', categories], ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
+    ]);
+  }
 
   function renderTabUI(tabName){
     document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.dataset.tab===tabName));
@@ -475,7 +508,7 @@
     });
     return row;
   }
-  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen'];
+  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen','diagLogOpen'];
   function closeAllOverlaysThenRun(action, stepsLeft){
     stepsLeft = stepsLeft===undefined ? OVERLAY_STATE_FLAGS.length : stepsLeft;
     const state = history.state;
@@ -2800,12 +2833,11 @@
     }
     // Clear this device's copy of the account's data before actually signing out, so there's
     // no window where the SIGNED_OUT-triggered reload (see the auth listener in init()) could
-    // land mid-clear and leave some keys wiped and others not.
-    await markAllKnownIdsDeletedForHardClear();
-    transactions = []; debts = []; receivables = []; goals = []; budgets = {};
-    categories = defaultCategories(); recurring = []; reminders = []; accounts = defaultAccounts();
-    await saveTransactions(); await saveDebts(); await saveReceivables(); await saveGoals(); await saveBudgets();
-    await saveCategories(); await saveRecurring(); await saveReminders(); await saveAccounts();
+    // land mid-clear and leave some keys wiped and others not. Uses the no-sync clear (not the
+    // normal saveTransactions/.../saveBudgets calls) - those have currentUser-conditional cloud
+    // side effects, and logout should never touch this account's cloud data, only this device's
+    // local copy of it.
+    await hardClearAllLocalDataNoSync();
     try{ await window.storage.set('migrated_to_cloud', 'false'); }catch(e){}
     try{ await window.storage.set('skippedLogin', 'false'); }catch(e){}
     try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
@@ -3528,11 +3560,22 @@
         "Also permanently delete this data from your account in the cloud?\n\n" +
         "If you cancel, only this device is cleared — your account keeps its cloud copy."
       ) : false;
-      await markAllKnownIdsDeletedForHardClear();
-      transactions = []; categories = defaultCategories(); settings = { currency:'₹', theme:'light' }; budgets = {}; debts = []; recurring = []; reminders = []; goals = []; accounts = defaultAccounts();
-      await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
+      // No-sync clear - saveBudgets() in particular reconciles cloud budgets by diffing against
+      // local state, which would delete every cloud budget category the instant local budgets
+      // becomes {} regardless of whether cloud deletion was actually opted into just above.
+      await hardClearAllLocalDataNoSync();
+      settings = { currency:'₹', theme:'light' };
+      try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
       if(alsoDeleteCloud && currentUser){
-        try{ await window.trackrSync.deleteAllCloudDataForUser(currentUser.id); }catch(e){}
+        // Drop any older queued write for these tables first - a stale queued upsert flushing
+        // (e.g. via the 'online' listener) after the delete below runs could otherwise
+        // resurrect a row this action just removed.
+        if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(['transactions','debts','goals','budgets']);
+        const results = await window.trackrSync.deleteAllCloudDataForUser(currentUser.id);
+        const failed = Object.keys(results).filter(t=> !results[t]);
+        if(failed.length>0){
+          showAppToast(`Couldn't delete cloud ${failed.join(', ')} — check your connection and try Reset Everything again.`);
+        }
       }
       populateEntryCategorySelect(document.getElementById('entry-type').value);
       populateEntryAccountSelect();
@@ -3592,12 +3635,12 @@
     } else {
       await window.trackrSync.skipMigration();
       // Clear this device's declined data now, before the cloud pull below overwrites transactions/
-      // debts/receivables/goals/budgets — otherwise saveTransactions()/saveDebts()/saveReceivables()'s
-      // disk-merge (see markAllKnownIdsDeletedForHardClear) would read the still-on-disk declined
-      // rows back into memory right after and upload them anyway, silently defeating "Cancel".
-      await markAllKnownIdsDeletedForHardClear();
-      transactions = []; debts = []; receivables = []; goals = []; budgets = {};
-      await saveTransactions(); await saveDebts(); await saveReceivables(); await saveGoals(); await saveBudgets();
+      // debts/receivables/goals/budgets. Uses the no-sync clear, not saveTransactions/.../saveBudgets -
+      // those have currentUser-conditional cloud side effects (saveBudgets in particular reconciles
+      // by diff and would delete every cloud budget category not present in this now-empty local
+      // state), which would reach out and touch this account's real cloud data over something that's
+      // only meant to discard what's sitting on this one device.
+      await clearFinancialDataNoSync();
     }
   }
   async function attachUserAndSync(user, refreshAfter){
@@ -3666,6 +3709,7 @@
       if(!state.notificationsOpen){ closeNotificationsOverlay(); }
       if(!state.debtDetailOpen){ closeDebtDetail(); }
       if(!state.goalDetailOpen){ closeGoalDetail(); }
+      if(!state.diagLogOpen){ closeDiagLogOverlay(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){
@@ -3910,19 +3954,25 @@
     });
   }
 
-  /* ---------- Install diagnostics viewer (Profile & Backup) ---------- */
+  /* ---------- Install diagnostics viewer (Profile & Backup) ----------
+     A real overlay (not an inline expanding div) - the earlier inline version could render
+     entirely below the fold on a tall settings page with no visible change above it, which
+     is exactly what looked like "View Log does nothing" on desktop. Follows the same
+     showOverlay/hideOverlay + history-state pattern as every other overlay in the app, so
+     the close button, tapping the backdrop, and the browser/gesture back button all work. */
   const viewDiagLogBtn = document.getElementById('view-diag-log-btn');
   const copyDiagLogBtn = document.getElementById('copy-diag-log-btn');
   const diagLogResults = document.getElementById('diag-log-results');
-  if(viewDiagLogBtn){
-    viewDiagLogBtn.addEventListener('click', async () => {
-      const entries = await readDiagLog();
-      if(diagLogResults){
-        diagLogResults.textContent = formatDiagLog(entries);
-        diagLogResults.style.display = 'block';
-      }
-    });
+  async function openDiagLogOverlay(){
+    const entries = await readDiagLog();
+    if(diagLogResults) diagLogResults.textContent = formatDiagLog(entries);
+    showOverlay('diaglog-overlay');
+    if(!(history.state && history.state.diagLogOpen)) history.pushState({ diagLogOpen:true }, '', '');
   }
+  function closeDiagLogOverlay(){ hideOverlay('diaglog-overlay'); }
+  if(viewDiagLogBtn) viewDiagLogBtn.addEventListener('click', openDiagLogOverlay);
+  document.getElementById('close-diaglog-btn').addEventListener('click', ()=> history.back());
+  document.getElementById('diaglog-overlay').addEventListener('click', (e)=>{ if(e.target.id==='diaglog-overlay') history.back(); });
   if(copyDiagLogBtn){
     copyDiagLogBtn.addEventListener('click', async () => {
       const entries = await readDiagLog();
@@ -3931,7 +3981,7 @@
         await navigator.clipboard.writeText(text);
         showAppToast('Diagnostic log copied.');
       }catch(e){
-        if(diagLogResults){ diagLogResults.textContent = text; diagLogResults.style.display = 'block'; }
+        await openDiagLogOverlay();
         showAppToast("Couldn't copy automatically — log is shown below, select and copy manually.");
       }
     });
