@@ -258,10 +258,22 @@
   // cloud-stored copy deleted (asked fresh every time - never remembered as a default,
   // since this is destructive). debts/receivables share the same server-side table, so
   // deleting by user_id here correctly removes both in one pass.
+  // Runs each delete directly (not via syncOrQueue) and reports per-table success/failure -
+  // this is a deliberate, explicit deletion the user just confirmed, so a failure should be
+  // surfaced right away rather than silently queued for a "later" that might never prompt a
+  // retry, leaving the caller wrongly believing the cloud copy is gone.
   async function deleteAllCloudDataForUser(userId){
+    const results = {};
     for(const table of ['transactions','debts','goals','budgets']){
-      await syncOrQueue({ kind:'delete', table, match:{ user_id:userId } });
+      try{
+        await runOp({ kind:'delete', table, match:{ user_id:userId } });
+        results[table] = true;
+      }catch(e){
+        results[table] = false;
+        console.error(`Failed to delete cloud "${table}" rows for user:`, e);
+      }
     }
+    return results;
   }
 
   window.trackrSync = {
