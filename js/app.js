@@ -3858,6 +3858,19 @@
      IndexedDB, so local data and the Supabase session are untouched by an update. */
   let updateInProgress = false; // only reload on controllerchange if WE asked for this activation
   let swRegistration = null;
+  // Asks the ACTUAL controlling service worker what version it is, rather than trusting a
+  // hardcoded string on the page - a stale-cached page could otherwise report a build number
+  // that doesn't match what's really running. Resolves null if there's no controller yet
+  // (very first load, before activation) or the worker doesn't answer in time.
+  function getRunningSwVersion(){
+    return new Promise((resolve) => {
+      if(!('serviceWorker' in navigator) || !navigator.serviceWorker.controller){ resolve(null); return; }
+      const channel = new MessageChannel();
+      const timer = setTimeout(()=> resolve(null), 1500);
+      channel.port1.onmessage = (e) => { clearTimeout(timer); resolve(e.data && e.data.version || null); };
+      navigator.serviceWorker.controller.postMessage({ type:'GET_VERSION' }, [channel.port2]);
+    });
+  }
   function showUpdateBanner(reg){
     const el = document.getElementById('sw-update-banner');
     if(!el || !reg.waiting) return;
@@ -3890,6 +3903,7 @@
         hasController: !!navigator.serviceWorker.controller,
         active: !!reg.active, installing: !!reg.installing, waiting: !!reg.waiting
       });
+      updateVersionDisplay();
       // A worker may already be waiting if it installed while this tab was
       // closed/backgrounded - only prompt if something is already actively
       // controlling the page (i.e. this is a genuine update, not the very
@@ -3914,6 +3928,7 @@
     let reloadedForUpdate = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       diagLogPage('page:controllerchange', { updateInProgress });
+      updateVersionDisplay();
       if(!updateInProgress || reloadedForUpdate) return;
       reloadedForUpdate = true;
       location.reload();
@@ -3923,6 +3938,14 @@
   /* ---------- Manual "Check for Updates" (Profile & Backup) ---------- */
   const checkUpdateBtn = document.getElementById('check-update-btn');
   const appVersionNote = document.getElementById('app-version-note');
+  // Shows which build is ACTUALLY running on this device (via the controlling service worker
+  // itself, not a hardcoded string) - this is what makes "have I actually gotten a given fix
+  // yet" a directly checkable fact instead of a guess, on either side.
+  async function updateVersionDisplay(){
+    if(!appVersionNote) return;
+    const version = await getRunningSwVersion();
+    if(version) appVersionNote.textContent = `Running build ${version} on this device. Checks for updates automatically, or check now.`;
+  }
   if(checkUpdateBtn){
     checkUpdateBtn.addEventListener('click', async () => {
       if(!('serviceWorker' in navigator) || !swRegistration){
@@ -3943,7 +3966,7 @@
         } else if(swRegistration.installing){
           if(appVersionNote) appVersionNote.textContent = 'Downloading an update — check back in a moment.';
         } else {
-          if(appVersionNote) appVersionNote.textContent = "You're on the latest version.";
+          await updateVersionDisplay();
         }
       }catch(e){
         if(appVersionNote) appVersionNote.textContent = "Couldn't check for updates — check your connection.";
