@@ -3657,11 +3657,21 @@
       // local cache (empty, on a device that had never synced before) with zero indication to the
       // user that the numbers on screen didn't reflect what's actually in Supabase.
       const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null;
-      if(cloud.transactions!==null){ transactions = cloud.transactions; await saveTransactions(); }
-      if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveDebts(); }
-      if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); await saveReceivables(); }
-      if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); await saveGoals(); }
-      if(cloud.budgets!==null){ budgets = cloud.budgets; await saveBudgets(); }
+      // Persisted directly, NOT via saveTransactions/saveDebts/saveReceivables - a fresh cloud
+      // pull is the account's authoritative state, but those functions merge the incoming data
+      // against whatever's still sitting on THIS device's local disk (deliberate for ordinary
+      // edits, to protect a concurrent write from a different tab). Reusing them here meant
+      // anything deleted on another device (or in a previous session on this one - Reset
+      // Everything, a single delete, anything) would get silently resurrected locally the
+      // moment this device next pulled and merged its own stale disk copy back in. A pull
+      // should replace local state outright, never merge with what it's about to supersede.
+      const toPersist = [];
+      if(cloud.transactions!==null){ transactions = cloud.transactions; toPersist.push(['transactions', transactions]); }
+      if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['debts', debts]); }
+      if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['receivables', receivables]); }
+      if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
+      if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
+      await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
       if(pullFailed) showAppToast("Couldn't load your latest data from the cloud — showing what's saved on this device.");
     }catch(e){
