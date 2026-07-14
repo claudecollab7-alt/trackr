@@ -2602,11 +2602,27 @@
   let resendCooldownUntil = 0;
   let resendCooldownTimer = null;
 
+  // The login gate has no other content behind it to protect against once its hit-testing
+  // is confirmed solid (z-index 4000 vs the bottom-nav's 50 - clicks at the nav's screen
+  // position land on the overlay, not the nav, confirmed directly). But mobile browsers can
+  // still transiently reveal fixed-position content underneath a scrollable page during their
+  // own toolbar-collapse animation on scroll - locking body scroll entirely while any
+  // full-screen gate is up removes the scroll gesture that triggers that in the first place,
+  // rather than relying on the animation always landing in a correct end state.
+  function lockBodyScroll(){
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  }
+  function unlockBodyScroll(){
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+  }
   function showAuthFormView(){
     document.getElementById('auth-overlay').style.display = 'flex';
     document.getElementById('auth-form-view').style.display = 'flex';
     document.getElementById('auth-checkinbox-view').style.display = 'none';
     document.getElementById('auth-confirmed-view').style.display = 'none';
+    lockBodyScroll();
   }
   function showAuthCheckInboxView(email){
     document.getElementById('auth-overlay').style.display = 'flex';
@@ -2617,12 +2633,14 @@
     pendingConfirmEmail = email;
     resendCooldownUntil = 0;
     updateResendButtonState();
+    lockBodyScroll();
   }
   function showAuthConfirmedView(){
     document.getElementById('auth-overlay').style.display = 'flex';
     document.getElementById('auth-form-view').style.display = 'none';
     document.getElementById('auth-checkinbox-view').style.display = 'none';
     document.getElementById('auth-confirmed-view').style.display = 'flex';
+    lockBodyScroll();
   }
   function showAuthOverlay(mode){
     authMode = mode || 'login';
@@ -2645,7 +2663,10 @@
     }
     showAuthFormView();
   }
-  function hideAuthOverlay(){ document.getElementById('auth-overlay').style.display = 'none'; }
+  function hideAuthOverlay(){
+    document.getElementById('auth-overlay').style.display = 'none';
+    unlockBodyScroll();
+  }
   function showAuthError(msg){
     const err = document.getElementById('auth-error');
     err.textContent = msg; err.style.display = 'block';
@@ -2880,11 +2901,13 @@
       }
     }
     overlay.style.display = 'flex';
+    lockBodyScroll();
     updatePinAttemptsUI();
     setTimeout(()=>{ const i = mode==='recover' ? recoveryInput : pinInput; if(i) i.focus(); }, 60);
   }
   function hidePinOverlay(){
     document.getElementById('pinlock-overlay').style.display = 'none';
+    unlockBodyScroll();
     if(pinLockoutInterval){ clearInterval(pinLockoutInterval); pinLockoutInterval = null; }
   }
   function showPinError(msg){
@@ -2907,6 +2930,7 @@
     document.getElementById('pinlock-recovery-code').textContent = code;
     document.getElementById('pinlock-recovery-display').style.display = 'flex';
     document.getElementById('pinlock-overlay').style.display = 'flex';
+    lockBodyScroll();
   }
   async function handlePinSubmit(){
     if(pinMode==='recover'){
@@ -3644,24 +3668,28 @@
 
   if ('serviceWorker' in navigator) {
     document.getElementById('sw-update-dismiss').addEventListener('click', hideUpdateBanner);
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').then(reg => {
-        // A worker may already be waiting if it installed while this tab was
-        // closed/backgrounded - only prompt if something is already actively
-        // controlling the page (i.e. this is a genuine update, not the very
-        // first-ever install, which also transiently has no controller yet).
-        if(reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
-        reg.addEventListener('updatefound', () => {
-          const installing = reg.installing;
-          if(!installing) return;
-          installing.addEventListener('statechange', () => {
-            if(installing.state === 'installed' && navigator.serviceWorker.controller){
-              showUpdateBanner(reg);
-            }
-          });
+    // Registered immediately rather than waiting for window's 'load' event (which only fires
+    // once every image/font/CDN script has finished) - on a slow connection, that delay was
+    // exactly the window where someone could install to the home screen and background the
+    // tab before the service worker ever got a chance to register at all, leaving nothing
+    // able to serve the app offline afterward - not a cache bug at that point, just no
+    // service worker in existence yet to consult.
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      // A worker may already be waiting if it installed while this tab was
+      // closed/backgrounded - only prompt if something is already actively
+      // controlling the page (i.e. this is a genuine update, not the very
+      // first-ever install, which also transiently has no controller yet).
+      if(reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        if(!installing) return;
+        installing.addEventListener('statechange', () => {
+          if(installing.state === 'installed' && navigator.serviceWorker.controller){
+            showUpdateBanner(reg);
+          }
         });
-      }).catch(()=>{});
-    });
+      });
+    }).catch(()=>{});
     // clients.claim() in sw.js's activate handler fires controllerchange on the very
     // first-ever activation too (an ordinary first visit, not an update - there's no
     // "old" version to move away from) - only reload here if the user actually clicked
