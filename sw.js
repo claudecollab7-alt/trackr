@@ -3,7 +3,7 @@
 // CACHE_NAME never changing between deploys is why updates used to go
 // unnoticed forever (the activate handler's old-cache cleanup had nothing to
 // clean, since the "old" and "new" cache name were identical).
-const SW_VERSION = 'v3';
+const SW_VERSION = 'v4';
 const CACHE_NAME = 'trackr-' + SW_VERSION;
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
@@ -88,6 +88,12 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     diagLog('message:skip-waiting-received');
     self.skipWaiting();
+  }
+  // Lets the page ask the ACTUAL controlling worker what version it is, rather than trusting
+  // a hardcoded string on the page side (which could itself be served from a stale cache) -
+  // this is the one value that can't lie about which build is really running right now.
+  if (event.data && event.data.type === 'GET_VERSION' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ version: SW_VERSION });
   }
 });
 
