@@ -513,11 +513,19 @@
   }
 
   #app-toast{
-    position:fixed; left:50%; top:calc(14px + env(safe-area-inset-top)); z-index:5000;
-    transform:translateX(-50%) translateY(-160%);
+    /* Anchored below the topbar (not just a fixed 14px from the viewport edge) - a
+       multi-line message here was reaching down far enough to overlap the topbar's
+       icons and the Home balance card right below it. */
+    position:fixed; left:50%; top:calc(76px + env(safe-area-inset-top)); z-index:5000;
+    /* A fixed pixel offset, not a percentage of the toast's own height - percentage-based
+       hiding broke when the resting "top" was moved down to clear the topbar (a short
+       toast's -160% no longer cleared the viewport, so it sat mid-header intercepting
+       clicks even while "hidden"). A flat -160px reliably clears the top of the viewport
+       regardless of how tall any given message happens to render. */
+    transform:translateX(-50%) translateY(-160px);
     display:flex; align-items:center; gap:12px; background:var(--debit); color:#fff;
     padding:12px 16px; border-radius:14px; box-shadow:var(--shadow); font-size:13.5px; font-weight:600;
-    transition:transform .22s ease; max-width:calc(100vw - 32px);
+    transition:transform .22s ease; width:calc(100vw - 32px); max-width:420px;
   }
   #app-toast.show{ transform:translateX(-50%) translateY(0); }
   #app-toast.info{ background:var(--binder); }
