@@ -2139,7 +2139,30 @@
       try{
         const data = JSON.parse(reader.result);
         if(!Array.isArray(data.transactions) || !data.categories){ throw new Error('Invalid file'); }
-        if(!confirm('This will replace all current data with the contents of this backup file. Continue?')) return;
+        // Explicit, unambiguous: a full replace, every data type, no exceptions - matches how
+        // categories/settings/wallets/recurring/reminders/budgets already behaved; transactions/
+        // debts/receivables used to silently merge instead (see below), which is exactly what
+        // this confirmation now rules out up front.
+        if(!confirm(
+          "Replace ALL current data with this backup file?\n\n" +
+          "Everything you have now — transactions, debts, receivables, goals, budgets, categories, " +
+          "wallets, and reminders — will be permanently deleted, on this device and in your account. " +
+          "This cannot be undone."
+        )) return;
+
+        // Delete this account's existing cloud data BEFORE writing anything new - a full
+        // replace means nothing from before should survive anywhere, not just locally. (Doing
+        // this first, rather than after uploading the restored data, avoids a brief window
+        // where a delete running late could wipe out the very data just restored.)
+        if(currentUser){
+          if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(['transactions','debts','goals','budgets']);
+          const results = await window.trackrSync.deleteAllCloudDataForUser(currentUser.id);
+          const failed = Object.keys(results).filter(t=> !results[t]);
+          if(failed.length>0){
+            showAppToast(`Couldn't clear cloud ${failed.join(', ')} before restoring — check your connection and try again.`);
+          }
+        }
+
         transactions = data.transactions || []; categories = data.categories || defaultCategories();
         settings = data.settings || { currency:'₹' }; budgets = data.budgets || {}; debts = Array.isArray(data.debts) ? data.debts : [];
         receivables = Array.isArray(data.receivables) ? data.receivables : [];
@@ -2147,7 +2170,23 @@
         goals = Array.isArray(data.goals) ? data.goals : [];
         accounts = Array.isArray(data.accounts) && data.accounts.length ? data.accounts : defaultAccounts();
         if(!settings.theme) settings.theme = 'light';
-        await saveTransactions(); await saveCategories(); await saveSettings(); await saveBudgets(); await saveDebts(); await saveReceivables(); await saveRecurring(); await saveReminders(); await saveGoals(); await saveAccounts();
+        // Written directly, NOT via saveTransactions/saveDebts/saveReceivables - those merge
+        // against whatever's still on local disk (deliberate for ordinary edits), which is
+        // exactly what silently kept this device's prior entries alongside the restored ones
+        // instead of replacing them. A restore should replace outright, same as everything else
+        // in this function already does.
+        await persistLocalKeys([
+          ['transactions', transactions], ['debts', debts], ['receivables', receivables],
+          ['goals', goals], ['budgets', budgets], ['categories', categories], ['settings', settings],
+          ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
+        ]);
+        if(currentUser){
+          window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
+          window.trackrSync.syncUpsertDebts(currentUser.id, debts);
+          window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
+          window.trackrSync.syncUpsertGoals(currentUser.id, goals);
+          window.trackrSync.syncBudgets(currentUser.id, budgets);
+        }
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
         populateFilterCategorySelect(document.getElementById('filter-type').value);
@@ -3673,10 +3712,10 @@
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
       await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
-      if(pullFailed) showAppToast("Couldn't load your latest data from the cloud — showing what's saved on this device.");
+      if(pullFailed) showAppToast("Couldn't reach the cloud — showing this device's saved data.");
     }catch(e){
       console.error('Cloud sync failed, continuing with local cache:', e);
-      showAppToast("Couldn't load your latest data from the cloud — showing what's saved on this device.");
+      showAppToast("Couldn't reach the cloud — showing this device's saved data.");
     }
     if(refreshAfter) refreshAll();
   }
