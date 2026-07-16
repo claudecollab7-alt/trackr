@@ -136,9 +136,15 @@
   .cat-grid-cell{ background:var(--bg); border-radius:16px; padding:14px; position:relative; }
   .cat-grid-cell.clickable-row{ cursor:pointer; transition:transform .1s; }
   .cat-grid-cell.clickable-row:active{ transform:scale(.97); }
-  .cat-grid-top{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
-  .cat-amt{ font-size:15px; font-weight:700; }
-  .cat-pct{ font-size:11.5px; font-weight:700; color:var(--ink-soft); }
+  .cat-grid-top{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .cat-amt{ font-size:15px; font-weight:700; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* A tinted pill, not bare text jammed into the corner - gap-based layout (not
+     space-between) keeps it anchored right next to the amount at any card width,
+     instead of drifting off to the far edge on wide desktop cards. */
+  .cat-pct{
+    font-size:11px; font-weight:700; flex-shrink:0;
+    padding:3px 9px; border-radius:999px; line-height:1.4;
+  }
   .cat-grid-name{ font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:10px; }
   .cat-badge.sm{ width:26px; height:26px; font-size:11px; }
 

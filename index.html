@@ -851,9 +851,52 @@
       <p id="auth-info" style="display:none; color:var(--credit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
       <button type="submit" class="btn-pill btn-black" id="auth-submit-btn" style="justify-content:center;">Log In</button>
     </form>
+    <button class="link-btn" id="auth-forgot-password-btn">Forgot password?</button>
     <button class="link-btn" id="auth-toggle-mode-btn">Don't have an account? Sign up</button>
     <button class="link-btn" id="auth-skip-btn" style="color:var(--ink-soft);">Skip for now, use offline</button>
     <p style="margin:8px 0 0; color:var(--ink-soft); font-size:11.5px; max-width:280px;">Your data always stays on this device too — logging in just adds automatic backup and sync across devices.</p>
+  </div>
+
+  <div id="auth-forgot-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Reset your password</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your account email and we'll send you a link to set a new password.</p>
+    <form id="auth-forgot-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
+      <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Email
+        <input type="email" id="auth-forgot-email" autocomplete="email" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
+      </label>
+      <p id="auth-forgot-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
+      <button type="submit" class="btn-pill btn-black" id="auth-forgot-submit-btn" style="justify-content:center;">Send Reset Link</button>
+    </form>
+    <button class="link-btn" id="auth-forgot-back-btn">Back to Log In</button>
+  </div>
+
+  <div id="auth-forgot-sent-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="bell" data-icon-size="24"></span></div>
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Check your inbox</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">If <strong id="auth-forgot-sent-email" style="color:var(--ink);"></strong> has an account, we've sent a link to reset your password.</p>
+    <button class="link-btn" id="auth-forgot-sent-back-btn">Back to Log In</button>
+  </div>
+
+  <div id="auth-reset-password-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Set a new password</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Choose a new password for your account.</p>
+    <form id="auth-reset-password-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
+      <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">New password
+        <div style="position:relative; margin-top:4px;">
+          <input type="password" id="auth-reset-password" autocomplete="new-password" required minlength="6" style="width:100%; padding:12px 42px 12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
+          <button type="button" id="auth-reset-password-toggle" aria-label="Show password" style="position:absolute; right:4px; top:0; bottom:0; background:none; border:none; padding:0 8px; color:var(--ink-soft); display:flex; align-items:center; cursor:pointer;"><span data-icon="eye" data-icon-size="18"></span></button>
+        </div>
+      </label>
+      <p id="auth-reset-password-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
+      <button type="submit" class="btn-pill btn-black" id="auth-reset-password-submit-btn" style="justify-content:center;">Set New Password</button>
+    </form>
+  </div>
+
+  <div id="auth-reset-done-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+    <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="target" data-icon-size="24"></span></div>
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Password updated</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Your password has been changed — log in with your new password.</p>
+    <button class="btn-pill btn-black" id="auth-reset-done-login-btn" style="justify-content:center; width:100%; max-width:280px;">Log In</button>
   </div>
 
   <div id="auth-checkinbox-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
