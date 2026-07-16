@@ -15,6 +15,10 @@
   // app.js uses this to show a distinct "email confirmed" screen instead of silently
   // dropping the user straight into a live session from a confirmation-link click.
   const cameFromEmailConfirmation = /type=signup/.test(location.hash) || /type=signup/.test(location.search);
+  // A password-reset link lands back here the same way - detectSessionInUrl would otherwise
+  // silently establish a live "recovery" session and drop the user straight into the app.
+  // app.js uses this to show a dedicated "set a new password" screen instead.
+  const cameFromPasswordRecovery = /type=recovery/.test(location.hash) || /type=recovery/.test(location.search);
 
   const supabaseClient = window.supabase.createClient(
     'https://jjnxtmfntixysqvoighh.supabase.co',
@@ -279,6 +283,7 @@
   window.trackrSync = {
     client: supabaseClient,
     cameFromEmailConfirmation,
+    cameFromPasswordRecovery,
     syncUpsertTransactions, syncDeleteTransaction,
     syncUpsertDebts, syncUpsertReceivables, syncDeleteDebt,
     syncUpsertGoals, syncDeleteGoal,

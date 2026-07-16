@@ -613,6 +613,8 @@
     toggle: 'sfx/sfx-toggle-click.wav'
   };
   const sfxCache = {};
+  let sfxAudioCtx = null;
+  const sfxBuffers = {};
   // Construct + load every clip once up front so the very first play of each sound doesn't
   // pay a fetch/decode delay — a fresh `new Audio(src)` per play call is what caused the lag.
   function preloadSfx(){
@@ -623,10 +625,51 @@
       try{ audio.load(); }catch(e){}
       sfxCache[name] = audio;
     });
+    // The HTMLAudioElement path above starts playback instantly, but a couple of the source
+    // clips (the mp3s) have ~150-200ms of near-silence baked into the start of the file itself
+    // — that's the actual "delay before playing" being reported, not a preload/caching problem.
+    // Decoding into an AudioBuffer lets playback start partway in, skipping that dead air.
+    // Falls back to the plain <audio> path above (harmless double-declaration of source) if
+    // Web Audio is unavailable or a decode fails.
+    try{
+      sfxAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      Object.keys(SFX_FILES).forEach(async name=>{
+        try{
+          const resp = await fetch(SFX_FILES[name]);
+          const arr = await resp.arrayBuffer();
+          const buffer = await sfxAudioCtx.decodeAudioData(arr);
+          sfxBuffers[name] = { buffer, offset: findLeadingSilenceOffsetSec(buffer) };
+        }catch(e){}
+      });
+    }catch(e){ sfxAudioCtx = null; }
+  }
+  // Scans for the first sample past a small amplitude threshold and trims just before it
+  // (10ms of headroom so the onset doesn't sound clipped) - silence below this level reads
+  // as inaudible dead air, not part of the actual sound.
+  function findLeadingSilenceOffsetSec(buffer){
+    const data = buffer.getChannelData(0);
+    const threshold = 0.02;
+    for(let i=0;i<data.length;i++){
+      if(Math.abs(data[i]) > threshold) return Math.max(0, i/buffer.sampleRate - 0.01);
+    }
+    return 0;
   }
   function playSfx(name){
     if(settings.sfxEnabled===false) return;
     const src = SFX_FILES[name]; if(!src) return;
+    const entry = sfxBuffers[name];
+    if(entry && sfxAudioCtx){
+      try{
+        if(sfxAudioCtx.state==='suspended') sfxAudioCtx.resume();
+        const source = sfxAudioCtx.createBufferSource();
+        source.buffer = entry.buffer;
+        const gain = sfxAudioCtx.createGain();
+        gain.gain.value = 0.55;
+        source.connect(gain).connect(sfxAudioCtx.destination);
+        source.start(0, entry.offset);
+        return;
+      }catch(e){} // fall through to the <audio> path below
+    }
     try{
       let audio = sfxCache[name];
       if(!audio){ audio = new Audio(src); audio.volume = 0.55; sfxCache[name] = audio; }
@@ -705,7 +748,7 @@
       const pct = total ? Math.round(amt/total*100) : 0;
       const color = categoryColor(cat);
       const cell = document.createElement('div'); cell.className='cat-grid-cell clickable-row';
-      cell.innerHTML = `<div class="cat-grid-top"><span class="cat-amt mono-num">${fmt(amt)}</span><span class="cat-pct">${pct}%</span></div><div class="cat-grid-name">${escapeHtml(cat)}</div><span class="cat-badge sm" style="background:${color};">${categoryInitial(cat)}</span>`;
+      cell.innerHTML = `<div class="cat-grid-top"><span class="cat-amt mono-num">${fmt(amt)}</span><span class="cat-pct" style="background:${color}1a; color:${color};">${pct}%</span></div><div class="cat-grid-name">${escapeHtml(cat)}</div><span class="cat-badge sm" style="background:${color};">${categoryInitial(cat)}</span>`;
       cell.addEventListener('click', ()=>{
         const catTx = monthExpense.filter(t=>t.category===cat);
         openCategoryDetail(cat, `${fmt(amt)} this month`, catTx);
@@ -2713,30 +2756,41 @@
     document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
   }
-  function showAuthFormView(){
+  const AUTH_VIEW_IDS = ['auth-form-view','auth-checkinbox-view','auth-confirmed-view','auth-forgot-view','auth-forgot-sent-view','auth-reset-password-view','auth-reset-done-view'];
+  function showOnlyAuthView(id){
     document.getElementById('auth-overlay').style.display = 'flex';
-    document.getElementById('auth-form-view').style.display = 'flex';
-    document.getElementById('auth-checkinbox-view').style.display = 'none';
-    document.getElementById('auth-confirmed-view').style.display = 'none';
+    AUTH_VIEW_IDS.forEach(v=>{ document.getElementById(v).style.display = (v===id) ? 'flex' : 'none'; });
     lockBodyScroll();
   }
+  function showAuthFormView(){
+    showOnlyAuthView('auth-form-view');
+  }
   function showAuthCheckInboxView(email){
-    document.getElementById('auth-overlay').style.display = 'flex';
-    document.getElementById('auth-form-view').style.display = 'none';
-    document.getElementById('auth-checkinbox-view').style.display = 'flex';
-    document.getElementById('auth-confirmed-view').style.display = 'none';
+    showOnlyAuthView('auth-checkinbox-view');
     document.getElementById('auth-checkinbox-email').textContent = email;
     pendingConfirmEmail = email;
     resendCooldownUntil = 0;
     updateResendButtonState();
-    lockBodyScroll();
   }
   function showAuthConfirmedView(){
-    document.getElementById('auth-overlay').style.display = 'flex';
-    document.getElementById('auth-form-view').style.display = 'none';
-    document.getElementById('auth-checkinbox-view').style.display = 'none';
-    document.getElementById('auth-confirmed-view').style.display = 'flex';
-    lockBodyScroll();
+    showOnlyAuthView('auth-confirmed-view');
+  }
+  function showAuthForgotView(){
+    document.getElementById('auth-forgot-error').style.display = 'none';
+    const loginEmail = document.getElementById('auth-email').value.trim();
+    if(loginEmail) document.getElementById('auth-forgot-email').value = loginEmail;
+    showOnlyAuthView('auth-forgot-view');
+  }
+  function showAuthForgotSentView(email){
+    document.getElementById('auth-forgot-sent-email').textContent = email;
+    showOnlyAuthView('auth-forgot-sent-view');
+  }
+  function showAuthResetPasswordView(){
+    document.getElementById('auth-reset-password-error').style.display = 'none';
+    showOnlyAuthView('auth-reset-password-view');
+  }
+  function showAuthResetDoneView(){
+    showOnlyAuthView('auth-reset-done-view');
   }
   function showAuthOverlay(mode){
     authMode = mode || 'login';
@@ -2751,11 +2805,13 @@
       subtitle.textContent = 'Create an account to back up and sync your data across devices.';
       submitBtn.textContent = 'Sign Up';
       toggleBtn.textContent = 'Already have an account? Log in';
+      document.getElementById('auth-forgot-password-btn').style.display = 'none';
     } else {
       title.textContent = 'Log In';
       subtitle.textContent = 'Log in to back up and sync your data across devices.';
       submitBtn.textContent = 'Log In';
       toggleBtn.textContent = "Don't have an account? Sign up";
+      document.getElementById('auth-forgot-password-btn').style.display = '';
     }
     showAuthFormView();
   }
@@ -2826,6 +2882,58 @@
     input.type = showing ? 'password' : 'text';
     btn.innerHTML = icon(showing ? 'eye' : 'eyeOff', 18);
     btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  }
+  function toggleResetPasswordVisibility(){
+    const input = document.getElementById('auth-reset-password');
+    const btn = document.getElementById('auth-reset-password-toggle');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.innerHTML = icon(showing ? 'eye' : 'eyeOff', 18);
+    btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  }
+  async function handleForgotPasswordSubmit(e){
+    e.preventDefault();
+    const email = document.getElementById('auth-forgot-email').value.trim();
+    const errEl = document.getElementById('auth-forgot-error');
+    if(!email){ errEl.textContent = 'Enter your email.'; errEl.style.display = 'block'; return; }
+    const submitBtn = document.getElementById('auth-forgot-submit-btn');
+    submitBtn.disabled = true;
+    try{
+      const { error } = await window.trackrSync.client.auth.resetPasswordForEmail(email, {
+        redirectTo: location.origin + location.pathname
+      });
+      // Deliberately doesn't distinguish "no account with that email" from success - confirming
+      // or denying an email's existence to an unauthenticated caller is its own small leak.
+      if(error){ errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block'; return; }
+      showAuthForgotSentView(email);
+    }catch(e){
+      errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
+    }finally{
+      submitBtn.disabled = false;
+    }
+  }
+  async function handleResetPasswordSubmit(e){
+    e.preventDefault();
+    const password = document.getElementById('auth-reset-password').value;
+    const errEl = document.getElementById('auth-reset-password-error');
+    if(!password || password.length<6){ errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display = 'block'; return; }
+    const submitBtn = document.getElementById('auth-reset-password-submit-btn');
+    submitBtn.disabled = true;
+    try{
+      const { error } = await window.trackrSync.client.auth.updateUser({ password });
+      if(error){ errEl.textContent = error.message || 'Could not update your password. Try again.'; errEl.style.display = 'block'; return; }
+      // The recovery link left a live session behind (that's how updateUser() above could act
+      // on this account at all) - sign out of it deliberately, matching the rest of this auth
+      // flow's pattern of never silently dropping someone into a session from an email-link
+      // click, and requiring an explicit login with the credentials they just set.
+      try{ await window.trackrSync.client.auth.signOut(); }catch(e2){}
+      if(history.replaceState) history.replaceState(null, '', location.pathname);
+      showAuthResetDoneView();
+    }catch(e){
+      errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
+    }finally{
+      submitBtn.disabled = false;
+    }
   }
   async function handleAuthSubmit(e){
     e.preventDefault();
@@ -3097,6 +3205,13 @@
         await saveSettings();
         pendingNewPin = null;
         syncAppLockUI();
+        // Recovery-reset reaches this branch while isAppLocked is still true (set by the
+        // lockApp() call that put up the overlay in the first place) - left uncleared,
+        // lockApp() would silently no-op on every future background/reopen (it early-returns
+        // when it already thinks it's locked), permanently disabling re-locking for the rest
+        // of the session. Harmless to clear here even for the toggle-enable/change-PIN
+        // contexts, where it's already false.
+        isAppLocked = false;
         resetAppLockTimer();
         showRecoveryCodeOnce(recoveryCode);
       } else {
@@ -3786,6 +3901,13 @@
     document.getElementById('auth-resend-btn').addEventListener('click', handleResendConfirmation);
     document.getElementById('auth-checkinbox-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
     document.getElementById('auth-confirmed-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    document.getElementById('auth-forgot-password-btn').addEventListener('click', showAuthForgotView);
+    document.getElementById('auth-forgot-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    document.getElementById('auth-forgot-sent-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    document.getElementById('auth-forgot-form').addEventListener('submit', handleForgotPasswordSubmit);
+    document.getElementById('auth-reset-password-toggle').addEventListener('click', toggleResetPasswordVisibility);
+    document.getElementById('auth-reset-password-form').addEventListener('submit', handleResetPasswordSubmit);
+    document.getElementById('auth-reset-done-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
 
     // A confirmation-link click lands back here with the email-verification token still
     // in the URL — createClient() above auto-detects it and would otherwise silently log
@@ -3796,6 +3918,16 @@
       if(history.replaceState) history.replaceState(null, '', location.pathname);
       document.getElementById('loading-overlay').style.display = 'none';
       showAuthConfirmedView();
+      return;
+    }
+    // A password-reset link lands back here the same way, EXCEPT the live "recovery" session
+    // it establishes needs to stay intact - handleResetPasswordSubmit() below calls
+    // updateUser() using exactly that session, and only signs out once the new password is
+    // actually set.
+    if(window.trackrSync.cameFromPasswordRecovery){
+      if(history.replaceState) history.replaceState(null, '', location.pathname);
+      document.getElementById('loading-overlay').style.display = 'none';
+      showAuthResetPasswordView();
       return;
     }
 
@@ -4014,8 +4146,15 @@
           if(appVersionNote) appVersionNote.textContent = 'A new version is available below.';
         } else if(swRegistration.installing){
           if(appVersionNote) appVersionNote.textContent = 'Downloading an update — check back in a moment.';
-        } else {
-          await updateVersionDisplay();
+        } else if(appVersionNote){
+          // Explicit "no update" feedback - updateVersionDisplay() alone re-renders the exact
+          // same "Running build vX..." string that was already showing before the click, which
+          // looked exactly like nothing had happened. This is the one outcome that needs its
+          // own distinct sentence, not just the default status text re-applied.
+          const version = await getRunningSwVersion();
+          appVersionNote.textContent = version
+            ? `You're on the latest version (build ${version}).`
+            : "You're on the latest version.";
         }
       }catch(e){
         if(appVersionNote) appVersionNote.textContent = "Couldn't check for updates — check your connection.";
