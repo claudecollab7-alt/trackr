@@ -811,23 +811,21 @@
 </main>
 
 <div class="stamp-overlay" id="stamp-overlay"><div class="stamp">CREDITED ✓</div></div>
-<div id="pinlock-overlay" style="display:none; position:fixed; inset:0; z-index:3000; background:var(--bg); flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; text-align:center; overflow:hidden;">
+<div id="pinlock-overlay" style="display:none; position:fixed; inset:0; z-index:3000; background:var(--bg); flex-direction:column; align-items:center; justify-content:flex-start; gap:16px; padding:calc(56px + env(safe-area-inset-top)) 24px 24px; text-align:center; overflow:hidden;">
   <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--ink);"><span data-icon="lock" data-icon-size="24"></span></div>
   <h2 id="pinlock-title" style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Enter PIN</h2>
   <p id="pinlock-subtitle" style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your 4-digit PIN to unlock Trackr.</p>
   <input type="password" id="pinlock-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" style="width:150px; text-align:center; letter-spacing:14px; font-size:22px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
-  <input type="text" id="pinlock-recovery-input" autocapitalize="characters" autocomplete="off" placeholder="XXXX-XXXX-XXXX" style="display:none; width:220px; text-align:center; letter-spacing:2px; font-size:17px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); text-transform:uppercase;">
+  <input type="text" id="pinlock-recovery-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" style="display:none; width:220px; text-align:center; letter-spacing:6px; font-size:20px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
   <p id="pinlock-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0;">Incorrect PIN. Try again.</p>
   <p id="pinlock-attempts" style="display:none; color:var(--gold); font-size:12px; font-weight:700; margin:0;"></p>
   <button class="btn-pill btn-black" id="pinlock-submit" style="width:150px; justify-content:center;">Continue</button>
+  <div id="pinlock-recovery-resend-wrap" style="display:none;">
+    <button class="link-btn" id="pinlock-recovery-resend-btn">Resend code</button>
+    <p id="pinlock-recovery-resend-note" style="display:none; color:var(--ink-soft); font-size:12px; font-weight:600; margin:6px 0 0;"></p>
+  </div>
   <button class="link-btn" id="pinlock-forgot-link" style="display:none;">Forgotten your PIN?</button>
   <button class="link-btn" id="pinlock-cancel-setup" style="display:none;">Cancel</button>
-
-  <div id="pinlock-recovery-display" style="display:none; flex-direction:column; align-items:center; gap:14px;">
-    <p style="margin:0; color:var(--debit); font-size:13px; font-weight:700; max-width:280px;">Save this recovery code somewhere safe — you won't see it again. If you forget your PIN, this is the only way back in.</p>
-    <div id="pinlock-recovery-code" class="mono-num" style="font-size:20px; font-weight:800; letter-spacing:1px; background:var(--card); border:1.5px dashed var(--line); border-radius:12px; padding:14px 18px; color:var(--ink);">XXXX-XXXX-XXXX</div>
-    <button class="btn-pill btn-black" id="pinlock-recovery-continue-btn" style="width:220px; justify-content:center;">I've saved it — Continue</button>
-  </div>
 </div>
 
 <div id="auth-overlay" style="display:none; position:fixed; inset:0; z-index:4000; background:var(--bg); flex-direction:column; align-items:center; justify-content:flex-start; gap:16px; padding:14vh 24px 24px; text-align:center; overflow-y:auto;">
@@ -860,22 +858,33 @@
 
   <div id="auth-forgot-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
     <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Reset your password</h2>
-    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your account email and we'll send you a link to set a new password.</p>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your account email and we'll send you a code to reset your password.</p>
     <form id="auth-forgot-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
       <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Email
         <input type="email" id="auth-forgot-email" autocomplete="email" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:15px;">
       </label>
       <p id="auth-forgot-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
-      <button type="submit" class="btn-pill btn-black" id="auth-forgot-submit-btn" style="justify-content:center;">Send Reset Link</button>
+      <button type="submit" class="btn-pill btn-black" id="auth-forgot-submit-btn" style="justify-content:center;">Send Code</button>
     </form>
     <button class="link-btn" id="auth-forgot-back-btn">Back to Log In</button>
   </div>
 
-  <div id="auth-forgot-sent-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+  <div id="auth-forgot-code-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
     <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="bell" data-icon-size="24"></span></div>
-    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Check your inbox</h2>
-    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">If <strong id="auth-forgot-sent-email" style="color:var(--ink);"></strong> has an account, we've sent a link to reset your password.</p>
-    <button class="link-btn" id="auth-forgot-sent-back-btn">Back to Log In</button>
+    <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Enter your code</h2>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">If <strong id="auth-forgot-code-email" style="color:var(--ink);"></strong> has an account, we've sent a 6-digit code there. Enter it below to continue — no link to click.</p>
+    <form id="auth-forgot-code-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
+      <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Code
+        <input type="text" id="auth-forgot-code-input" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" placeholder="123456" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:20px; text-align:center; letter-spacing:6px;">
+      </label>
+      <p id="auth-forgot-code-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
+      <button type="submit" class="btn-pill btn-black" id="auth-forgot-code-submit-btn" style="justify-content:center;">Continue</button>
+    </form>
+    <div>
+      <button class="link-btn" id="auth-forgot-code-resend-btn">Resend code</button>
+      <p id="auth-forgot-code-resend-note" style="display:none; color:var(--ink-soft); font-size:12px; font-weight:600; margin:6px 0 0;"></p>
+    </div>
+    <button class="link-btn" id="auth-forgot-code-back-btn">Back to Log In</button>
   </div>
 
   <div id="auth-reset-password-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">

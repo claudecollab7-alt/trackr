@@ -2737,6 +2737,12 @@
   let currentUser = null;
   let authMode = 'login';
   let appStarted = false;
+  // The code-based password reset signs out of its recovery session in the same page load it
+  // was established in (no link, no navigation - onAuthStateChange is already listening the
+  // whole time, unlike the old link flow which returned before ever registering it). Without
+  // this guard, that deliberate sign-out would hit the SIGNED_OUT handler below and reload the
+  // page, wiping the "password updated" screen before it ever showed.
+  let suppressNextSignedOutReload = false;
   let pendingConfirmEmail = null;
   let resendCooldownUntil = 0;
   let resendCooldownTimer = null;
@@ -2756,7 +2762,7 @@
     document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
   }
-  const AUTH_VIEW_IDS = ['auth-form-view','auth-checkinbox-view','auth-confirmed-view','auth-forgot-view','auth-forgot-sent-view','auth-reset-password-view','auth-reset-done-view'];
+  const AUTH_VIEW_IDS = ['auth-form-view','auth-checkinbox-view','auth-confirmed-view','auth-forgot-view','auth-forgot-code-view','auth-reset-password-view','auth-reset-done-view'];
   function showOnlyAuthView(id){
     document.getElementById('auth-overlay').style.display = 'flex';
     AUTH_VIEW_IDS.forEach(v=>{ document.getElementById(v).style.display = (v===id) ? 'flex' : 'none'; });
@@ -2781,9 +2787,56 @@
     if(loginEmail) document.getElementById('auth-forgot-email').value = loginEmail;
     showOnlyAuthView('auth-forgot-view');
   }
-  function showAuthForgotSentView(email){
-    document.getElementById('auth-forgot-sent-email').textContent = email;
-    showOnlyAuthView('auth-forgot-sent-view');
+  let pendingForgotPasswordEmail = null;
+  let forgotCodeResendCooldownUntil = 0;
+  let forgotCodeResendTimer = null;
+  function showAuthForgotCodeView(email){
+    document.getElementById('auth-forgot-code-email').textContent = email;
+    document.getElementById('auth-forgot-code-error').style.display = 'none';
+    document.getElementById('auth-forgot-code-input').value = '';
+    pendingForgotPasswordEmail = email;
+    forgotCodeResendCooldownUntil = 0;
+    updateForgotCodeResendButtonState();
+    showOnlyAuthView('auth-forgot-code-view');
+  }
+  function updateForgotCodeResendButtonState(){
+    const btn = document.getElementById('auth-forgot-code-resend-btn');
+    const note = document.getElementById('auth-forgot-code-resend-note');
+    const remaining = Math.ceil((forgotCodeResendCooldownUntil - Date.now())/1000);
+    if(remaining > 0){
+      btn.disabled = true;
+      note.style.display = 'block';
+      note.textContent = `You can resend in ${remaining}s.`;
+    } else {
+      btn.disabled = false;
+      note.style.display = 'none';
+    }
+  }
+  async function handleResendForgotCode(){
+    if(!pendingForgotPasswordEmail || Date.now() < forgotCodeResendCooldownUntil) return;
+    const note = document.getElementById('auth-forgot-code-resend-note');
+    document.getElementById('auth-forgot-code-resend-btn').disabled = true;
+    try{
+      const { error } = await window.trackrSync.client.auth.resetPasswordForEmail(pendingForgotPasswordEmail, {
+        redirectTo: location.origin + location.pathname
+      });
+      if(error){
+        note.style.display = 'block'; note.textContent = 'Could not resend — try again shortly.';
+        updateForgotCodeResendButtonState();
+        return;
+      }
+    }catch(e){
+      note.style.display = 'block'; note.textContent = 'Could not resend — check your connection.';
+      updateForgotCodeResendButtonState();
+      return;
+    }
+    forgotCodeResendCooldownUntil = Date.now() + 30000;
+    if(forgotCodeResendTimer) clearInterval(forgotCodeResendTimer);
+    forgotCodeResendTimer = setInterval(()=>{
+      updateForgotCodeResendButtonState();
+      if(Date.now() >= forgotCodeResendCooldownUntil){ clearInterval(forgotCodeResendTimer); forgotCodeResendTimer = null; }
+    }, 1000);
+    updateForgotCodeResendButtonState();
   }
   function showAuthResetPasswordView(){
     document.getElementById('auth-reset-password-error').style.display = 'none';
@@ -2905,7 +2958,32 @@
       // Deliberately doesn't distinguish "no account with that email" from success - confirming
       // or denying an email's existence to an unauthenticated caller is its own small leak.
       if(error){ errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block'; return; }
-      showAuthForgotSentView(email);
+      showAuthForgotCodeView(email);
+    }catch(e){
+      errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
+    }finally{
+      submitBtn.disabled = false;
+    }
+  }
+  // Redeems the 6-digit code from the reset email directly - no link, no navigation. Supabase's
+  // recovery email always carries this code (the {{ .Token }} template variable) alongside the
+  // confirmation link; verifyOtp() with type:'recovery' establishes exactly the same kind of
+  // live "recovery" session that clicking the link would, so the rest of the flow (set a new
+  // password, then sign out of the recovery session) is unchanged.
+  async function handleForgotCodeSubmit(e){
+    e.preventDefault();
+    const code = document.getElementById('auth-forgot-code-input').value.trim();
+    const errEl = document.getElementById('auth-forgot-code-error');
+    if(!/^[0-9]{6}$/.test(code)){ errEl.textContent = 'Enter the 6-digit code from your email.'; errEl.style.display = 'block'; return; }
+    if(!pendingForgotPasswordEmail){ errEl.textContent = 'Something went wrong — go back and re-enter your email.'; errEl.style.display = 'block'; return; }
+    const submitBtn = document.getElementById('auth-forgot-code-submit-btn');
+    submitBtn.disabled = true;
+    try{
+      const { error } = await window.trackrSync.client.auth.verifyOtp({
+        email: pendingForgotPasswordEmail, token: code, type: 'recovery'
+      });
+      if(error){ errEl.textContent = 'That code is incorrect or has expired.'; errEl.style.display = 'block'; return; }
+      showAuthResetPasswordView();
     }catch(e){
       errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
     }finally{
@@ -2926,6 +3004,7 @@
       // on this account at all) - sign out of it deliberately, matching the rest of this auth
       // flow's pattern of never silently dropping someone into a session from an email-link
       // click, and requiring an explicit login with the credentials they just set.
+      suppressNextSignedOutReload = true;
       try{ await window.trackrSync.client.auth.signOut(); }catch(e2){}
       if(history.replaceState) history.replaceState(null, '', location.pathname);
       showAuthResetDoneView();
@@ -3020,24 +3099,18 @@
   let pinFlowContext = 'toggle-enable';
   let pinLockoutInterval = null;
   const PIN_LOCKOUT_SCHEDULE_SEC = [30, 120, 300]; // 30s, 2min, then 5min for every attempt after that
+  let pinRecoveryResendCooldownUntil = 0;
+  let pinRecoveryResendTimer = null;
   function hashPin(pin){
     let hash = 0;
     for(let i=0;i<pin.length;i++){ hash = (hash*31 + pin.charCodeAt(i)) >>> 0; }
     return hash.toString(16);
   }
-  function generateRecoveryCode(){
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
-    let code = '';
-    for(let g=0; g<3; g++){
-      if(g>0) code += '-';
-      for(let i=0;i<4;i++) code += chars[Math.floor(Math.random()*chars.length)];
-    }
-    return code;
-  }
-  // Dashes are just for readability — accept the code with or without them, any case.
-  function canonicalizeRecoveryCode(str){ return String(str).toUpperCase().replace(/[^A-Z0-9]/g,''); }
-  // Recovery code is the only reset path today since there's no account/server. Once Supabase
-  // login exists, a second path ("reset via account email") can be layered on top of this.
+  // Recovery works by emailing a one-time code to whichever account is currently logged in
+  // (reauthenticate() + verifyOtp(type:'reauthentication') - proves control of the account
+  // without a full password change), not a locally-generated code saved at setup time. That
+  // means recovery is only possible while online and logged in; see the "Forgotten your PIN?"
+  // handler below for what happens when neither is true.
   function isPinLockedOut(){
     return !!(settings.pinLockoutUntil && new Date(settings.pinLockoutUntil).getTime() > Date.now());
   }
@@ -3055,25 +3128,31 @@
     settings.pinLockoutUntil = null;
     await saveSettings();
   }
+  // Shares the same failed-attempt counter and lockout schedule between wrong-PIN guesses and
+  // wrong recovery-code guesses (not a separate, unlimited path) - 5 combined wrong attempts
+  // either way triggers the same escalating lockout.
   function updatePinAttemptsUI(){
     const attemptsEl = document.getElementById('pinlock-attempts');
     const forgotLink = document.getElementById('pinlock-forgot-link');
-    const input = document.getElementById('pinlock-input');
+    const pinInput = document.getElementById('pinlock-input');
+    const recoveryInput = document.getElementById('pinlock-recovery-input');
     const submitBtn = document.getElementById('pinlock-submit');
     if(pinLockoutInterval){ clearInterval(pinLockoutInterval); pinLockoutInterval = null; }
-    if(pinMode!=='unlock'){
+    if(pinMode!=='unlock' && pinMode!=='recover'){
       attemptsEl.style.display = 'none';
       forgotLink.style.display = 'none';
       return;
     }
+    const input = pinMode==='recover' ? recoveryInput : pinInput;
     const attempts = settings.failedPinAttempts || 0;
     // Always visible on the unlock screen (not gated behind failed attempts) - matching the
     // main login screen's always-visible "Forgot password?", and so it's discoverable by
     // someone who simply doesn't remember their PIN at all, not just after guessing wrong a
     // few times. Escalated to a bordered "prominent" style during lockout, since that's the
-    // moment it matters most.
-    forgotLink.style.display = 'inline-block';
-    forgotLink.classList.toggle('prominent', isPinLockedOut());
+    // moment it matters most. Only shown on the unlock screen itself, not while already inside
+    // the recovery-code flow it leads to.
+    forgotLink.style.display = pinMode==='unlock' ? 'inline-block' : 'none';
+    forgotLink.classList.toggle('prominent', pinMode==='unlock' && isPinLockedOut());
     if(isPinLockedOut()){
       input.disabled = true; submitBtn.disabled = true;
       const tick = ()=>{
@@ -3114,7 +3193,7 @@
 
     document.getElementById('pinlock-error').style.display = 'none';
     document.getElementById('pinlock-attempts').style.display = 'none';
-    document.getElementById('pinlock-recovery-display').style.display = 'none';
+    document.getElementById('pinlock-recovery-resend-wrap').style.display = mode==='recover' ? 'block' : 'none';
     pinInput.value = ''; recoveryInput.value = '';
     pinInput.disabled = false; submitBtn.disabled = false;
     submitBtn.style.display = 'inline-flex';
@@ -3122,8 +3201,8 @@
     if(mode==='recover'){
       pinInput.style.display = 'none';
       recoveryInput.style.display = 'block';
-      title.textContent = 'Enter Recovery Code';
-      subtitle.textContent = 'Enter the recovery code you saved when you set up your PIN.';
+      title.textContent = 'Enter Your Code';
+      subtitle.textContent = `We sent a 6-digit code to ${currentUser ? currentUser.email : 'your account email'}. Enter it below to reset your PIN.`;
       cancelBtn.textContent = 'Back';
       cancelBtn.style.display = 'inline-flex';
       submitBtn.textContent = 'Continue';
@@ -3169,32 +3248,65 @@
     const input = pinMode==='recover' ? document.getElementById('pinlock-recovery-input') : document.getElementById('pinlock-input');
     input.value = ''; input.focus();
   }
-  function showRecoveryCodeOnce(code){
-    pinMode = 'show-recovery';
-    document.getElementById('pinlock-title').textContent = 'Save Your Recovery Code';
-    document.getElementById('pinlock-subtitle').textContent = "You won't see this again — it's the only way back into Trackr if you forget your PIN.";
-    document.getElementById('pinlock-input').style.display = 'none';
-    document.getElementById('pinlock-recovery-input').style.display = 'none';
-    document.getElementById('pinlock-error').style.display = 'none';
-    document.getElementById('pinlock-attempts').style.display = 'none';
-    document.getElementById('pinlock-forgot-link').style.display = 'none';
-    document.getElementById('pinlock-cancel-setup').style.display = 'none';
-    document.getElementById('pinlock-submit').style.display = 'none';
-    document.getElementById('pinlock-recovery-code').textContent = code;
-    document.getElementById('pinlock-recovery-display').style.display = 'flex';
-    document.getElementById('pinlock-overlay').style.display = 'flex';
-    lockBodyScroll();
+  // Sends the reauthentication code to whichever account is currently logged in - reused for
+  // both the initial send (tapping "Forgotten your PIN?") and the resend button.
+  async function sendPinRecoveryCode(){
+    try{
+      const { error } = await window.trackrSync.client.auth.reauthenticate();
+      return !error;
+    }catch(e){ return false; }
+  }
+  function updatePinRecoveryResendButtonState(){
+    const btn = document.getElementById('pinlock-recovery-resend-btn');
+    const note = document.getElementById('pinlock-recovery-resend-note');
+    const remaining = Math.ceil((pinRecoveryResendCooldownUntil - Date.now())/1000);
+    if(remaining > 0){
+      btn.disabled = true;
+      note.style.display = 'block';
+      note.textContent = `You can resend in ${remaining}s.`;
+    } else {
+      btn.disabled = false;
+      note.style.display = 'none';
+    }
+  }
+  function armPinRecoveryResendCooldown(){
+    pinRecoveryResendCooldownUntil = Date.now() + 30000;
+    if(pinRecoveryResendTimer) clearInterval(pinRecoveryResendTimer);
+    pinRecoveryResendTimer = setInterval(()=>{
+      updatePinRecoveryResendButtonState();
+      if(Date.now() >= pinRecoveryResendCooldownUntil){ clearInterval(pinRecoveryResendTimer); pinRecoveryResendTimer = null; }
+    }, 1000);
+    updatePinRecoveryResendButtonState();
+  }
+  async function handleResendPinRecoveryCode(){
+    if(Date.now() < pinRecoveryResendCooldownUntil) return;
+    const note = document.getElementById('pinlock-recovery-resend-note');
+    document.getElementById('pinlock-recovery-resend-btn').disabled = true;
+    const sent = await sendPinRecoveryCode();
+    if(!sent){
+      note.style.display = 'block'; note.textContent = 'Could not resend — check your connection.';
+      updatePinRecoveryResendButtonState();
+      return;
+    }
+    armPinRecoveryResendCooldown();
   }
   async function handlePinSubmit(){
     if(pinMode==='recover'){
-      const code = canonicalizeRecoveryCode(document.getElementById('pinlock-recovery-input').value);
-      if(!code){ showPinError('Enter your recovery code.'); return; }
-      if(settings.recoveryCodeHash && hashPin(code) === settings.recoveryCodeHash){
-        await resetPinAttempts();
-        pinFlowContext = 'recovery-reset';
-        showPinOverlay('setup-new');
-      } else {
-        showPinError('That recovery code is incorrect.');
+      if(isPinLockedOut()) return;
+      const code = document.getElementById('pinlock-recovery-input').value.trim();
+      if(!/^[0-9]{6}$/.test(code)){ showPinError('Enter the 6-digit code from your email.'); return; }
+      try{
+        const { error } = await window.trackrSync.client.auth.verifyOtp({ token: code, type: 'reauthentication' });
+        if(!error){
+          await resetPinAttempts();
+          pinFlowContext = 'recovery-reset';
+          showPinOverlay('setup-new');
+        } else {
+          await registerFailedPinAttempt();
+          showPinError('That code is incorrect or has expired.');
+        }
+      }catch(e){
+        showPinError('Something went wrong. Check your connection and try again.');
       }
       return;
     }
@@ -3224,8 +3336,6 @@
       if(val === pendingNewPin){
         settings.appLockPin = hashPin(val);
         settings.appLockEnabled = true;
-        const recoveryCode = generateRecoveryCode();
-        settings.recoveryCodeHash = hashPin(canonicalizeRecoveryCode(recoveryCode));
         await resetPinAttempts();
         await saveSettings();
         pendingNewPin = null;
@@ -3238,7 +3348,8 @@
         // contexts, where it's already false.
         isAppLocked = false;
         resetAppLockTimer();
-        showRecoveryCodeOnce(recoveryCode);
+        hidePinOverlay();
+        showAppToast(pinFlowContext==='recovery-reset' ? 'PIN reset — you\'re back in.' : 'PIN saved.', 'info');
       } else {
         pendingNewPin = null;
         showPinOverlay('setup-new');
@@ -3427,18 +3538,27 @@
       if(/^[0-9]{4}$/.test(e.target.value)) setTimeout(handlePinSubmit, 60);
     });
     document.getElementById('pinlock-recovery-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handlePinSubmit(); });
-    document.getElementById('pinlock-forgot-link').addEventListener('click', ()=>{
-      if(!settings.recoveryCodeHash){
-        alert("No recovery code was ever saved for this PIN, so there's no way to recover it automatically — sorry.");
+    document.getElementById('pinlock-forgot-link').addEventListener('click', async (e)=>{
+      // Recovery proves identity by emailing a code to the account this device is already
+      // logged into - with no account session (offline/skipped-login use), there's no email
+      // to send it to, so recovery via this path isn't possible at all. Surfacing the actual
+      // last resort here (not just documenting it elsewhere) rather than leaving a dead end.
+      if(!currentUser){
+        alert("Resetting your PIN this way needs you to be logged into your account, so a code can be emailed to you — this device is currently using Trackr without an account.\n\nIf you can't log into your account either, the only way back in is to clear this browser's site data for Trackr and start over. That permanently erases anything on this device that hasn't been backed up to your account.");
+        return;
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const sent = await sendPinRecoveryCode();
+      btn.disabled = false;
+      if(!sent){
+        alert("Couldn't send a code to your email right now — check your connection and try again.");
         return;
       }
       showPinOverlay('recover');
+      armPinRecoveryResendCooldown();
     });
-    document.getElementById('pinlock-recovery-continue-btn').addEventListener('click', ()=>{
-      document.getElementById('pinlock-recovery-display').style.display = 'none';
-      document.getElementById('pinlock-submit').style.display = 'inline-flex';
-      hidePinOverlay();
-    });
+    document.getElementById('pinlock-recovery-resend-btn').addEventListener('click', handleResendPinRecoveryCode);
     document.getElementById('pinlock-cancel-setup').addEventListener('click', async ()=>{
       if(pinMode==='recover'){
         showPinOverlay('unlock');
@@ -3928,8 +4048,10 @@
     document.getElementById('auth-confirmed-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
     document.getElementById('auth-forgot-password-btn').addEventListener('click', showAuthForgotView);
     document.getElementById('auth-forgot-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
-    document.getElementById('auth-forgot-sent-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    document.getElementById('auth-forgot-code-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
     document.getElementById('auth-forgot-form').addEventListener('submit', handleForgotPasswordSubmit);
+    document.getElementById('auth-forgot-code-form').addEventListener('submit', handleForgotCodeSubmit);
+    document.getElementById('auth-forgot-code-resend-btn').addEventListener('click', handleResendForgotCode);
     document.getElementById('auth-reset-password-toggle').addEventListener('click', toggleResetPasswordVisibility);
     document.getElementById('auth-reset-password-form').addEventListener('submit', handleResetPasswordSubmit);
     document.getElementById('auth-reset-done-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
@@ -3962,6 +4084,7 @@
       } else if(event==='SIGNED_OUT'){
         appStarted = false;
         currentUser = null;
+        if(suppressNextSignedOutReload){ suppressNextSignedOutReload = false; return; }
         location.reload();
       }
     });
