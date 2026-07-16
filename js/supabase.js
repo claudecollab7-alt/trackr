@@ -140,20 +140,41 @@
     await loadPendingQueue();
     return pendingQueue.length;
   }
+  // Distinguishes "still offline" (navigator.onLine is false, or the request itself never
+  // reached the server) from a genuinely stuck write (we're online and the server actively
+  // rejected it — a malformed row, a stale foreign key, an RLS rejection, etc). The two need
+  // different messaging: the first resolves itself once connectivity returns, the second
+  // never will no matter how many times it's retried, so callers need to know which one
+  // they're looking at instead of getting the same dead-end "reconnect and try again."
+  async function getPendingWriteSummary(){
+    await loadPendingQueue();
+    const tables = [...new Set(pendingQueue.map(op=>op.table))];
+    return { count: pendingQueue.length, tables };
+  }
   async function retryPendingWrites(){
-    if(retryInFlight) return;
+    if(retryInFlight) return { stuckOnNetwork: false };
     retryInFlight = true;
+    let stuckOnNetwork = false;
     try{
       await loadPendingQueue();
       while(pendingQueue.length>0){
+        if(!navigator.onLine){ stuckOnNetwork = true; break; }
         const op = pendingQueue[0];
         try{
           await runOp(op);
           pendingQueue.shift();
           await savePendingQueue();
-        }catch(e){ break; } // still offline or a real error — stop, leave the rest queued
+        }catch(e){
+          // A network-level failure (fetch never got a response) means "still offline" in
+          // practice even if navigator.onLine hasn't caught up yet - genuinely retryable.
+          // Anything else is the server actively rejecting this specific op, which won't
+          // change on its own.
+          stuckOnNetwork = !navigator.onLine || e instanceof TypeError;
+          break;
+        }
       }
     } finally { retryInFlight = false; }
+    return { stuckOnNetwork };
   }
   // Drops any queued write for the given tables — used when the caller is about to
   // resend the full, corrected state for those tables anyway (e.g. after remapping
@@ -293,6 +314,7 @@
     skipMigration,
     retryPendingWrites,
     getPendingWriteCount,
+    getPendingWriteSummary,
     deleteAllCloudDataForUser,
     purgeQueuedTables
   };

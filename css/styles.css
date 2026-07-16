@@ -48,6 +48,13 @@
   .card-header-row{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:10px; flex-wrap:wrap; }
   .link-btn{ background:none; border:none; color:var(--link); font-size:12.5px; font-weight:700; padding:0; }
   .empty-note{ color:var(--ink-soft); font-size:13px; }
+  /* Escalates the "Forgotten your PIN?" link into a bordered pill during lockout - the moment
+     someone is most likely to actually need it, so it shouldn't read as just another quiet
+     text link at that point. */
+  #pinlock-forgot-link.prominent{
+    color:var(--gold); border:1.5px solid var(--gold); border-radius:999px;
+    padding:8px 16px; font-size:13px;
+  }
 
   .btn-pill{ display:inline-flex; align-items:center; gap:7px; padding:11px 18px; border-radius:999px; font-weight:600; font-size:13.5px; border:none; transition:transform .12s, box-shadow .12s, filter .12s; box-shadow:var(--shadow-sm); }
   .btn-pill:hover{ transform:translateY(-1px); filter:brightness(1.04); }
@@ -133,7 +140,10 @@
   .activity-actions{ display:flex; gap:4px; }
 
   .cat-grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .cat-grid-cell{ background:var(--bg); border-radius:16px; padding:14px; position:relative; }
+  /* min-width:0 overrides the grid default (min-width:auto), which otherwise sizes each
+     column to fit its content's min-content width - on a narrow phone that's wider than the
+     1fr share actually available, pushing both cells past the card's right edge. */
+  .cat-grid-cell{ background:var(--bg); border-radius:16px; padding:14px; position:relative; min-width:0; }
   .cat-grid-cell.clickable-row{ cursor:pointer; transition:transform .1s; }
   .cat-grid-cell.clickable-row:active{ transform:scale(.97); }
   .cat-grid-top{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
@@ -145,7 +155,7 @@
     font-size:11px; font-weight:700; flex-shrink:0;
     padding:3px 9px; border-radius:999px; line-height:1.4;
   }
-  .cat-grid-name{ font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:10px; }
+  .cat-grid-name{ font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cat-badge.sm{ width:26px; height:26px; font-size:11px; }
 
   .insight-note{ background:#fff; border-radius:16px; padding:14px 18px; font-size:13.5px; margin:0 0 16px; box-shadow:var(--shadow-sm); display:none; border-left:4px solid var(--gold); }

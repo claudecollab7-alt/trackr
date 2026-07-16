@@ -2966,17 +2966,35 @@
   // account's data sitting in local storage for whoever uses the device next. But this device
   // may hold edits made offline that never reached the cloud, so clearing local data outright
   // could destroy real, unsynced work. Approach taken: flush the pending-write queue, then only
-  // proceed if it's confirmed empty afterward - if anything's still queued (or we can't tell,
-  // e.g. no connection right now), block the logout entirely with a clear message rather than
-  // guess. This is simpler to reason about than "clear and hope the sync finishes in time",
-  // and never leaves local storage in an ambiguous half-synced state.
+  // proceed if it's confirmed empty afterward - if anything's still queued, block the logout
+  // with a message specific to *why* it's still queued, rather than guess. This is simpler to
+  // reason about than "clear and hope the sync finishes in time", and never leaves local
+  // storage in an ambiguous half-synced state.
   async function logOutUser(){
-    try{ await window.trackrSync.retryPendingWrites(); }catch(e){}
+    let retryResult = { stuckOnNetwork: false };
+    try{ retryResult = await window.trackrSync.retryPendingWrites(); }catch(e){}
     let pendingCount = -1;
     try{ pendingCount = await window.trackrSync.getPendingWriteCount(); }catch(e){}
     if(pendingCount !== 0){
-      alert("Couldn't confirm all your changes have synced to your account yet. Connect to the internet and try again before logging out, so nothing gets lost.");
-      return;
+      // A connectivity problem resolves itself once the device is back online - blocking here
+      // is enough, no need for a destructive escape hatch. A write the server is actively
+      // rejecting (bad data, a stale reference) will NEVER clear no matter how many times this
+      // is retried, so that case needs a real way out, not a dead end.
+      if(retryResult.stuckOnNetwork || !navigator.onLine || pendingCount < 0){
+        alert("Couldn't confirm all your changes have synced to your account yet. Connect to the internet and try again before logging out, so nothing gets lost.");
+        return;
+      }
+      let summary = { count: pendingCount, tables: [] };
+      try{ summary = await window.trackrSync.getPendingWriteSummary(); }catch(e){}
+      const tableList = summary.tables.length ? summary.tables.join(', ') : 'your data';
+      const wantsLogoutAnyway = confirm(
+        `${summary.count} change${summary.count===1?'':'s'} to ${tableList} couldn't be saved to your account, even though you're connected — the server is rejecting the write itself, not a connection issue, so retrying again won't help.\n\n` +
+        `Log out anyway? Those unsaved changes will stay only on this device and won't be backed up until you log back in from it.`
+      );
+      if(!wantsLogoutAnyway) return;
+      // Falls through to the normal logout below - the stuck queue entries are left in local
+      // storage as-is (not deleted), so if this device is used again before anything overwrites
+      // them, they're still there to retry.
     }
     // Clear this device's copy of the account's data before actually signing out, so there's
     // no window where the SIGNED_OUT-triggered reload (see the auth listener in init()) could
@@ -3049,7 +3067,13 @@
       return;
     }
     const attempts = settings.failedPinAttempts || 0;
-    forgotLink.style.display = attempts>=3 ? 'inline' : 'none';
+    // Always visible on the unlock screen (not gated behind failed attempts) - matching the
+    // main login screen's always-visible "Forgot password?", and so it's discoverable by
+    // someone who simply doesn't remember their PIN at all, not just after guessing wrong a
+    // few times. Escalated to a bordered "prominent" style during lockout, since that's the
+    // moment it matters most.
+    forgotLink.style.display = 'inline-block';
+    forgotLink.classList.toggle('prominent', isPinLockedOut());
     if(isPinLockedOut()){
       input.disabled = true; submitBtn.disabled = true;
       const tick = ()=>{
@@ -3058,6 +3082,7 @@
           clearInterval(pinLockoutInterval); pinLockoutInterval = null;
           input.disabled = false; submitBtn.disabled = false;
           attemptsEl.style.display = 'none';
+          forgotLink.classList.remove('prominent');
           input.value=''; input.focus();
         } else {
           attemptsEl.textContent = `Too many attempts. Try again in ${remaining}s.`;
