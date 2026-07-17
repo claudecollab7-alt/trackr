@@ -816,7 +816,7 @@
   <h2 id="pinlock-title" style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Enter PIN</h2>
   <p id="pinlock-subtitle" style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">Enter your 4-digit PIN to unlock Trackr.</p>
   <input type="password" id="pinlock-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" style="width:150px; text-align:center; letter-spacing:14px; font-size:22px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
-  <input type="text" id="pinlock-recovery-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" style="display:none; width:220px; text-align:center; letter-spacing:6px; font-size:20px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
+  <input type="text" id="pinlock-recovery-input" inputmode="numeric" pattern="[0-9]*" maxlength="10" autocomplete="one-time-code" placeholder="Enter code" style="display:none; width:220px; text-align:center; letter-spacing:4px; font-size:20px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink);">
   <p id="pinlock-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0;">Incorrect PIN. Try again.</p>
   <p id="pinlock-attempts" style="display:none; color:var(--gold); font-size:12px; font-weight:700; margin:0;"></p>
   <button class="btn-pill btn-black" id="pinlock-submit" style="width:150px; justify-content:center;">Continue</button>
@@ -872,10 +872,10 @@
   <div id="auth-forgot-code-view" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
     <div style="width:60px; height:60px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); color:var(--credit);"><span data-icon="bell" data-icon-size="24"></span></div>
     <h2 style="margin:0; font-size:19px; font-weight:800; color:var(--ink);">Enter your code</h2>
-    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">If <strong id="auth-forgot-code-email" style="color:var(--ink);"></strong> has an account, we've sent a 6-digit code there. Enter it below to continue — no link to click.</p>
+    <p style="margin:0; color:var(--ink-soft); font-size:13px; max-width:280px;">If <strong id="auth-forgot-code-email" style="color:var(--ink);"></strong> has an account, we've sent a code there. Enter it below to continue — no link to click.</p>
     <form id="auth-forgot-code-form" style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:280px;" novalidate>
       <label style="text-align:left; font-size:12.5px; font-weight:700; color:var(--ink-soft);">Code
-        <input type="text" id="auth-forgot-code-input" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" placeholder="123456" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:20px; text-align:center; letter-spacing:6px;">
+        <input type="text" id="auth-forgot-code-input" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="10" placeholder="Enter code" required style="width:100%; margin-top:4px; padding:12px 10px; border:1.5px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); font-size:20px; text-align:center; letter-spacing:4px;">
       </label>
       <p id="auth-forgot-code-error" style="display:none; color:var(--debit); font-size:12.5px; font-weight:700; margin:0; text-align:left;"></p>
       <button type="submit" class="btn-pill btn-black" id="auth-forgot-code-submit-btn" style="justify-content:center;">Continue</button>
