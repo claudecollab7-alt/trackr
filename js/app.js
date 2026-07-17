@@ -911,9 +911,15 @@
       list.appendChild(row);
     });
     list.querySelectorAll('.upcoming-resolve-btn').forEach(btn=>{
-      btn.addEventListener('click', (e)=>{
+      btn.addEventListener('click', async (e)=>{
         e.stopPropagation();
-        resolveUpcomingItem(items[parseInt(btn.dataset.idx,10)]);
+        // Without this guard, a double-tap (easy to trigger on mobile before refreshAll()
+        // removes this row) could call logDebtPayment() twice, logging two separate payment
+        // transactions for what the user meant as one tap. The button is destroyed by the
+        // re-render inside resolveUpcomingItem() either way, so there's no re-enable to do.
+        if(btn.disabled) return;
+        btn.disabled = true;
+        await resolveUpcomingItem(items[parseInt(btn.dataset.idx,10)]);
       });
     });
   }
@@ -2995,7 +3001,14 @@
       const { error } = await window.trackrSync.client.auth.verifyOtp({
         email: pendingForgotPasswordEmail, token: code, type: 'recovery'
       });
-      if(error){ errEl.textContent = 'That code is incorrect or has expired.'; errEl.style.display = 'block'; return; }
+      // Log the raw Supabase error before showing the generic user-facing message - a prior
+      // round shipped this exact message with no way to tell WHY a genuinely correct code was
+      // rejected (wrong OTP type, expired, superseded by a resend, etc). Inspectable via
+      // Profile & Backup -> View Log without needing to reproduce with devtools attached.
+      if(error){
+        diagLogPage('auth:verifyOtp-recovery-failed', { code: error.code, status: error.status, message: error.message });
+        errEl.textContent = 'That code is incorrect or has expired.'; errEl.style.display = 'block'; return;
+      }
       showAuthResetPasswordView();
     }catch(e){
       errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
@@ -3266,8 +3279,9 @@
   async function sendPinRecoveryCode(){
     try{
       const { error } = await window.trackrSync.client.auth.reauthenticate();
+      if(error) diagLogPage('auth:reauthenticate-failed', { code: error.code, status: error.status, message: error.message });
       return !error;
-    }catch(e){ return false; }
+    }catch(e){ diagLogPage('auth:reauthenticate-threw', e && e.message); return false; }
   }
   function updatePinRecoveryResendButtonState(){
     const btn = document.getElementById('pinlock-recovery-resend-btn');
@@ -3315,6 +3329,10 @@
           pinFlowContext = 'recovery-reset';
           showPinOverlay('setup-new');
         } else {
+          // Same raw-error capture as the password-reset code path above - whatever Supabase
+          // actually says (wrong OTP type, expired, superseded by a later reauthenticate() call)
+          // lands in Profile & Backup -> View Log instead of only ever showing the generic copy.
+          diagLogPage('auth:verifyOtp-reauthentication-failed', { code: error.code, status: error.status, message: error.message });
           await registerFailedPinAttempt();
           showPinError('That code is incorrect or has expired.');
         }
