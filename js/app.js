@@ -2191,6 +2191,28 @@
     await saveSettings();
     renderBackupNag();
   }
+  // Every id in a restored backup is regenerated fresh, never reused from the file - a restore
+  // between two different accounts (this exact scenario was hit testing Restore Backup's
+  // merge-vs-replace behavior across accounts, and the planned friends'-migration flow depends
+  // on it too) would otherwise carry over ids that may already exist as a DIFFERENT account's
+  // rows in Supabase. Postgres RLS blocks the whole upsert for a conflicting id it doesn't own
+  // - unlike the debt_id foreign-key bug, this can't be fixed in place afterward, since the
+  // record is permanently unsyncable under the new account with its original id. (This is
+  // separate from user_id itself: every local record's outgoing row already gets user_id
+  // stamped from the CURRENTLY LOGGED-IN session at sync time - see toTransactionRow() etc in
+  // js/supabase.js, which construct the row fresh from the passed-in userId rather than reading
+  // any user_id off the local object - so there's nothing to fix there. The actual defect was
+  // ids surviving a restore unchanged and colliding with another account's pre-existing rows.)
+  function remapRestoredIds(state){
+    const txIdMap = {}, debtIdMap = {};
+    state.transactions.forEach(t=>{ if(t && t.id){ const fresh = uuid(); txIdMap[t.id] = fresh; t.id = fresh; } });
+    state.debts.concat(state.receivables).forEach(d=>{ if(d && d.id){ const fresh = uuid(); debtIdMap[d.id] = fresh; d.id = fresh; } });
+    state.goals.forEach(g=>{ if(g && g.id) g.id = uuid(); });
+    state.transactions.forEach(t=>{ if(t.debtId && debtIdMap[t.debtId]) t.debtId = debtIdMap[t.debtId]; });
+    state.debts.concat(state.receivables).forEach(d=>{
+      (d.payments||[]).forEach(p=>{ if(p.txId && txIdMap[p.txId]) p.txId = txIdMap[p.txId]; });
+    });
+  }
   function handleRestoreFile(e){
     const file = e.target.files[0]; if(!file) return;
     const reader = new FileReader();
@@ -2228,6 +2250,7 @@
         recurring = Array.isArray(data.recurring) ? data.recurring : []; reminders = Array.isArray(data.reminders) ? data.reminders : [];
         goals = Array.isArray(data.goals) ? data.goals : [];
         accounts = Array.isArray(data.accounts) && data.accounts.length ? data.accounts : defaultAccounts();
+        remapRestoredIds({ transactions, debts, receivables, goals });
         if(!settings.theme) settings.theme = 'light';
         // Written directly, NOT via saveTransactions/saveDebts/saveReceivables - those merge
         // against whatever's still on local disk (deliberate for ordinary edits), which is
@@ -2240,9 +2263,13 @@
           ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
         ]);
         if(currentUser){
-          window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
+          // Debts/receivables synced before transactions - a transaction's debt_id foreign key
+          // needs the debt row to already exist server-side, otherwise this first sync attempt
+          // fails outright on a fresh restore (recoverable on retry, but avoidable outright by
+          // just syncing in dependency order).
           window.trackrSync.syncUpsertDebts(currentUser.id, debts);
           window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
+          window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
           window.trackrSync.syncUpsertGoals(currentUser.id, goals);
           window.trackrSync.syncBudgets(currentUser.id, budgets);
         }
@@ -3323,7 +3350,14 @@
       const code = document.getElementById('pinlock-recovery-input').value.trim();
       if(!/^[0-9]{6,10}$/.test(code)){ showPinError('Enter the code from your email.'); return; }
       try{
-        const { error } = await window.trackrSync.client.auth.verifyOtp({ token: code, type: 'reauthentication' });
+        // Real Supabase's verify endpoint rejected a bare {token, type:'reauthentication'} call
+        // with "Only an email address or phone number should be provided on verify" - confirmed
+        // via a real device's raw error (Install Diagnostics), not assumed. The working
+        // password-reset flow already passes email alongside its type:'recovery' call; this one
+        // needs the same shape, using the currently logged-in user's email since reauthentication
+        // is tied to whoever's already signed in (this screen isn't reachable without a
+        // currentUser - see the "Forgotten your PIN?" handler's currentUser check below).
+        const { error } = await window.trackrSync.client.auth.verifyOtp({ email: currentUser.email, token: code, type: 'reauthentication' });
         if(!error){
           await resetPinAttempts();
           pinFlowContext = 'recovery-reset';
@@ -3414,9 +3448,51 @@
     if(changeBtn) changeBtn.style.display = settings.appLockEnabled ? 'inline-flex' : 'none';
   }
 
-  function runIntegrityCheck(){
+  // Keyed by the SUPABASE table name (matches op.table in js/supabase.js's rejected-records
+  // store) - debts and receivables share one server-side table (split by direction), so both
+  // local arrays are searched under the single 'debts' key. `markDeleted`, where present,
+  // registers the id in the same recentlyDeleted*Ids set deleteTransaction()/deleteDebt() use -
+  // transactions/debts/receivables persist via a disk-merge-by-id (saveTransactions() etc),
+  // which would otherwise silently resurrect a just-removed record from the still-on-disk copy
+  // the moment save runs. goals persists with a direct overwrite, no such set exists or is
+  // needed.
+  const REJECTABLE_TABLES = {
+    transactions: { lists: ()=>[['transactions',transactions]], save: ()=>saveTransactions(), markDeleted: id=>recentlyDeletedTxIds.add(id), label: t=> `${t.category} · ${fmt(t.amount)} · ${formatHuman(t.date)}${t.note?' — '+t.note:''}` },
+    debts: { lists: ()=>[['debts',debts],['receivables',receivables]], save: ()=>Promise.all([saveDebts(),saveReceivables()]), markDeleted: (id,listName)=> (listName==='receivables' ? recentlyDeletedReceivableIds : recentlyDeletedDebtIds).add(id), label: d=> `${d.name}` },
+    goals: { lists: ()=>[['goals',goals]], save: ()=>saveGoals(), label: g=> `${g.name} (goal)` }
+  };
+  // Cross-references the ids Supabase has permanently refused (an RLS violation - the row
+  // belongs to a different account, most likely surviving a cross-account Restore Backup from
+  // before ids were regenerated on restore) against what's still actually sitting in local
+  // storage right now, so a record already cleared some other way doesn't show up as a stale
+  // false positive here.
+  async function findUnsyncableRecords(){
+    const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
+    const found = [];
+    Object.keys(REJECTABLE_TABLES).forEach(table=>{
+      const entries = Array.isArray(store[table]) ? store[table] : [];
+      const lists = REJECTABLE_TABLES[table].lists();
+      entries.forEach(entry=>{
+        for(const [listName, list] of lists){
+          const record = list.find(r=>r.id===entry.id);
+          if(record){ found.push({ table, listName, id: entry.id, record, code: entry.code }); break; }
+        }
+      });
+    });
+    return found;
+  }
+  async function removeUnsyncableRecord(table, listName, id){
+    const cfg = REJECTABLE_TABLES[table]; if(!cfg) return;
+    if(cfg.markDeleted) cfg.markDeleted(id, listName);
+    const [, list] = cfg.lists().find(([name])=>name===listName) || [];
+    if(list){ const idx = list.findIndex(r=>r.id===id); if(idx>-1) list.splice(idx,1); }
+    await cfg.save();
+    if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord(table, id);
+  }
+  async function runIntegrityCheck(){
     const results = document.getElementById('integrity-check-results');
     results.style.display = 'block';
+    results.innerHTML = '<p class="period-hint">Checking…</p>';
 
     const seen = {};
     transactions.forEach(t=>{
@@ -3435,13 +3511,31 @@
       }
     });
 
+    const unsyncable = currentUser ? await findUnsyncableRecords() : [];
+
     let html = '';
-    if(dupGroups.length===0 && debtMismatches.length===0){
+    if(dupGroups.length===0 && debtMismatches.length===0 && unsyncable.length===0){
       html = `<div class="card" style="background:var(--bg); border:1.5px solid var(--credit);">
         <div style="display:flex; align-items:center; gap:8px; color:var(--credit); font-weight:700; font-size:14px;">✓ All clear</div>
-        <p class="period-hint" style="margin-top:6px;">Checked ${transactions.length} transaction${transactions.length!==1?'s':''} and ${debts.length} debt${debts.length!==1?'s':''} — no duplicates or mismatches found.</p>
+        <p class="period-hint" style="margin-top:6px;">Checked ${transactions.length} transaction${transactions.length!==1?'s':''} and ${debts.length} debt${debts.length!==1?'s':''} — no duplicates, mismatches, or unsyncable records found.</p>
       </div>`;
     } else {
+      if(unsyncable.length>0){
+        const byTable = {};
+        unsyncable.forEach(u=> (byTable[u.table] = byTable[u.table]||[]).push(u));
+        html += `<div class="card-label" style="margin-bottom:8px;">CAN'T SYNC TO YOUR ACCOUNT (${unsyncable.length})</div>`;
+        html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
+          <p class="period-hint" style="margin:0 0 10px;">Your account's server permanently refuses these — most likely left over from a Restore Backup that brought in records from a different account. They stay only on this device and will never sync; nothing else here is affected.</p>`;
+        Object.keys(byTable).forEach(table=>{
+          byTable[table].forEach(u=>{
+            html += `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line);">
+              <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName})</span></span>
+              <button type="button" class="btn-pill btn-outline unsyncable-remove-btn" data-table="${table}" data-list="${u.listName}" data-id="${u.id}" style="padding:4px 10px; font-size:12px;">Remove</button>
+            </div>`;
+          });
+        });
+        html += `</div>`;
+      }
       if(dupGroups.length>0){
         html += `<div class="card-label" style="margin-bottom:8px;">POSSIBLE DUPLICATE ENTRIES (${dupGroups.length})</div>`;
         dupGroups.forEach(group=>{
@@ -3463,6 +3557,16 @@
       html += `<p class="period-hint" style="margin-top:10px;">Head to History to review and delete any extra entries — that's the safe way to fix these without touching anything else.</p>`;
     }
     results.innerHTML = html;
+    results.querySelectorAll('.unsyncable-remove-btn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const table = btn.dataset.table, listName = btn.dataset.list, id = btn.dataset.id;
+        if(!confirm(`Remove this record from this device? It has never been backed up to your account and can't be — this permanently deletes it, with no way to undo.`)) return;
+        btn.disabled = true;
+        await removeUnsyncableRecord(table, listName, id);
+        refreshAll();
+        runIntegrityCheck();
+      });
+    });
   }
 
   function bindCrossTabSync(){
