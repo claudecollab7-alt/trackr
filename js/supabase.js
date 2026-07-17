@@ -32,7 +32,12 @@
       date: t.date, category: t.category, account: t.account, amount: t.amount,
       particulars: t.note || '',
       debt_id: t.debtId || null,
-      created_at: t.createdAt || null
+      // Never send an explicit null here - a NOT NULL created_at column only falls back to
+      // its DEFAULT when the column is omitted from the insert, not when it's present but
+      // null. A transaction from before this field existed (or any other way it ended up
+      // missing locally) would otherwise upsert-fail every future batch containing it, the
+      // same permanently-stuck-sync failure mode the debt_id foreign key bug produced.
+      created_at: t.createdAt || new Date().toISOString()
     };
   }
   function fromTransactionRow(r){
@@ -116,16 +121,51 @@
     pendingQueue.push(op);
     await savePendingQueue();
   }
+  // Shares the same IndexedDB store app.js's diagLogPage()/readDiagLog() use for Install
+  // Diagnostics (and that sw.js also writes to independently) - this file loads before app.js
+  // and isn't in its closure, so it keeps its own tiny writer against the same store/schema
+  // rather than reaching across files. Every rejected write lands here with the raw
+  // Postgrest error (code/message/details/hint) and which table/rows were involved, so the
+  // next stuck-write report can be read straight out of the log instead of reproduced blind.
+  const DIAG_DB_NAME = 'trackrDiagnostics';
+  const DIAG_STORE_NAME = 'events';
+  function logSyncError(op, error){
+    const ids = op.kind==='upsert' ? op.rows.map(r=>r.id).filter(Boolean) : Object.values(op.match||{});
+    const detail = {
+      table: op.table, kind: op.kind, ids,
+      code: error && error.code, message: error && error.message,
+      details: error && error.details, hint: error && error.hint
+    };
+    console.error('Sync write rejected by server:', detail);
+    try{
+      const req = indexedDB.open(DIAG_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+          req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        try{
+          const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+          tx.objectStore(DIAG_STORE_NAME).add({ ts: Date.now(), source:'sync', event:'sync-write-rejected', detail: JSON.stringify(detail) });
+          tx.oncomplete = () => db.close();
+          tx.onerror = () => db.close();
+        }catch(e){ try{ db.close(); }catch(e2){} }
+      };
+      req.onerror = () => {};
+    }catch(e){}
+  }
   async function runOp(op){
     if(op.kind==='upsert'){
       const conflictCol = op.table==='budgets' ? 'user_id,category' : 'id';
       const { error } = await supabaseClient.from(op.table).upsert(op.rows, { onConflict: conflictCol });
-      if(error) throw error;
+      if(error){ logSyncError(op, error); throw error; }
     } else if(op.kind==='delete'){
       let q = supabaseClient.from(op.table).delete();
       Object.keys(op.match).forEach(k=>{ q = q.eq(k, op.match[k]); });
       const { error } = await q;
-      if(error) throw error;
+      if(error){ logSyncError(op, error); throw error; }
     }
   }
   async function syncOrQueue(op){
