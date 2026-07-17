@@ -156,16 +156,73 @@
       req.onerror = () => {};
     }catch(e){}
   }
+  // Records ids the server has told us, in no uncertain terms, it will NEVER accept from this
+  // session - an RLS violation (42501) means the row belongs to a different account, which no
+  // amount of retrying fixes. Kept separate from the pending-write queue (which is for ops
+  // still worth retrying) and persisted so Data Integrity Check can surface these at any later
+  // point, even after the diagnostic log has rotated past the original failure.
+  const PERMANENT_REJECT_KEY = 'permanentlyRejectedRecords';
+  async function getPermanentlyRejectedRecords(){
+    try{
+      const raw = await window.storage.get(PERMANENT_REJECT_KEY);
+      return raw ? JSON.parse(raw.value) : {};
+    }catch(e){ return {}; }
+  }
+  async function recordPermanentlyRejected(table, ids, error){
+    if(!ids.length) return;
+    try{
+      const store = await getPermanentlyRejectedRecords();
+      if(!Array.isArray(store[table])) store[table] = [];
+      ids.forEach(id=>{
+        if(id && !store[table].some(r=>r.id===id)){
+          store[table].push({ id, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString() });
+        }
+      });
+      await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify(store));
+    }catch(e){}
+  }
+  async function clearPermanentlyRejectedRecord(table, id){
+    try{
+      const store = await getPermanentlyRejectedRecords();
+      if(Array.isArray(store[table])) store[table] = store[table].filter(r=>r.id!==id);
+      await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify(store));
+    }catch(e){}
+  }
+  const RLS_VIOLATION_CODE = '42501';
   async function runOp(op){
     if(op.kind==='upsert'){
       const conflictCol = op.table==='budgets' ? 'user_id,category' : 'id';
       const { error } = await supabaseClient.from(op.table).upsert(op.rows, { onConflict: conflictCol });
-      if(error){ logSyncError(op, error); throw error; }
+      if(!error) return;
+      logSyncError(op, error);
+      if(error.code===RLS_VIOLATION_CODE){
+        if(op.rows.length>1){
+          // A batch upsert fails as one Postgres statement, same as the debt_id foreign-key
+          // bug - but unlike that case, an RLS violation can't be fixed by correcting a field,
+          // so isolate exactly which row(s) are permanently rejected by retrying one at a time,
+          // letting the rest of the batch succeed instead of every future write to this whole
+          // table being blocked behind one row that belongs to a different account.
+          const rejectedIds = [];
+          for(const row of op.rows){
+            const { error: rowErr } = await supabaseClient.from(op.table).upsert([row], { onConflict: conflictCol });
+            if(rowErr && rowErr.code===RLS_VIOLATION_CODE) rejectedIds.push(row.id);
+            else if(rowErr){ logSyncError({ ...op, rows:[row] }, rowErr); throw rowErr; }
+          }
+          if(rejectedIds.length) await recordPermanentlyRejected(op.table, rejectedIds, error);
+          return;
+        }
+        await recordPermanentlyRejected(op.table, [op.rows[0].id], error);
+        return; // Not thrown - the caller would otherwise queue this for a pointless retry.
+      }
+      throw error;
     } else if(op.kind==='delete'){
       let q = supabaseClient.from(op.table).delete();
       Object.keys(op.match).forEach(k=>{ q = q.eq(k, op.match[k]); });
       const { error } = await q;
-      if(error){ logSyncError(op, error); throw error; }
+      if(!error) return;
+      logSyncError(op, error);
+      if(error.code===RLS_VIOLATION_CODE) return; // Nothing to delete under this account anyway.
+      throw error;
     }
   }
   async function syncOrQueue(op){
@@ -182,10 +239,13 @@
   }
   // Distinguishes "still offline" (navigator.onLine is false, or the request itself never
   // reached the server) from a genuinely stuck write (we're online and the server actively
-  // rejected it — a malformed row, a stale foreign key, an RLS rejection, etc). The two need
-  // different messaging: the first resolves itself once connectivity returns, the second
-  // never will no matter how many times it's retried, so callers need to know which one
-  // they're looking at instead of getting the same dead-end "reconnect and try again."
+  // rejected it — a malformed row, a stale foreign key, etc). The two need different messaging:
+  // the first resolves itself once connectivity returns, the second never will no matter how
+  // many times it's retried, so callers need to know which one they're looking at instead of
+  // getting the same dead-end "reconnect and try again." RLS violations (42501) never reach
+  // this queue at all - runOp() above resolves those immediately into the separate
+  // permanently-rejected-records store instead, since retrying is never worth it and lumping
+  // them in with this generic "stuck" messaging would be actively wrong.
   async function getPendingWriteSummary(){
     await loadPendingQueue();
     const tables = [...new Set(pendingQueue.map(op=>op.table))];
@@ -356,5 +416,7 @@
     getPendingWriteCount,
     getPendingWriteSummary,
     deleteAllCloudDataForUser,
-    purgeQueuedTables
+    purgeQueuedTables,
+    getPermanentlyRejectedRecords,
+    clearPermanentlyRejectedRecord
   };
