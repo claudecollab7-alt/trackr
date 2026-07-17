@@ -3,7 +3,7 @@
 // CACHE_NAME never changing between deploys is why updates used to go
 // unnoticed forever (the activate handler's old-cache cleanup had nothing to
 // clean, since the "old" and "new" cache name were identical).
-const SW_VERSION = 'v9';
+const SW_VERSION = 'v10';
 const CACHE_NAME = 'trackr-' + SW_VERSION;
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 

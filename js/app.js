@@ -1807,6 +1807,16 @@
     deletedIds.add(id);
     const idx = list.findIndex(d=>d.id===id);
     if(idx>-1) list.splice(idx,1);
+    // Past payments deliberately stay (see the confirm message above), but their debtId
+    // cross-reference must be cleared here - left pointing at a debt this device (and, once
+    // synced, the cloud) no longer has, every future transactions sync would keep resending
+    // that now-nonexistent debt_id in the same batch as every other transaction. A single
+    // Postgres upsert statement covering many rows fails as one unit if any row violates a
+    // foreign-key constraint, so this one stale reference silently blocked ALL transaction
+    // syncing from succeeding again, not just the payment linked to this debt.
+    let orphanedTransactions = false;
+    transactions.forEach(t=>{ if(t.debtId===id){ t.debtId = null; orphanedTransactions = true; } });
+    if(orphanedTransactions) await saveTransactions();
     await saveFn();
     if(currentUser) window.trackrSync.syncDeleteDebt(id);
     refreshAll();
@@ -2965,16 +2975,19 @@
       submitBtn.disabled = false;
     }
   }
-  // Redeems the 6-digit code from the reset email directly - no link, no navigation. Supabase's
-  // recovery email always carries this code (the {{ .Token }} template variable) alongside the
+  // Redeems the code from the reset email directly - no link, no navigation. Supabase's recovery
+  // email always carries this code (the {{ .Token }} template variable) alongside the
   // confirmation link; verifyOtp() with type:'recovery' establishes exactly the same kind of
   // live "recovery" session that clicking the link would, so the rest of the flow (set a new
   // password, then sign out of the recovery session) is unchanged.
+  // Deliberately not assuming a fixed digit count - a real project's actual token length turned
+  // out to be 8 digits, not the 6 originally assumed here, and it isn't something this app
+  // controls or can query. Accepting a range instead of hardcoding one number.
   async function handleForgotCodeSubmit(e){
     e.preventDefault();
     const code = document.getElementById('auth-forgot-code-input').value.trim();
     const errEl = document.getElementById('auth-forgot-code-error');
-    if(!/^[0-9]{6}$/.test(code)){ errEl.textContent = 'Enter the 6-digit code from your email.'; errEl.style.display = 'block'; return; }
+    if(!/^[0-9]{6,10}$/.test(code)){ errEl.textContent = 'Enter the code from your email.'; errEl.style.display = 'block'; return; }
     if(!pendingForgotPasswordEmail){ errEl.textContent = 'Something went wrong — go back and re-enter your email.'; errEl.style.display = 'block'; return; }
     const submitBtn = document.getElementById('auth-forgot-code-submit-btn');
     submitBtn.disabled = true;
@@ -3202,7 +3215,7 @@
       pinInput.style.display = 'none';
       recoveryInput.style.display = 'block';
       title.textContent = 'Enter Your Code';
-      subtitle.textContent = `We sent a 6-digit code to ${currentUser ? currentUser.email : 'your account email'}. Enter it below to reset your PIN.`;
+      subtitle.textContent = `We sent a code to ${currentUser ? currentUser.email : 'your account email'}. Enter it below to reset your PIN.`;
       cancelBtn.textContent = 'Back';
       cancelBtn.style.display = 'inline-flex';
       submitBtn.textContent = 'Continue';
@@ -3294,7 +3307,7 @@
     if(pinMode==='recover'){
       if(isPinLockedOut()) return;
       const code = document.getElementById('pinlock-recovery-input').value.trim();
-      if(!/^[0-9]{6}$/.test(code)){ showPinError('Enter the 6-digit code from your email.'); return; }
+      if(!/^[0-9]{6,10}$/.test(code)){ showPinError('Enter the code from your email.'); return; }
       try{
         const { error } = await window.trackrSync.client.auth.verifyOtp({ token: code, type: 'reauthentication' });
         if(!error){
