@@ -2263,13 +2263,16 @@
           ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
         ]);
         if(currentUser){
-          // Debts/receivables synced before transactions - a transaction's debt_id foreign key
-          // needs the debt row to already exist server-side, otherwise this first sync attempt
-          // fails outright on a fresh restore (recoverable on retry, but avoidable outright by
-          // just syncing in dependency order).
-          window.trackrSync.syncUpsertDebts(currentUser.id, debts);
-          window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
-          window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
+          // Debts/receivables must be AWAITED before transactions sync - a transaction's debt_id
+          // foreign key needs the debt row actually committed server-side first. A previous fix
+          // here only reordered these statements without awaiting them, which does nothing:
+          // all three fire as overlapping in-flight requests regardless of source order, so the
+          // transactions upsert could still reach and commit at Supabase before the debts one
+          // does. Confirmed via real device testing - this is a genuine race, not just a local
+          // ordering nicety, so it needs a real sequential await, not "fire in the right order."
+          await window.trackrSync.syncUpsertDebts(currentUser.id, debts);
+          await window.trackrSync.syncUpsertReceivables(currentUser.id, receivables);
+          await window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
           window.trackrSync.syncUpsertGoals(currentUser.id, goals);
           window.trackrSync.syncBudgets(currentUser.id, budgets);
         }
@@ -3159,11 +3162,24 @@
     for(let i=0;i<pin.length;i++){ hash = (hash*31 + pin.charCodeAt(i)) >>> 0; }
     return hash.toString(16);
   }
-  // Recovery works by emailing a one-time code to whichever account is currently logged in
-  // (reauthenticate() + verifyOtp(type:'reauthentication') - proves control of the account
-  // without a full password change), not a locally-generated code saved at setup time. That
-  // means recovery is only possible while online and logged in; see the "Forgotten your PIN?"
-  // handler below for what happens when neither is true.
+  // Recovery works by emailing a one-time code to whichever account is currently logged in,
+  // reusing the SAME resetPasswordForEmail() + verifyOtp(type:'recovery') mechanism the
+  // password-reset flow already uses successfully - not a locally-generated code saved at setup
+  // time. That means recovery is only possible while online and logged in; see the "Forgotten
+  // your PIN?" handler below for what happens when neither is true.
+  // Previously used reauthenticate() + verifyOtp(type:'reauthentication') instead, since that's
+  // the mechanism Supabase documents specifically for confirming identity on an ALREADY-
+  // authenticated session. In practice it produced three distinct real-device failures across
+  // rounds (missing required params, then a same-shape-as-recovery call still rejected as
+  // "expired or invalid") despite recovery's identical call shape working reliably every time.
+  // Confirmed directly against GoTrue's own source (internal/api/verify.go,
+  // internal/api/reauthenticate.go) that recovery and reauthentication share the exact same OTP
+  // expiry window (config.Mailer.OtpExp) - so a shorter reauthentication-specific expiry isn't
+  // the explanation either. Nothing about PIN reset actually needs reauthentication's specific
+  // semantics (confirming a sensitive action on the CURRENT session) - the new PIN is set
+  // entirely locally afterward, never synced - so this only ever needed the same "prove control
+  // of this email inbox" proof recovery already provides. Switched to the flow that's
+  // demonstrably reliable rather than keep chasing reauthentication's failures.
   function isPinLockedOut(){
     return !!(settings.pinLockoutUntil && new Date(settings.pinLockoutUntil).getTime() > Date.now());
   }
@@ -3301,14 +3317,21 @@
     const input = pinMode==='recover' ? document.getElementById('pinlock-recovery-input') : document.getElementById('pinlock-input');
     input.value = ''; input.focus();
   }
-  // Sends the reauthentication code to whichever account is currently logged in - reused for
-  // both the initial send (tapping "Forgotten your PIN?") and the resend button.
+  // Tracks when the code was actually requested, so a verify attempt can log real elapsed time
+  // instead of it having to be inferred from page-load timestamps in the log - directly answers
+  // "was this genuinely expired, or something else" the next time this is investigated.
+  let pinRecoveryCodeSentAt = null;
+  // Sends the recovery code to whichever account is currently logged in - reused for both the
+  // initial send (tapping "Forgotten your PIN?") and the resend button.
   async function sendPinRecoveryCode(){
     try{
-      const { error } = await window.trackrSync.client.auth.reauthenticate();
-      if(error) diagLogPage('auth:reauthenticate-failed', { code: error.code, status: error.status, message: error.message });
+      const { error } = await window.trackrSync.client.auth.resetPasswordForEmail(currentUser.email, {
+        redirectTo: location.origin + location.pathname
+      });
+      pinRecoveryCodeSentAt = new Date().toISOString();
+      diagLogPage('auth:pin-recovery-code-sent', { at: pinRecoveryCodeSentAt, error: error ? { code: error.code, status: error.status, message: error.message } : null });
       return !error;
-    }catch(e){ diagLogPage('auth:reauthenticate-threw', e && e.message); return false; }
+    }catch(e){ diagLogPage('auth:pin-recovery-send-threw', e && e.message); return false; }
   }
   function updatePinRecoveryResendButtonState(){
     const btn = document.getElementById('pinlock-recovery-resend-btn');
@@ -3350,23 +3373,21 @@
       const code = document.getElementById('pinlock-recovery-input').value.trim();
       if(!/^[0-9]{6,10}$/.test(code)){ showPinError('Enter the code from your email.'); return; }
       try{
-        // Real Supabase's verify endpoint rejected a bare {token, type:'reauthentication'} call
-        // with "Only an email address or phone number should be provided on verify" - confirmed
-        // via a real device's raw error (Install Diagnostics), not assumed. The working
-        // password-reset flow already passes email alongside its type:'recovery' call; this one
-        // needs the same shape, using the currently logged-in user's email since reauthentication
-        // is tied to whoever's already signed in (this screen isn't reachable without a
-        // currentUser - see the "Forgotten your PIN?" handler's currentUser check below).
-        const { error } = await window.trackrSync.client.auth.verifyOtp({ email: currentUser.email, token: code, type: 'reauthentication' });
+        const verifyAttemptedAt = new Date().toISOString();
+        const { error } = await window.trackrSync.client.auth.verifyOtp({ email: currentUser.email, token: code, type: 'recovery' });
+        // Logs real elapsed time between the code being sent and this verify attempt, requested
+        // specifically so a future "expired" report is checkable against the actual timestamps
+        // rather than inferred from page-load timing.
+        const elapsedSec = pinRecoveryCodeSentAt ? Math.round((new Date(verifyAttemptedAt) - new Date(pinRecoveryCodeSentAt))/1000) : null;
         if(!error){
           await resetPinAttempts();
           pinFlowContext = 'recovery-reset';
           showPinOverlay('setup-new');
         } else {
           // Same raw-error capture as the password-reset code path above - whatever Supabase
-          // actually says (wrong OTP type, expired, superseded by a later reauthenticate() call)
-          // lands in Profile & Backup -> View Log instead of only ever showing the generic copy.
-          diagLogPage('auth:verifyOtp-reauthentication-failed', { code: error.code, status: error.status, message: error.message });
+          // actually says lands in Profile & Backup -> View Log instead of only ever showing
+          // the generic copy.
+          diagLogPage('auth:verifyOtp-pin-recovery-failed', { code: error.code, status: error.status, message: error.message, sentAt: pinRecoveryCodeSentAt, verifyAttemptedAt, elapsedSec });
           await registerFailedPinAttempt();
           showPinError('That code is incorrect or has expired.');
         }
@@ -3525,11 +3546,18 @@
         unsyncable.forEach(u=> (byTable[u.table] = byTable[u.table]||[]).push(u));
         html += `<div class="card-label" style="margin-bottom:8px;">CAN'T SYNC TO YOUR ACCOUNT (${unsyncable.length})</div>`;
         html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
-          <p class="period-hint" style="margin:0 0 10px;">Your account's server permanently refuses these — most likely left over from a Restore Backup that brought in records from a different account. They stay only on this device and will never sync; nothing else here is affected.</p>`;
+          <p class="period-hint" style="margin:0 0 10px;">Your account's server permanently refuses these. They stay only on this device and will never sync; nothing else here is affected.</p>`;
+        // 42501 (RLS) means the row belongs to a different account - most likely left over from
+        // a Restore Backup that brought in records from a different account. 23503 (a foreign
+        // key violation) means it references something, most likely a debt, that doesn't exist
+        // server-side. Distinct reasons get distinct copy rather than one blanket explanation.
+        const reasonFor = code => code==='42501'
+          ? "Belongs to a different account"
+          : code==='23503' ? "References something that no longer exists on the server" : "Server permanently rejected this";
         Object.keys(byTable).forEach(table=>{
           byTable[table].forEach(u=>{
             html += `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line);">
-              <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName})</span></span>
+              <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName} — ${reasonFor(u.code)})</span></span>
               <button type="button" class="btn-pill btn-outline unsyncable-remove-btn" data-table="${table}" data-list="${u.listName}" data-id="${u.id}" style="padding:4px 10px; font-size:12px;">Remove</button>
             </div>`;
           });

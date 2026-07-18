@@ -156,11 +156,13 @@
       req.onerror = () => {};
     }catch(e){}
   }
-  // Records ids the server has told us, in no uncertain terms, it will NEVER accept from this
-  // session - an RLS violation (42501) means the row belongs to a different account, which no
-  // amount of retrying fixes. Kept separate from the pending-write queue (which is for ops
-  // still worth retrying) and persisted so Data Integrity Check can surface these at any later
-  // point, even after the diagnostic log has rotated past the original failure.
+  // Records ids the server has told us it will NEVER accept from this session as-is - an RLS
+  // violation (42501) means the row belongs to a different account, and a foreign-key violation
+  // (23503) means it references something (a debt_id, most likely) that doesn't exist server-
+  // side. Neither resolves by blindly retrying the exact same payload, so both are pulled out of
+  // the pending-write queue (which is for ops still worth retrying) and persisted here instead,
+  // so Data Integrity Check can surface them at any later point, even after the diagnostic log
+  // has rotated past the original failure.
   const PERMANENT_REJECT_KEY = 'permanentlyRejectedRecords';
   async function getPermanentlyRejectedRecords(){
     try{
@@ -189,23 +191,26 @@
     }catch(e){}
   }
   const RLS_VIOLATION_CODE = '42501';
+  const FK_VIOLATION_CODE = '23503';
+  const PERMANENT_FAILURE_CODES = new Set([RLS_VIOLATION_CODE, FK_VIOLATION_CODE]);
   async function runOp(op){
     if(op.kind==='upsert'){
       const conflictCol = op.table==='budgets' ? 'user_id,category' : 'id';
       const { error } = await supabaseClient.from(op.table).upsert(op.rows, { onConflict: conflictCol });
       if(!error) return;
       logSyncError(op, error);
-      if(error.code===RLS_VIOLATION_CODE){
+      if(PERMANENT_FAILURE_CODES.has(error.code)){
         if(op.rows.length>1){
-          // A batch upsert fails as one Postgres statement, same as the debt_id foreign-key
-          // bug - but unlike that case, an RLS violation can't be fixed by correcting a field,
-          // so isolate exactly which row(s) are permanently rejected by retrying one at a time,
-          // letting the rest of the batch succeed instead of every future write to this whole
-          // table being blocked behind one row that belongs to a different account.
+          // A batch upsert fails as one Postgres statement - whether it's an RLS violation (row
+          // belongs to a different account) or a foreign-key violation (references a debt_id
+          // that doesn't exist server-side), neither is fixed by resending the identical batch,
+          // so isolate exactly which row(s) are rejected by retrying one at a time, letting the
+          // rest of the batch succeed instead of every future write to this whole table being
+          // blocked behind one bad row.
           const rejectedIds = [];
           for(const row of op.rows){
             const { error: rowErr } = await supabaseClient.from(op.table).upsert([row], { onConflict: conflictCol });
-            if(rowErr && rowErr.code===RLS_VIOLATION_CODE) rejectedIds.push(row.id);
+            if(rowErr && PERMANENT_FAILURE_CODES.has(rowErr.code)) rejectedIds.push(row.id);
             else if(rowErr){ logSyncError({ ...op, rows:[row] }, rowErr); throw rowErr; }
           }
           if(rejectedIds.length) await recordPermanentlyRejected(op.table, rejectedIds, error);
@@ -221,7 +226,7 @@
       const { error } = await q;
       if(!error) return;
       logSyncError(op, error);
-      if(error.code===RLS_VIOLATION_CODE) return; // Nothing to delete under this account anyway.
+      if(PERMANENT_FAILURE_CODES.has(error.code)) return; // Retrying the identical delete won't change the outcome either way.
       throw error;
     }
   }
@@ -367,9 +372,15 @@
       if(flag && flag.value==='true') return;
     }catch(e){}
     try{
-      if(localData.transactions.length) await runOp({ kind:'upsert', table:'transactions', rows: localData.transactions.map(t=>toTransactionRow(t,userId)) });
+      // Debts/receivables before transactions - same dependency order as Restore Backup (see
+      // handleRestoreFile in js/app.js): a transaction's debt_id foreign key needs the debt row
+      // committed first. This path already awaited each op in sequence, so the bug here was
+      // purely the ordering, not a race - but on a first-ever migration where the account has
+      // both debts and debt-payment transactions, this would have hit the exact same FK
+      // violation the restore race did, deterministically rather than intermittently.
       if(localData.debts.length) await runOp({ kind:'upsert', table:'debts', rows: localData.debts.map(d=>toDebtRow(d,userId,false)) });
       if(localData.receivables && localData.receivables.length) await runOp({ kind:'upsert', table:'debts', rows: localData.receivables.map(d=>toDebtRow(d,userId,true)) });
+      if(localData.transactions.length) await runOp({ kind:'upsert', table:'transactions', rows: localData.transactions.map(t=>toTransactionRow(t,userId)) });
       if(localData.goals.length) await runOp({ kind:'upsert', table:'goals', rows: localData.goals.map(g=>toGoalRow(g,userId)) });
       const budgetRows = Object.keys(localData.budgets).map(cat=> ({ user_id:userId, category:cat, monthly_limit:localData.budgets[cat] }));
       if(budgetRows.length) await runOp({ kind:'upsert', table:'budgets', rows: budgetRows });
