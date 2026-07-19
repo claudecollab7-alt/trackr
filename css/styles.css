@@ -21,7 +21,7 @@
        search-overlay fade that was already in place and felt right - not a new invention, just
        generalized. transform/opacity only (never width/height/top/left), so this stays cheap
        on lower-end devices. */
-    --anim-duration:220ms;
+    --anim-duration:280ms;
     --anim-ease:cubic-bezier(.16,1,.3,1);
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; tap-highlight-color:transparent; letter-spacing:normal; word-spacing:normal; text-justify:none; text-align-last:auto;}
@@ -99,9 +99,15 @@
   .icon-circle:hover{ transform:translateY(-1px); box-shadow:var(--shadow); }
   .badge-dot{ position:absolute; top:-3px; right:-3px; min-width:16px; height:16px; padding:0 3px; border-radius:999px; background:var(--debit); color:#fff; font-size:9.5px; font-weight:800; display:none; align-items:center; justify-content:center; box-shadow:0 0 0 2px #fff; }
 
-  .views{ flex:1; overflow-y:auto; overflow-x:hidden; padding:0 30px 50px; position:relative; }
+  /* padding-top is also driven at runtime by setTopSpaceReservation() in js/app.js, which reserves
+     room here for whatever's currently showing in the fixed toast/banner strip just below the
+     topbar - a toast's own rendered height can exceed the natural gap between the topbar and the
+     next card, so nudging the content down (rather than only positioning the toast precisely)
+     is what actually avoids the two overlapping. Transitioned so the push-down reads as part of
+     the toast's own entrance instead of a separate abrupt jump. */
+  .views{ flex:1; overflow-y:auto; overflow-x:hidden; padding:0 30px 50px; position:relative; transition:padding-top var(--anim-duration) var(--anim-ease); }
   .view{ display:none; max-width:1100px; position:relative; padding-top:18px; }
-  .view.active{ display:block; animation: viewFadeIn .22s var(--anim-ease); }
+  .view.active{ display:block; animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   @keyframes viewFadeIn{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:translateY(0); } }
   @media (prefers-reduced-motion: reduce){ .view.active{ animation:none; } }
 
@@ -299,9 +305,9 @@
   .back-btn{ display:flex; align-items:center; gap:6px; background:none; border:none; color:var(--ink-soft); font-weight:700; font-size:13.5px; margin-bottom:16px; padding:0; }
   .back-btn:hover{ color:var(--ink); }
   .more-sub{ display:none; }
-  .more-sub.active{ display:block; animation: viewFadeIn .22s var(--anim-ease); }
+  .more-sub.active{ display:block; animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   #more-menu{ display:none; }
-  #more-menu.active{ display:block; animation: viewFadeIn .22s var(--anim-ease); }
+  #more-menu.active{ display:block; animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   @media (prefers-reduced-motion: reduce){ .more-sub.active, #more-menu.active{ animation:none; } }
   .more-sub h2{ font-size:18px; margin:0 0 16px; font-weight:800; letter-spacing:-.2px; }
 
@@ -477,9 +483,9 @@
      needs an actual class toggle (remove + forced reflow + re-add) each time, not just a static
      rule. Used for the auth overlay's login/forgot/code/done steps and the PIN-lock screen's
      title/subtitle across mode changes. */
-  .view-fade-retrigger{ animation: viewFadeIn .22s var(--anim-ease); }
+  .view-fade-retrigger{ animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   @media (prefers-reduced-motion: reduce){
-    #auth-overlay, #pinlock-overlay, #sw-update-banner, #backup-nag-banner, #loading-overlay{ transition:none; }
+    #auth-overlay, #pinlock-overlay, #sw-update-banner, #backup-nag-banner, #loading-overlay, .views{ transition:none; }
     .view-fade-retrigger{ animation:none; }
   }
   .search-overlay-header{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-shrink:0; }
@@ -572,9 +578,11 @@
   }
 
   #app-toast{
-    /* Anchored below the topbar (not just a fixed 14px from the viewport edge) - a
-       multi-line message here was reaching down far enough to overlap the topbar's
-       icons and the Home balance card right below it. */
+    /* top is set dynamically in JS (positionBelowTopbar() in js/app.js), measuring the topbar's
+       ACTUAL rendered bottom edge each time this shows rather than guessing a fixed pixel value -
+       a hardcoded guess here previously still overlapped the topbar/Home balance card on some
+       viewports, since the topbar's real height varies slightly by breakpoint and safe-area
+       inset. This value is only a fallback for the brief instant before that JS runs. */
     position:fixed; left:50%; top:calc(76px + env(safe-area-inset-top)); z-index:5000;
     /* A fixed pixel offset, not a percentage of the toast's own height - percentage-based
        hiding broke when the resting "top" was moved down to clear the topbar (a short

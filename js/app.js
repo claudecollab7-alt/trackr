@@ -524,7 +524,7 @@
     container.querySelectorAll('.del-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); deleteTransaction(btn.dataset.id); }));
     container.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); closeAllOverlaysThenRun(()=> startEditTransaction(btn.dataset.id)); }));
   }
-  const OVERLAY_ANIM_MS = 220;
+  const OVERLAY_ANIM_MS = 280; // must match --anim-duration in css/styles.css
   function showOverlay(id){
     const el = document.getElementById(id); if(!el) return;
     el.style.display = 'flex';
@@ -796,17 +796,50 @@
   }
 
   let appToastTimer = null;
+  // Positions a fixed, topbar-anchored banner/toast just below the ACTUAL rendered topbar
+  // height, rather than a hardcoded pixel guess - a guessed offset only ever matches one
+  // specific topbar height (icon sizes, padding, safe-area-inset all affect it, and desktop vs
+  // mobile don't render identically), so it's exactly the kind of thing that quietly drifts out
+  // of sync and starts overlapping page content again the next time anything above it changes.
+  // Measuring the real topbar removes that whole class of bug instead of re-guessing a new
+  // number. Re-measured every time something is shown, so a mobile<->desktop resize in between
+  // is picked up automatically.
+  function positionBelowTopbar(el, margin){
+    const topbar = document.querySelector('.topbar');
+    const bottom = topbar ? topbar.getBoundingClientRect().bottom : 64;
+    el.style.top = Math.round(bottom + margin) + 'px';
+  }
+  // Precise positioning below the topbar (positionBelowTopbar, above) is not enough on its own to
+  // avoid overlap - a toast/banner's own rendered height can exceed the natural gap between the
+  // topbar's bottom edge and whatever card renders right below it (confirmed by direct
+  // measurement: ~34px of genuine overlap on mobile/desktop/tablet alike). This pushes the
+  // scrollable content down to make room instead, keyed per-source so the toast and the update
+  // banner (which can in principle both be visible) don't clobber each other's reservation -
+  // the larger one wins, and either can be safely dropped to 0 without disturbing the other.
+  const topSpaceReservations = {};
+  function setTopSpaceReservation(key, px){
+    if(px > 0) topSpaceReservations[key] = px; else delete topSpaceReservations[key];
+    const views = document.querySelector('.views');
+    if(!views) return;
+    const max = Math.max(0, ...Object.values(topSpaceReservations));
+    views.style.paddingTop = max > 0 ? max + 'px' : '';
+  }
   function showAppToast(message, type){
     const el = document.getElementById('app-toast');
     document.getElementById('app-toast-msg').textContent = message;
+    positionBelowTopbar(el, 10);
     el.classList.toggle('info', type==='info');
     el.classList.add('show');
+    // Measured after the message text is set and the toast is shown, since a longer message can
+    // wrap to a second line and needs more reserved room than a short one.
+    setTopSpaceReservation('toast', el.getBoundingClientRect().height + 10);
     if(appToastTimer) clearTimeout(appToastTimer);
-    appToastTimer = setTimeout(()=> el.classList.remove('show'), 6000);
+    appToastTimer = setTimeout(()=> { el.classList.remove('show'); setTopSpaceReservation('toast', 0); }, 6000);
   }
   function hideAppToast(){
     if(appToastTimer){ clearTimeout(appToastTimer); appToastTimer = null; }
     document.getElementById('app-toast').classList.remove('show');
+    setTopSpaceReservation('toast', 0);
   }
   function checkBudgetCrossing(category, date, addedAmount){
     const limit = budgets[category];
@@ -3131,7 +3164,13 @@
     const password = document.getElementById('auth-password').value;
     if(!email || !password){ showAuthError('Enter an email and password.'); return; }
     const submitBtn = document.getElementById('auth-submit-btn');
+    // startAppForUser() now stays up through the full cloud pull before revealing anything (see
+    // its own comment on why - avoids flashing stale/zero data), which can take a real moment -
+    // this button needs to keep showing that something's happening for that whole stretch, the
+    // same "Sending…"-style treatment already used for the password-reset/PIN-recovery sends.
+    const originalText = submitBtn.textContent;
     submitBtn.disabled = true;
+    submitBtn.textContent = authMode==='signup' ? 'Signing up…' : 'Logging in…';
     try{
       if(authMode==='signup'){
         const { data, error } = await window.trackrSync.client.auth.signUp({ email, password });
@@ -3150,6 +3189,7 @@
       showAuthError('Something went wrong. Check your connection and try again.');
     } finally {
       submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
     }
   }
   // Trackr is often shared across devices/people - logging out must not leave the previous
@@ -4214,8 +4254,14 @@
   }
   async function startAppForUser(user){
     if(appStarted){
-      hideAuthOverlay();
+      // attachUserAndSync (cloud pull + refreshAll, since refreshAfter=true) must finish BEFORE
+      // the auth overlay hides - hiding it first (as this previously did) reveals whatever the
+      // Home screen was already showing underneath (a guest/offline zero-state, or stale data
+      // from before login) for the entire network round-trip, then visibly flashes to the real
+      // numbers once the pull finally completes and refreshAll() runs. Doing the data refresh
+      // first means the screen underneath is already correct by the time it's ever shown.
       await attachUserAndSync(user, true);
+      hideAuthOverlay();
       return;
     }
     appStarted = true;
@@ -4436,7 +4482,9 @@
   function showUpdateBanner(reg){
     const el = document.getElementById('sw-update-banner');
     if(!el || !reg.waiting) return;
+    positionBelowTopbar(el, 10);
     animateIn(el, 'flex');
+    setTopSpaceReservation('updateBanner', el.getBoundingClientRect().height + 10);
     const btn = document.getElementById('sw-update-btn');
     btn.onclick = () => {
       btn.disabled = true;
@@ -4448,6 +4496,7 @@
   function hideUpdateBanner(){
     const el = document.getElementById('sw-update-banner');
     if(el) animateOut(el);
+    setTopSpaceReservation('updateBanner', 0);
   }
 
   if ('serviceWorker' in navigator) {
