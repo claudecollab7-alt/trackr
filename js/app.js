@@ -537,6 +537,44 @@
     el.classList.remove('open');
     setTimeout(()=>{ if(!el.classList.contains('open')) el.style.display='none'; }, OVERLAY_ANIM_MS);
   }
+  // Same fade-transition pattern as showOverlay/hideOverlay above (same .open class, same
+  // OVERLAY_ANIM_MS timing), generalized for elements that were previously just raw
+  // style.display toggles with no transition at all (auth/PIN-lock overlays, banners, the
+  // initial loading screen). Idempotent - safe to call from a render loop (e.g. renderBackupNag,
+  // or showPinOverlay across mode changes while the overlay stays open) without re-triggering
+  // the animation if the element is already in its target state.
+  function animateIn(el, displayValue){
+    if(!el) return;
+    if(el.style.display === displayValue && el.classList.contains('open')) return;
+    el.style.display = displayValue;
+    el.classList.remove('open');
+    void el.offsetWidth;
+    requestAnimationFrame(()=> requestAnimationFrame(()=> el.classList.add('open')));
+  }
+  function animateOut(el){
+    if(!el) return;
+    if(el.style.display === 'none' && !el.classList.contains('open')) return;
+    el.classList.remove('open');
+    setTimeout(()=>{ if(!el.classList.contains('open')) el.style.display = 'none'; }, OVERLAY_ANIM_MS);
+  }
+  // The loading screen only ever shows once at startup and is dismissed once init finishes -
+  // no need for the reusable open/close pair above, just a plain fade-out.
+  function fadeOutLoadingOverlay(){
+    const el = document.getElementById('loading-overlay');
+    if(!el || el.style.display==='none') return;
+    el.style.opacity = '0';
+    setTimeout(()=>{ el.style.display = 'none'; }, OVERLAY_ANIM_MS);
+  }
+  // Re-plays the shared viewFadeIn animation on an element whose CONTENT just changed in place
+  // (no separate view/overlay to open/close around it) - used for the PIN-lock screen's
+  // title/subtitle, which change per mode (unlock/recover/setup) without the overlay itself
+  // closing and reopening.
+  function reTriggerFade(el){
+    if(!el) return;
+    el.classList.remove('view-fade-retrigger');
+    void el.offsetWidth;
+    el.classList.add('view-fade-retrigger');
+  }
 
   function openCategoryDetail(category, subtitle, txList){
     setText('catdetail-title', category);
@@ -2167,8 +2205,8 @@
   }
   function renderBackupNag(){
     const banner = document.getElementById('backup-nag-banner'); if(!banner) return;
-    if(!shouldShowBackupNag()){ banner.style.display='none'; return; }
-    banner.style.display='block';
+    if(!shouldShowBackupNag()){ animateOut(banner); return; }
+    animateIn(banner, 'block');
     const text = document.getElementById('backup-nag-text');
     if(currentUser){
       text.textContent = settings.lastBackupAt
@@ -2810,8 +2848,16 @@
   }
   const AUTH_VIEW_IDS = ['auth-form-view','auth-checkinbox-view','auth-confirmed-view','auth-forgot-view','auth-forgot-code-view','auth-reset-password-view','auth-reset-done-view'];
   function showOnlyAuthView(id){
-    document.getElementById('auth-overlay').style.display = 'flex';
+    // animateIn() only actually plays the fade the first time (opening from fully closed) -
+    // it's a no-op if the overlay is already open, so moving between login/forgot/code/done
+    // while it stays open doesn't re-trigger the outer fade. The inner view's own entrance
+    // (.auth-view's animation) needs reTriggerFade() explicitly - a plain display:none -> flex
+    // toggle does NOT restart a CSS animation on its own when the animation-name was already
+    // sitting on the element via a class that's never added/removed (confirmed by testing this
+    // directly: 0 animationstart events fired without the explicit retrigger below).
+    animateIn(document.getElementById('auth-overlay'), 'flex');
     AUTH_VIEW_IDS.forEach(v=>{ document.getElementById(v).style.display = (v===id) ? 'flex' : 'none'; });
+    reTriggerFade(document.getElementById(id));
     lockBodyScroll();
   }
   function showAuthFormView(){
@@ -2915,7 +2961,7 @@
     showAuthFormView();
   }
   function hideAuthOverlay(){
-    document.getElementById('auth-overlay').style.display = 'none';
+    animateOut(document.getElementById('auth-overlay'));
     unlockBodyScroll();
   }
   function showAuthError(msg){
@@ -3310,13 +3356,18 @@
         submitBtn.textContent = 'Continue';
       }
     }
-    overlay.style.display = 'flex';
+    // Retriggers a fade on the title/subtitle text every mode change, whether or not the
+    // overlay itself was already open (unlock -> recover -> setup-new, etc. all reuse the same
+    // overlay - only the text/inputs change) - gives the step-to-step change its own visual cue
+    // without needing separate view elements to swap between, unlike the auth overlay above.
+    reTriggerFade(title); reTriggerFade(subtitle);
+    animateIn(overlay, 'flex');
     lockBodyScroll();
     updatePinAttemptsUI();
     setTimeout(()=>{ const i = mode==='recover' ? recoveryInput : pinInput; if(i) i.focus(); }, 60);
   }
   function hidePinOverlay(){
-    document.getElementById('pinlock-overlay').style.display = 'none';
+    animateOut(document.getElementById('pinlock-overlay'));
     unlockBodyScroll();
     if(pinLockoutInterval){ clearInterval(pinLockoutInterval); pinLockoutInterval = null; }
   }
@@ -4208,7 +4259,7 @@
         }
       }
     });
-    document.getElementById('loading-overlay').style.display='none';
+    fadeOutLoadingOverlay();
     if(settings.appLockEnabled && settings.appLockPin){ lockApp(); } else { resetAppLockTimer(); }
     resetHideBalancesTimer();
     setInterval(maybeFireDueNotifications, 5*60*1000);
@@ -4245,7 +4296,7 @@
     if(window.trackrSync.cameFromEmailConfirmation){
       try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
       if(history.replaceState) history.replaceState(null, '', location.pathname);
-      document.getElementById('loading-overlay').style.display = 'none';
+      fadeOutLoadingOverlay();
       showAuthConfirmedView();
       return;
     }
@@ -4255,7 +4306,7 @@
     // actually set.
     if(window.trackrSync.cameFromPasswordRecovery){
       if(history.replaceState) history.replaceState(null, '', location.pathname);
-      document.getElementById('loading-overlay').style.display = 'none';
+      fadeOutLoadingOverlay();
       showAuthResetPasswordView();
       return;
     }
@@ -4295,7 +4346,7 @@
     if(skippedLogin){
       await startAppForUser(null);
     } else {
-      document.getElementById('loading-overlay').style.display = 'none';
+      fadeOutLoadingOverlay();
       showAuthOverlay('login');
     }
   }
@@ -4385,7 +4436,7 @@
   function showUpdateBanner(reg){
     const el = document.getElementById('sw-update-banner');
     if(!el || !reg.waiting) return;
-    el.style.display = 'flex';
+    animateIn(el, 'flex');
     const btn = document.getElementById('sw-update-btn');
     btn.onclick = () => {
       btn.disabled = true;
@@ -4396,7 +4447,7 @@
   }
   function hideUpdateBanner(){
     const el = document.getElementById('sw-update-banner');
-    if(el) el.style.display = 'none';
+    if(el) animateOut(el);
   }
 
   if ('serviceWorker' in navigator) {
