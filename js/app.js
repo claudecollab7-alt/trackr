@@ -2996,7 +2996,15 @@
     const errEl = document.getElementById('auth-forgot-error');
     if(!email){ errEl.textContent = 'Enter your email.'; errEl.style.display = 'block'; return; }
     const submitBtn = document.getElementById('auth-forgot-submit-btn');
+    // The button already disabled instantly before this round - the real gap was that a
+    // disabled button with unchanged text gives no sign anything is happening, so the real
+    // few-second wait for Supabase to queue the email (via Resend SMTP) reads as a frozen UI
+    // rather than a working one. Swap in "Sending..." the instant the tap registers, restore
+    // the original label if this errors back onto the same screen (a success instead navigates
+    // to the code screen, where this button no longer matters).
+    const originalText = submitBtn.textContent;
     submitBtn.disabled = true;
+    submitBtn.textContent = 'Sending…';
     try{
       const { error } = await window.trackrSync.client.auth.resetPasswordForEmail(email, {
         redirectTo: location.origin + location.pathname
@@ -3009,6 +3017,7 @@
       errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
     }finally{
       submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
     }
   }
   // Redeems the code from the reset email directly - no link, no navigation. Supabase's recovery
@@ -3380,6 +3389,10 @@
         // rather than inferred from page-load timing.
         const elapsedSec = pinRecoveryCodeSentAt ? Math.round((new Date(verifyAttemptedAt) - new Date(pinRecoveryCodeSentAt))/1000) : null;
         if(!error){
+          // Symmetric with auth:pin-recovery-code-sent above - previously only the send step
+          // was logged, so confirming a real success required a screenshot rather than a log
+          // entry. Same timestamps as the failure branch below, for the same reason.
+          diagLogPage('auth:pin-recovery-verify-succeeded', { sentAt: pinRecoveryCodeSentAt, verifyAttemptedAt, elapsedSec });
           await resetPinAttempts();
           pinFlowContext = 'recovery-reset';
           showPinOverlay('setup-new');
@@ -3711,9 +3724,15 @@
         return;
       }
       const btn = e.currentTarget;
+      // Same gap as the password-reset flow: the button already disabled instantly, but with
+      // its text unchanged a disabled link gives no sign anything is happening during the real
+      // few-second wait for Supabase to queue the email - reads as frozen rather than working.
+      const originalText = btn.textContent;
       btn.disabled = true;
+      btn.textContent = 'Sending…';
       const sent = await sendPinRecoveryCode();
       btn.disabled = false;
+      btn.textContent = originalText;
       if(!sent){
         alert("Couldn't send a code to your email right now — check your connection and try again.");
         return;
