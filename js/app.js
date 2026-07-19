@@ -524,7 +524,7 @@
     container.querySelectorAll('.del-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); deleteTransaction(btn.dataset.id); }));
     container.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e)=>{ e.stopPropagation(); closeAllOverlaysThenRun(()=> startEditTransaction(btn.dataset.id)); }));
   }
-  const OVERLAY_ANIM_MS = 280; // must match --anim-duration in css/styles.css
+  const OVERLAY_ANIM_MS = 260; // must match --anim-duration in css/styles.css
   function showOverlay(id){
     const el = document.getElementById(id); if(!el) return;
     el.style.display = 'flex';
@@ -4252,6 +4252,17 @@
     }
     if(refreshAfter) refreshAll();
   }
+  // Logged right at the moment the app shell is about to become visible (auth overlay hiding, or
+  // the loading overlay fading) - a fast visual flash isn't something a user can screenshot, so
+  // this is what makes the NEXT report of one diagnosable from View Log instead of guesswork:
+  // whether the balance on screen at that exact instant was already the real figure or a
+  // placeholder/zero one it then had to jump away from.
+  function logHomeReveal(path){
+    try{
+      const bal = document.getElementById('home-balance');
+      diagLogPage('page:home-reveal', { path, homeBalanceAtReveal: bal ? bal.textContent.trim() : null });
+    }catch(e){}
+  }
   async function startAppForUser(user){
     if(appStarted){
       // attachUserAndSync (cloud pull + refreshAll, since refreshAfter=true) must finish BEFORE
@@ -4261,11 +4272,20 @@
       // numbers once the pull finally completes and refreshAll() runs. Doing the data refresh
       // first means the screen underneath is already correct by the time it's ever shown.
       await attachUserAndSync(user, true);
+      logHomeReveal('reauth');
       hideAuthOverlay();
       return;
     }
     appStarted = true;
-    hideAuthOverlay();
+    // NOT hidden here (as this previously did) - on a completely fresh install (no prior guest
+    // session), the auth overlay IS the login form the user just submitted, and hiding it this
+    // early reveals the Home screen underneath before loadData()/attachUserAndSync()/refreshAll()
+    // below have populated it with anything real. The loading overlay isn't covering for it either
+    // at this point - it already faded out before this same auth screen first appeared. Moved to
+    // after refreshAll() so the first thing ever shown here is already correct, same principle as
+    // the appStarted branch above. (When a session already exists at page load, this whole
+    // function still runs through this branch, but the loading overlay - not this one - is what's
+    // actually covering the screen throughout, so this move doesn't change anything for that path.)
     try{ await loadData(); }catch(e){ console.error(e); }
     await attachUserAndSync(user, false);
     injectIcons();
@@ -4286,6 +4306,8 @@
     applyDesktopLayout();
     desktopMql.addEventListener('change', applyDesktopLayout);
     refreshAll();
+    logHomeReveal('first-start');
+    hideAuthOverlay();
     renderCategoriesView();
     history.replaceState({ tab:'home', sub:null }, '', '');
     window.addEventListener('popstate', (e)=>{

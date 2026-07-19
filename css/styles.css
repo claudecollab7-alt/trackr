@@ -21,7 +21,7 @@
        search-overlay fade that was already in place and felt right - not a new invention, just
        generalized. transform/opacity only (never width/height/top/left), so this stays cheap
        on lower-end devices. */
-    --anim-duration:280ms;
+    --anim-duration:260ms;
     --anim-ease:cubic-bezier(.16,1,.3,1);
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; tap-highlight-color:transparent; letter-spacing:normal; word-spacing:normal; text-justify:none; text-align-last:auto;}
