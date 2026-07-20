@@ -99,13 +99,11 @@
   .icon-circle:hover{ transform:translateY(-1px); box-shadow:var(--shadow); }
   .badge-dot{ position:absolute; top:-3px; right:-3px; min-width:16px; height:16px; padding:0 3px; border-radius:999px; background:var(--debit); color:#fff; font-size:9.5px; font-weight:800; display:none; align-items:center; justify-content:center; box-shadow:0 0 0 2px #fff; }
 
-  /* padding-top is also driven at runtime by setTopSpaceReservation() in js/app.js, which reserves
-     room here for whatever's currently showing in the fixed toast/banner strip just below the
-     topbar - a toast's own rendered height can exceed the natural gap between the topbar and the
-     next card, so nudging the content down (rather than only positioning the toast precisely)
-     is what actually avoids the two overlapping. Transitioned so the push-down reads as part of
-     the toast's own entrance instead of a separate abrupt jump. */
-  .views{ flex:1; overflow-y:auto; overflow-x:hidden; padding:0 30px 50px; position:relative; transition:padding-top var(--anim-duration) var(--anim-ease); }
+  /* --views-base-pb lets JS (setBottomSpaceReservation() in js/app.js) temporarily add extra
+     bottom padding - reserving room for a bottom-docked toast/banner - without needing to know or
+     hardcode this responsive base value itself; it just reads the variable and adds to it, then
+     clears back to '' (falling back to this rule) once nothing needs the room any more. */
+  .views{ flex:1; overflow-y:auto; overflow-x:hidden; padding:0 30px 50px; position:relative; --views-base-pb:50px; transition:padding-bottom var(--anim-duration) var(--anim-ease); }
   .view{ display:none; max-width:1100px; position:relative; padding-top:18px; }
   .view.active{ display:block; animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   @keyframes viewFadeIn{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:translateY(0); } }
@@ -114,6 +112,17 @@
   .grid-2x2{ display:flex; flex-direction:column; gap:16px; margin-bottom:16px; }
   .balance-amount{ font-size:30px; font-weight:700; margin:6px 0 18px; }
   .balance-amount.negative{ color:var(--debit); }
+  /* Shown instead of the real figure whenever it isn't confirmed-ready yet (default state on
+     first paint, and re-applied for the brief window around logout) - defense in depth alongside
+     the render-ordering fixes: even if some future change or device-specific timing race lets
+     this repaint before the actual reveal is ready, it reads as "loading", never as a real ₹0.00
+     someone could mistake for their actual balance being gone. */
+  .balance-amount.skeleton{
+    color:transparent; background:linear-gradient(90deg, var(--line) 25%, var(--card) 50%, var(--line) 75%);
+    background-size:200% 100%; border-radius:8px; animation:skeletonShimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes skeletonShimmer{ 0%{ background-position:200% 0; } 100%{ background-position:-200% 0; } }
+  @media (prefers-reduced-motion: reduce){ .balance-amount.skeleton{ animation:none; background-position:0 0; } }
   .mono-num.negative{ color:var(--debit); }
   .progress-block{ margin-bottom:18px; }
   .progress-row{ display:flex; justify-content:space-between; font-size:12.5px; color:var(--ink-soft); font-weight:600; margin-bottom:8px; text-align:left; }
@@ -467,8 +476,14 @@
      toggles with no transition at all. transform/opacity only, never width/height/top/left. */
   #auth-overlay, #pinlock-overlay{ opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
   #auth-overlay.open, #pinlock-overlay.open{ opacity:1; }
-  #sw-update-banner{ opacity:0; transform:translateY(-8px); transition:opacity var(--anim-duration) var(--anim-ease), transform var(--anim-duration) var(--anim-ease); }
-  #sw-update-banner.open{ opacity:1; transform:translateY(0); }
+  /* Horizontal centering lives here now, not as a separate inline transform on the element - only
+     one `transform` declaration can ever win for a given element, so splitting the centering
+     (inline) from the show/hide slide (here) silently dropped the slide entirely: the inline
+     transform always took precedence, leaving this rule's translateY component with no effect
+     regardless of the .open class (confirmed directly - computed transform was identical with
+     and without .open). Combining both axes in one place is what actually makes both work. */
+  #sw-update-banner{ opacity:0; transform:translateX(-50%) translateY(8px); transition:opacity var(--anim-duration) var(--anim-ease), transform var(--anim-duration) var(--anim-ease); }
+  #sw-update-banner.open{ opacity:1; transform:translateX(-50%) translateY(0); }
   /* backup-nag-banner is a normal in-flow block (not fixed-position like the banner above), so
      only opacity is animated - transitioning height/margin to smooth its insertion into the
      layout would mean animating a layout-triggering property, which is exactly what this
@@ -551,6 +566,8 @@
   .reminder-card-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
   .reminder-name{ font-weight:700; font-size:14px; }
   .reminder-meta{ font-size:11.5px; color:var(--ink-soft); font-weight:600; margin-top:2px; }
+  .alert-dismiss-btn{ background:none; border:none; color:var(--ink-soft); font-size:18px; line-height:1; padding:2px 4px; flex-shrink:0; cursor:pointer; }
+  .alert-dismiss-btn:hover{ color:var(--ink); }
   .reminder-status{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; flex-shrink:0; }
   .reminder-status.overdue{ background:rgba(220,38,38,.12); color:var(--debit); }
   .reminder-status.upcoming{ background:rgba(245,158,11,.14); color:var(--gold); }
@@ -569,7 +586,7 @@
     .spine{ display:none; }
     .bottom-nav{ display:flex; }
     main{ padding-bottom:0; }
-    .views{ padding:0 16px 90px; }
+    .views{ padding:0 16px 90px; --views-base-pb:90px; }
     .topbar{ margin:0 -16px; padding:16px 16px; }
     .grid-2x2{ grid-template-columns:1fr; }
     .cat-columns{ flex-direction:column; }
@@ -578,18 +595,24 @@
   }
 
   #app-toast{
-    /* top is set dynamically in JS (positionBelowTopbar() in js/app.js), measuring the topbar's
-       ACTUAL rendered bottom edge each time this shows rather than guessing a fixed pixel value -
-       a hardcoded guess here previously still overlapped the topbar/Home balance card on some
-       viewports, since the topbar's real height varies slightly by breakpoint and safe-area
-       inset. This value is only a fallback for the brief instant before that JS runs. */
-    position:fixed; left:50%; top:calc(76px + env(safe-area-inset-top)); z-index:5000;
-    /* A fixed pixel offset, not a percentage of the toast's own height - percentage-based
-       hiding broke when the resting "top" was moved down to clear the topbar (a short
-       toast's -160% no longer cleared the viewport, so it sat mid-header intercepting
-       clicks even while "hidden"). A flat -160px reliably clears the top of the viewport
-       regardless of how tall any given message happens to render. */
-    transform:translateX(-50%) translateY(-160px);
+    /* bottom is set dynamically in JS (positionAboveBottomNav() in js/app.js), measuring the
+       bottom-nav's ACTUAL rendered top edge (mobile) so this always docks just above it, or a
+       flat margin from the viewport bottom on desktop where there's no bottom-nav. Anchored to
+       the BOTTOM of the viewport rather than pushed down from the topbar - a top-anchored toast
+       can only avoid overlapping content by reserving space in the scrollable area right where it
+       first appears, and that reservation only ever affects whatever's at the very TOP of that
+       area. If the page is scrolled anywhere else, the toast still sits directly over whatever
+       content is currently there regardless of the reservation - confirmed directly: it
+       overlapped the Restore Backup/Reset Everything buttons on a scrolled More page. The zone
+       just above the bottom-nav never has scrollable page content rendered there no matter the
+       scroll position, so there's nothing left for it to overlap. This value is only a fallback
+       for the brief instant before that JS runs. */
+    position:fixed; left:50%; bottom:calc(80px + env(safe-area-inset-bottom)); z-index:5000;
+    /* A flat pixel offset, not a percentage of the toast's own height - same reasoning as the
+       previous top-anchored version, just mirrored: once "bottom" itself became a JS-measured
+       value rather than a constant, a percentage-based hidden position no longer reliably
+       cleared the viewport for every message length. */
+    transform:translateX(-50%) translateY(160px);
     display:flex; align-items:center; gap:12px; background:var(--debit); color:#fff;
     padding:12px 16px; border-radius:14px; box-shadow:var(--shadow); font-size:13.5px; font-weight:600;
     transition:transform var(--anim-duration) var(--anim-ease); width:calc(100vw - 32px); max-width:420px;

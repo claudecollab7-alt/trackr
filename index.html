@@ -25,7 +25,7 @@
   <button id="app-toast-close" type="button" aria-label="Dismiss">×</button>
 </div>
 
-<div id="sw-update-banner" role="status" style="display:none; position:fixed; left:50%; top:calc(64px + env(safe-area-inset-top)); transform:translateX(-50%); z-index:4500; background:var(--card); color:var(--ink); box-shadow:var(--shadow); border-radius:18px; padding:10px 12px 10px 10px; align-items:center; gap:10px; max-width:calc(100vw - 32px); font-size:13.5px; font-weight:600;">
+<div id="sw-update-banner" role="status" style="display:none; position:fixed; left:50%; bottom:calc(80px + env(safe-area-inset-bottom)); z-index:4500; background:var(--card); color:var(--ink); box-shadow:var(--shadow); border-radius:18px; padding:10px 12px 10px 10px; align-items:center; gap:10px; max-width:calc(100vw - 32px); font-size:13.5px; font-weight:600;">
   <div style="width:32px; height:32px; border-radius:50%; background:var(--binder); color:#fff; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><span data-icon="download" data-icon-size="15"></span></div>
   <span style="white-space:nowrap;">Update available</span>
   <button type="button" class="btn-pill btn-black" id="sw-update-btn" style="padding:6px 14px; font-size:12.5px; white-space:nowrap;">Update</button>
@@ -73,7 +73,7 @@
             <div class="card-label">Net Balance</div>
             <button class="icon-btn-sm" id="balance-reveal-btn" style="display:none;" aria-label="Show balances" title="Show balances"><span data-icon="eye" data-icon-size="14"></span></button>
           </div>
-          <div class="balance-amount mono-num" id="home-balance">₹0.00</div>
+          <div class="balance-amount mono-num skeleton" id="home-balance">Loading…</div>
           <div class="progress-block">
             <div class="progress-row"><span>This month</span><span id="home-month-income-label">₹0 credited</span></div>
             <div class="progress-track"><div class="progress-fill" id="home-progress-fill"></div></div>
