@@ -197,6 +197,13 @@
     if(!settings || typeof settings !== 'object') settings = { currency:'₹' };
     if(!settings.currency) settings.currency = '₹';
     if(!settings.theme) settings.theme = 'light';
+    // Dismissal state for notification/Integrity-Check items the user has already reviewed -
+    // device-local, same as every other entry in settings (theme, hideBalances, etc.), not synced
+    // to the cloud. That's a deliberate call, not an oversight: these are purely "have I already
+    // looked at this on THIS device" markers, not financial data, so a second device seeing a
+    // dismissed alert again isn't data loss - unlike every other synced collection here.
+    if(!settings.dismissedBudgetAlerts || typeof settings.dismissedBudgetAlerts !== 'object' || Array.isArray(settings.dismissedBudgetAlerts)) settings.dismissedBudgetAlerts = {};
+    if(!settings.dismissedDuplicateGroups || typeof settings.dismissedDuplicateGroups !== 'object' || Array.isArray(settings.dismissedDuplicateGroups)) settings.dismissedDuplicateGroups = {};
     if(!budgets || typeof budgets !== 'object' || Array.isArray(budgets)) budgets = {};
     if(!Array.isArray(debts)) debts = [];
     debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; });
@@ -350,10 +357,20 @@
       ['transactions', transactions], ['debts', debts], ['receivables', receivables],
       ['goals', goals], ['budgets', budgets]
     ]);
+    // Unlike theme/currency, these two settings fields reference the data just wiped above
+    // (category names, specific transaction ids) - carrying them over on logout would risk a
+    // different account's genuinely new alert staying wrongly suppressed by a previous account's
+    // dismissal of what was, coincidentally, the same category/id shape.
+    if(settings.dismissedBudgetAlerts || settings.dismissedDuplicateGroups){
+      settings.dismissedBudgetAlerts = {}; settings.dismissedDuplicateGroups = {};
+      await saveSettings();
+    }
   }
   // Everything Reset Everything/logout consider "this account's data" on this device.
-  // Deliberately leaves settings (theme/currency/etc) alone - those are a device preference,
-  // not account data, and logout (the other caller of this) has no reason to touch them.
+  // Deliberately leaves most of settings (theme/currency/etc) alone - those are a device
+  // preference, not account data, and logout (the other caller of this) has no reason to touch
+  // them. The two dismissal maps are the one exception (cleared inside clearFinancialDataNoSync
+  // above, since they reference the data just wiped there).
   async function hardClearAllLocalDataNoSync(){
     await clearFinancialDataNoSync();
     categories = defaultCategories(); recurring = []; reminders = []; accounts = defaultAccounts();
@@ -727,6 +744,9 @@
     const netBalance = sumByType(transactions,'income') - sumByType(transactions,'expense');
     const masked = !!(settings.hideBalances && !balancesRevealed);
     setText('home-balance', masked ? maskAmount(fmt(netBalance)) : fmt(netBalance));
+    // Every call here is a confirmed-ready render (this only ever runs once real local/cloud data
+    // is in memory) - clearing the skeleton placeholder is safe and idempotent every time.
+    document.getElementById('home-balance').classList.remove('skeleton');
     document.getElementById('home-balance').classList.toggle('negative', netBalance<0);
     document.getElementById('home-balance').classList.toggle('masked-amount', masked);
 
@@ -796,50 +816,60 @@
   }
 
   let appToastTimer = null;
-  // Positions a fixed, topbar-anchored banner/toast just below the ACTUAL rendered topbar
-  // height, rather than a hardcoded pixel guess - a guessed offset only ever matches one
-  // specific topbar height (icon sizes, padding, safe-area-inset all affect it, and desktop vs
-  // mobile don't render identically), so it's exactly the kind of thing that quietly drifts out
-  // of sync and starts overlapping page content again the next time anything above it changes.
-  // Measuring the real topbar removes that whole class of bug instead of re-guessing a new
-  // number. Re-measured every time something is shown, so a mobile<->desktop resize in between
-  // is picked up automatically.
-  function positionBelowTopbar(el, margin){
-    const topbar = document.querySelector('.topbar');
-    const bottom = topbar ? topbar.getBoundingClientRect().bottom : 64;
-    el.style.top = Math.round(bottom + margin) + 'px';
+  // Docks a fixed toast/banner just above whatever's pinned to the very bottom of the viewport
+  // (the bottom-nav on mobile), or a flat margin from the viewport bottom where there's no
+  // bottom-nav (desktop, which uses the .spine sidebar instead). This replaced an earlier
+  // top-anchored-plus-reserved-space approach: pushing the scrollable content down only ever
+  // affects whatever's at the very TOP of that content, so if the page was scrolled elsewhere,
+  // the toast still sat directly over whatever was currently there - confirmed directly by
+  // reproducing it (overlapped the Restore Backup/Reset Everything buttons on a scrolled More
+  // page). The zone just above the bottom-nav never has scrollable page content in it regardless
+  // of scroll position, so anchoring here removes the whole class of bug instead of re-tuning the
+  // same broken model. Re-measured every time something is shown, so a mobile<->desktop resize or
+  // the bottom-nav's own height changing in between is picked up automatically.
+  function positionAboveBottomNav(el, margin){
+    const nav = document.querySelector('.bottom-nav');
+    const navVisible = nav && getComputedStyle(nav).display !== 'none';
+    const bottomOffset = navVisible ? (window.innerHeight - nav.getBoundingClientRect().top + margin) : margin;
+    el.style.bottom = Math.round(bottomOffset) + 'px';
   }
-  // Precise positioning below the topbar (positionBelowTopbar, above) is not enough on its own to
-  // avoid overlap - a toast/banner's own rendered height can exceed the natural gap between the
-  // topbar's bottom edge and whatever card renders right below it (confirmed by direct
-  // measurement: ~34px of genuine overlap on mobile/desktop/tablet alike). This pushes the
-  // scrollable content down to make room instead, keyed per-source so the toast and the update
-  // banner (which can in principle both be visible) don't clobber each other's reservation -
-  // the larger one wins, and either can be safely dropped to 0 without disturbing the other.
-  const topSpaceReservations = {};
-  function setTopSpaceReservation(key, px){
-    if(px > 0) topSpaceReservations[key] = px; else delete topSpaceReservations[key];
+  // Bottom-anchoring alone isn't quite enough either, at one specific edge: if the page is
+  // scrolled all the way to its own true end, the LAST bit of real content can already sit close
+  // enough to the bottom-nav that a newly-docked toast still overlaps it (confirmed directly on
+  // the Account & Backup page's final buttons). Unlike a top-anchored reservation - which only
+  // ever helps if the user happens to be scrolled to the top - a BOTTOM reservation helps
+  // regardless of current scroll position: it pushes back exactly where "the true end" is, so
+  // reaching it (however the user got there) always leaves the dock zone clear. Keyed per-source
+  // so the toast and the update banner don't clobber each other's reservation.
+  const bottomSpaceReservations = {};
+  function setBottomSpaceReservation(key, px){
+    if(px > 0) bottomSpaceReservations[key] = px; else delete bottomSpaceReservations[key];
     const views = document.querySelector('.views');
     if(!views) return;
-    const max = Math.max(0, ...Object.values(topSpaceReservations));
-    views.style.paddingTop = max > 0 ? max + 'px' : '';
+    const max = Math.max(0, ...Object.values(bottomSpaceReservations));
+    if(max > 0){
+      const base = getComputedStyle(views).getPropertyValue('--views-base-pb').trim() || '50px';
+      views.style.paddingBottom = `calc(${base} + ${Math.round(max)}px)`;
+    } else {
+      views.style.paddingBottom = '';
+    }
   }
   function showAppToast(message, type){
     const el = document.getElementById('app-toast');
     document.getElementById('app-toast-msg').textContent = message;
-    positionBelowTopbar(el, 10);
+    positionAboveBottomNav(el, 14);
     el.classList.toggle('info', type==='info');
     el.classList.add('show');
-    // Measured after the message text is set and the toast is shown, since a longer message can
-    // wrap to a second line and needs more reserved room than a short one.
-    setTopSpaceReservation('toast', el.getBoundingClientRect().height + 10);
+    // Measured after the message text is set, since a longer message can wrap to a second line
+    // and needs more reserved room than a short one.
+    setBottomSpaceReservation('toast', el.getBoundingClientRect().height + 14);
     if(appToastTimer) clearTimeout(appToastTimer);
-    appToastTimer = setTimeout(()=> { el.classList.remove('show'); setTopSpaceReservation('toast', 0); }, 6000);
+    appToastTimer = setTimeout(()=> { el.classList.remove('show'); setBottomSpaceReservation('toast', 0); }, 6000);
   }
   function hideAppToast(){
     if(appToastTimer){ clearTimeout(appToastTimer); appToastTimer = null; }
     document.getElementById('app-toast').classList.remove('show');
-    setTopSpaceReservation('toast', 0);
+    setBottomSpaceReservation('toast', 0);
   }
   function checkBudgetCrossing(category, date, addedAmount){
     const limit = budgets[category];
@@ -2323,6 +2353,11 @@
         accounts = Array.isArray(data.accounts) && data.accounts.length ? data.accounts : defaultAccounts();
         remapRestoredIds({ transactions, debts, receivables, goals });
         if(!settings.theme) settings.theme = 'light';
+        // A backup taken before this feature existed won't have these fields at all, and even one
+        // that does references transaction ids/categories from the OLD data just replaced above -
+        // dismissal state describing data that no longer exists (or, worse, the same id
+        // coincidentally reused by something new) shouldn't carry over either way.
+        settings.dismissedBudgetAlerts = {}; settings.dismissedDuplicateGroups = {};
         // Written directly, NOT via saveTransactions/saveDebts/saveReceivables - those merge
         // against whatever's still on local disk (deliberate for ordinary edits), which is
         // exactly what silently kept this device's prior entries alongside the restored ones
@@ -2393,15 +2428,26 @@
     function addSection(label){
       const h = document.createElement('div'); h.className='activity-group-label'; h.textContent=label; container.appendChild(h);
     }
-    function addRow(title, meta, onClick){
+    function addRow(title, meta, onClick, dismissKey){
       const row = document.createElement('div'); row.className='reminder-card clickable-row';
       row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(title)}</div><div class="reminder-meta">${meta}</div></div></div>`;
       row.addEventListener('click', onClick);
+      if(dismissKey){
+        const dismissBtn = document.createElement('button');
+        dismissBtn.type = 'button'; dismissBtn.className = 'alert-dismiss-btn';
+        dismissBtn.setAttribute('aria-label', 'Dismiss this alert');
+        dismissBtn.textContent = '×';
+        dismissBtn.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          dismissBudgetAlert(dismissKey);
+        });
+        row.querySelector('.reminder-card-top').appendChild(dismissBtn);
+      }
       container.appendChild(row);
     }
     if(overBudget.length){
       addSection('Over Budget');
-      overBudget.forEach(b=> addRow(b.category, `${fmt(b.spent)} of ${fmt(b.limit)} — over by ${fmt(b.spent-b.limit)}`, ()=> goToAlertTarget(null,'budgets')));
+      overBudget.forEach(b=> addRow(b.category, `${fmt(b.spent)} of ${fmt(b.limit)} — over by ${fmt(b.spent-b.limit)}`, ()=> goToAlertTarget(null,'budgets'), b.key));
     }
     if(overdueDebts.length){
       addSection('Overdue Debts');
@@ -2415,6 +2461,12 @@
       addSection('Due for Logging');
       dueRecurring.forEach(({r,status})=> addRow(r.category, `${reminderStatusLabel(status)} · ${fmt(r.amount)}`, ()=> goToAlertTarget('insights',null)));
     }
+  }
+  async function dismissBudgetAlert(key){
+    settings.dismissedBudgetAlerts[key] = true;
+    await saveSettings();
+    renderNotificationsList();
+    updateBellBadge();
   }
 
   function openSchedule(debtId){
@@ -2695,9 +2747,14 @@
     const today = toLocalDateStr(new Date()); const monthPrefix = today.slice(0,7);
     const monthExpense = transactions.filter(t=>t.type==='expense' && t.date.startsWith(monthPrefix));
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
+    // Keyed by category+month, not just category - dismissing this month's overage must not
+    // suppress a genuinely new one if the same category goes over budget again in a future
+    // month. collectAlerts only ever looks at the CURRENT month's spend to begin with, so the
+    // month is already the natural period boundary; keying dismissal to match just reuses it.
     const overBudget = Object.keys(budgets)
       .filter(cat=> budgets[cat]>0 && (spentMap[cat]||0) > budgets[cat])
-      .map(cat=> ({ category: cat, spent: spentMap[cat]||0, limit: budgets[cat] }));
+      .map(cat=> ({ category: cat, spent: spentMap[cat]||0, limit: budgets[cat], key: `${cat}:${monthPrefix}` }))
+      .filter(b=> !settings.dismissedBudgetAlerts || !settings.dismissedBudgetAlerts[b.key]);
     const overdueDebts = debts.filter(d=> debtRemaining(d) > 0.004 && debtOverdueCount(d) > 0);
     const dueReminders = reminders.map(r=> ({ r, status: reminderStatus(r, Math.max(3, r.remindDaysBefore||0)) })).filter(x=>x.status);
     const dueRecurring = recurring.map(r=> ({ r, status: recurringDueStatus(r) })).filter(x=>x.status);
@@ -3226,6 +3283,10 @@
       // storage as-is (not deleted), so if this device is used again before anything overwrites
       // them, they're still there to retry.
     }
+    // From here logout is definitely proceeding - cover the screen before anything below runs (see
+    // coverScreenForLogout's own comment for why this can't just rely on the reload's timing).
+    logHomeReveal('logout-start');
+    coverScreenForLogout();
     // Clear this device's copy of the account's data before actually signing out, so there's
     // no window where the SIGNED_OUT-triggered reload (see the auth listener in init()) could
     // land mid-clear and leave some keys wiped and others not. Uses the no-sync clear (not the
@@ -3235,7 +3296,12 @@
     await hardClearAllLocalDataNoSync();
     try{ await window.storage.set('migrated_to_cloud', 'false'); }catch(e){}
     try{ await window.storage.set('skippedLogin', 'false'); }catch(e){}
-    try{ await window.trackrSync.client.auth.signOut(); }catch(e){}
+    // signOut() firing a SIGNED_OUT event is what actually triggers the reload that uncovers the
+    // screen (see the auth listener in init()) - if that never arrives (e.g. no network right at
+    // this moment), the cover above would stay up forever with no way back in. This is the
+    // fallback for that case only; the normal path never reaches it, since the event beats it.
+    const stuckLogoutFallback = setTimeout(()=> location.reload(), 4000);
+    try{ await window.trackrSync.client.auth.signOut(); }catch(e){ clearTimeout(stuckLogoutFallback); location.reload(); }
   }
 
   /* ---------- Privacy: App Lock (PIN) ---------- */
@@ -3624,7 +3690,13 @@
       const key = [t.type, t.category, t.account, t.amount, t.date, (t.note||'').trim().toLowerCase()].join('|');
       (seen[key] = seen[key] || []).push(t);
     });
-    const dupGroups = Object.values(seen).filter(g=> g.length > 1);
+    // Keyed by the actual set of transaction ids involved (sorted, so member order never
+    // matters), not the shared field signature - if a third matching transaction joins this
+    // exact group later, the id-set changes and the dismissal correctly stops applying, since the
+    // underlying duplicate data is no longer the same thing that was reviewed and dismissed.
+    const dupGroups = Object.values(seen).filter(g=> g.length > 1)
+      .map(g=> ({ transactions: g, key: 'dup:' + g.map(t=>t.id).sort().join(',') }))
+      .filter(g=> !settings.dismissedDuplicateGroups || !settings.dismissedDuplicateGroups[g.key]);
 
     const debtMismatches = [];
     debts.forEach(d=>{
@@ -3670,10 +3742,15 @@
       }
       if(dupGroups.length>0){
         html += `<div class="card-label" style="margin-bottom:8px;">POSSIBLE DUPLICATE ENTRIES (${dupGroups.length})</div>`;
-        dupGroups.forEach(group=>{
+        dupGroups.forEach(({transactions: group, key})=>{
           html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
-            <div style="font-weight:700;">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
-            <div class="period-hint">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+              <div>
+                <div style="font-weight:700;">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
+                <div class="period-hint">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
+              </div>
+              <button type="button" class="alert-dismiss-btn dup-dismiss-btn" data-key="${escapeHtml(key)}" aria-label="Dismiss this duplicate flag">×</button>
+            </div>
           </div>`;
         });
       }
@@ -3699,6 +3776,16 @@
         runIntegrityCheck();
       });
     });
+    results.querySelectorAll('.dup-dismiss-btn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        await dismissDuplicateGroup(btn.dataset.key);
+        runIntegrityCheck();
+      });
+    });
+  }
+  async function dismissDuplicateGroup(key){
+    settings.dismissedDuplicateGroups[key] = true;
+    await saveSettings();
   }
 
   function bindCrossTabSync(){
@@ -4136,7 +4223,7 @@
       // local state, which would delete every cloud budget category the instant local budgets
       // becomes {} regardless of whether cloud deletion was actually opted into just above.
       await hardClearAllLocalDataNoSync();
-      settings = { currency:'₹', theme:'light' };
+      settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{}, dismissedDuplicateGroups:{} };
       try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
       if(alsoDeleteCloud && currentUser){
         // Drop any older queued write for these tables first - a stale queued upsert flushing
@@ -4252,16 +4339,39 @@
     }
     if(refreshAfter) refreshAll();
   }
-  // Logged right at the moment the app shell is about to become visible (auth overlay hiding, or
-  // the loading overlay fading) - a fast visual flash isn't something a user can screenshot, so
-  // this is what makes the NEXT report of one diagnosable from View Log instead of guesswork:
-  // whether the balance on screen at that exact instant was already the real figure or a
-  // placeholder/zero one it then had to jump away from.
+  // Logged at every moment the app shell's reveal state changes (auth overlay hiding, the loading
+  // overlay fading, or logout re-covering the screen) - a fast visual flash isn't something a
+  // user can screenshot, so this is what makes the NEXT report of one diagnosable from View Log
+  // instead of guesswork: whether what was on screen at that exact instant was the confirmed-real
+  // figure, the skeleton placeholder, or (the bug shape) neither - a bare zero pretending to be real.
   function logHomeReveal(path){
     try{
       const bal = document.getElementById('home-balance');
-      diagLogPage('page:home-reveal', { path, homeBalanceAtReveal: bal ? bal.textContent.trim() : null });
+      const isSkeleton = bal ? bal.classList.contains('skeleton') : null;
+      diagLogPage('page:home-reveal', {
+        path,
+        homeBalanceAtReveal: bal ? bal.textContent.trim() : null,
+        dataState: isSkeleton===null ? null : (isSkeleton ? 'skeleton' : 'real'),
+      });
     }catch(e){}
+  }
+  // Instantly re-covers the screen with the same loading overlay used at startup, with no fade-in
+  // (a fade would itself expose the very gap this closes, since the background is party visible
+  // through a transitioning opacity) - used right before logout clears local data below. That
+  // clear, and the reload signOut()'s SIGNED_OUT event triggers afterward, previously had no
+  // cover at all: the auth overlay only protects the LOGIN direction, and by the time someone is
+  // logged in and looking at, say, the More screen, the loading overlay already faded out long
+  // ago. Whatever the exact timing of the async signOut()/reload turns out to be on a given
+  // device, this guarantees nothing in that gap is ever visible, rather than relying on the
+  // timing lining up.
+  function coverScreenForLogout(){
+    const el = document.getElementById('loading-overlay');
+    if(!el) return;
+    el.style.transition = 'none';
+    el.style.display = 'flex';
+    el.style.opacity = '1';
+    const bal = document.getElementById('home-balance');
+    if(bal){ bal.classList.add('skeleton'); bal.textContent = 'Loading…'; }
   }
   async function startAppForUser(user){
     if(appStarted){
@@ -4504,9 +4614,9 @@
   function showUpdateBanner(reg){
     const el = document.getElementById('sw-update-banner');
     if(!el || !reg.waiting) return;
-    positionBelowTopbar(el, 10);
+    positionAboveBottomNav(el, 14);
     animateIn(el, 'flex');
-    setTopSpaceReservation('updateBanner', el.getBoundingClientRect().height + 10);
+    setBottomSpaceReservation('updateBanner', el.getBoundingClientRect().height + 14);
     const btn = document.getElementById('sw-update-btn');
     btn.onclick = () => {
       btn.disabled = true;
@@ -4518,7 +4628,7 @@
   function hideUpdateBanner(){
     const el = document.getElementById('sw-update-banner');
     if(el) animateOut(el);
-    setTopSpaceReservation('updateBanner', 0);
+    setBottomSpaceReservation('updateBanner', 0);
   }
 
   if ('serviceWorker' in navigator) {
