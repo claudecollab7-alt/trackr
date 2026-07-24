@@ -329,11 +329,15 @@
     return data || [];
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, error:null };
+    // Each table tagged with its own name so a thrown error can be traced back to which one
+    // actually failed - Promise.all itself only ever surfaces the FIRST rejection it sees, with
+    // no indication of which of the 4 concurrent requests that was.
+    const tag = (p, table) => p.catch(e => { throw Object.assign(e instanceof Error ? e : new Error(String(e && e.message || e)), { __table: table }); });
     try{
       const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
-        pullTable('transactions', userId), pullTable('debts', userId),
-        pullTable('goals', userId), pullTable('budgets', userId)
+        tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
+        tag(pullTable('goals', userId), 'goals'), tag(pullTable('budgets', userId), 'budgets')
       ]);
       const transactions = txRows.map(fromTransactionRow);
       const paymentsByDebtId = {};
@@ -354,7 +358,14 @@
       const budgetsObj = {};
       budgetRows.forEach(r=>{ budgetsObj[r.category] = r.monthly_limit; });
       result.budgets = budgetsObj;
-    }catch(e){ console.error('Cloud fetch failed, staying on local cache:', e); }
+    }catch(e){
+      console.error('Cloud fetch failed, staying on local cache:', e);
+      // navigator.onLine only ever reports "definitely offline" reliably - "true" doesn't
+      // guarantee the request actually reached anything, but distinguishes the common airplane-
+      // mode/no-radio case from an actual server-side rejection (RLS, a timeout, a real network
+      // error while apparently online), which is the ambiguity this is meant to resolve.
+      result.error = { table: e.__table || null, code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine };
+    }
     return result;
   }
 

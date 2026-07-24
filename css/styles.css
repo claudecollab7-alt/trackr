@@ -534,9 +534,12 @@
      edge - backwards from the usual "invisible until actively scrolling" expectation. The thumb
      is transparent by default and only painted while the .scrolling class is present (added on
      scroll, removed a moment after scrolling stops - see bindScheduleScrollFade() in js/app.js),
-     with a transition so it fades rather than snapping. Overridden below for desktop, which keeps
-     its own always-visible slim scrollbar unchanged. */
-  #schedule-overlay .search-overlay-body{ scrollbar-width:thin; scrollbar-color:transparent transparent; }
+     with a transition so it fades rather than snapping. webkit-only deliberately: mobile here
+     means Chrome/Android, which renders scrollbars via these pseudo-elements, not the standard
+     scrollbar-width/scrollbar-color properties - setting both at once (an earlier version of this
+     fix did) left a stray gutter/line artifact on real devices even outside the schedule overlay,
+     since the two styling systems don't always coexist cleanly. Overridden below for desktop,
+     which keeps its own always-visible slim scrollbar (and does use scrollbar-color, for Firefox). */
   #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:6px; }
   #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
   #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:transparent; border-radius:999px; transition:background .3s ease; }

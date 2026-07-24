@@ -2281,12 +2281,12 @@
     const text = document.getElementById('backup-nag-text');
     if(currentUser){
       text.textContent = settings.lastBackupAt
-        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last local backup — your data is already synced to the cloud, but a local copy is a good extra safety net.`
-        : "You haven't made a local backup yet — your data is already synced to the cloud, but a local copy is a good extra safety net.";
+        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last local backup — your data is already synced to the cloud, but a local copy is a good extra safety net`
+        : "You haven't made a local backup yet — your data is already synced to the cloud, but a local copy is a good extra safety net";
     } else {
       text.textContent = settings.lastBackupAt
-        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last backup — everything you've entered only lives on this device.`
-        : "You haven't backed up yet — everything you've entered only lives on this device.";
+        ? `It's been over ${BACKUP_NAG_AFTER_DAYS} days since your last backup — everything you've entered only lives on this device`
+        : "You haven't backed up yet — everything you've entered only lives on this device";
     }
   }
   function renderBackupContextNote(){
@@ -2349,7 +2349,7 @@
           const results = await window.trackrSync.deleteAllCloudDataForUser(currentUser.id);
           const failed = Object.keys(results).filter(t=> !results[t]);
           if(failed.length>0){
-            showAppToast(`Couldn't clear cloud ${failed.join(', ')} before restoring — check your connection and try again.`);
+            showAppToast(`Couldn't clear cloud ${failed.join(', ')} before restoring — check your connection and try again`);
           }
         }
 
@@ -3630,7 +3630,7 @@
         isAppLocked = false;
         resetAppLockTimer();
         hidePinOverlay();
-        showAppToast(pinFlowContext==='recovery-reset' ? 'PIN reset — you\'re back in.' : 'PIN saved.', 'info');
+        showAppToast(pinFlowContext==='recovery-reset' ? 'PIN reset — you\'re back in' : 'PIN saved', 'info');
       } else {
         pendingNewPin = null;
         showPinOverlay('setup-new');
@@ -4254,7 +4254,7 @@
         const results = await window.trackrSync.deleteAllCloudDataForUser(currentUser.id);
         const failed = Object.keys(results).filter(t=> !results[t]);
         if(failed.length>0){
-          showAppToast(`Couldn't delete cloud ${failed.join(', ')} — check your connection and try Reset Everything again.`);
+          showAppToast(`Couldn't delete cloud ${failed.join(', ')} — check your connection and try Reset Everything again`);
         }
       }
       populateEntryCategorySelect(document.getElementById('entry-type').value);
@@ -4353,10 +4353,17 @@
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
       await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
-      if(pullFailed) showAppToast("Couldn't reach the cloud — showing this device's saved data.");
+      if(pullFailed){
+        // Same standard as the OTP/sync-rejection logging elsewhere - log the ACTUAL reason
+        // (which table, what error code/message, whether the device even thought it was online)
+        // rather than only ever showing the generic toast with nothing behind it in View Log.
+        diagLogPage('page:cloud-pull-failed', cloud.error);
+        showAppToast("Couldn't reach the cloud — showing this device's saved data");
+      }
     }catch(e){
       console.error('Cloud sync failed, continuing with local cache:', e);
-      showAppToast("Couldn't reach the cloud — showing this device's saved data.");
+      diagLogPage('page:cloud-pull-failed', { table:null, code:e && e.code || null, message: e && e.message || String(e), name: e && e.name || null, online: navigator.onLine, thrownOutsidePull:true });
+      showAppToast("Couldn't reach the cloud — showing this device's saved data");
     }
     if(refreshAfter) refreshAll();
   }
@@ -4574,6 +4581,13 @@
      install, rather than only ever being able to theorize about timing. */
   const DIAG_DB_NAME = 'trackrDiagnostics';
   const DIAG_STORE_NAME = 'events';
+  // This log persists indefinitely across reloads AND app updates (that's the whole point - it
+  // survives a failed install to be inspected afterward) - which means, without a build tag on
+  // each entry, an OLD entry from a build that's since been fixed is visually indistinguishable
+  // from a fresh one on a later report. Populated once real early (see the SW registration
+  // handler below) via getRunningSwVersion() - the one source that can't lie about what's really
+  // running, same reasoning as the version display in Profile & Backup.
+  let cachedPageBuildVersion = null;
   function diagLogPage(event, detail){
     try{
       const req = indexedDB.open(DIAG_DB_NAME, 1);
@@ -4587,7 +4601,7 @@
         try{
           const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
           tx.objectStore(DIAG_STORE_NAME).add({
-            ts: Date.now(), source:'page', event,
+            ts: Date.now(), source:'page', event, buildVersion: cachedPageBuildVersion,
             detail: detail==null ? null : (typeof detail==='string' ? detail : JSON.stringify(detail))
           });
           tx.oncomplete = () => db.close();
@@ -4619,11 +4633,46 @@
       }catch(e){ resolve([]); }
     });
   }
+  // This log never trims itself (by design - see the comment above diagLogPage), which means a
+  // real device accumulates every entry from every build it's ever run, forever. Useful for
+  // reproducing something after the fact, but it also means an old, already-fixed occurrence can
+  // sit there indefinitely looking identical to a fresh one. This gives an explicit way to start
+  // clean before a retest, rather than needing to manually eyeball timestamps/build tags to tell
+  // old entries apart from new ones.
+  function clearDiagLog(){
+    return new Promise((resolve) => {
+      try{
+        const req = indexedDB.open(DIAG_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+            req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+          }
+        };
+        req.onsuccess = () => {
+          const db = req.result;
+          try{
+            const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+            tx.objectStore(DIAG_STORE_NAME).clear();
+            tx.oncomplete = () => { db.close(); resolve(true); };
+            tx.onerror = () => { db.close(); resolve(false); };
+          }catch(e){ try{ db.close(); }catch(e2){} resolve(false); }
+        };
+        req.onerror = () => resolve(false);
+      }catch(e){ resolve(false); }
+    });
+  }
   function formatDiagLog(entries){
     if(!entries.length) return 'No diagnostic events recorded yet on this device.';
+    // This log persists across app updates, so an entry from a build that's since been fixed can
+    // otherwise look identical to a fresh one - tagging the build each entry was recorded under
+    // (swVersion for sw.js's own entries, buildVersion for page-side ones) makes that visible
+    // directly in the log instead of needing to be inferred or assumed.
     return entries
       .sort((a,b)=> a.ts-b.ts)
-      .map(e => `${new Date(e.ts).toISOString()} [${e.source}] ${e.event}${e.detail ? ' — '+e.detail : ''}`)
+      .map(e => {
+        const build = e.swVersion || e.buildVersion;
+        return `${new Date(e.ts).toISOString()}${build ? ' ('+build+')' : ''} [${e.source}] ${e.event}${e.detail ? ' — '+e.detail : ''}`;
+      })
       .join('\n');
   }
   diagLogPage('page:script-start');
@@ -4681,6 +4730,7 @@
         hasController: !!navigator.serviceWorker.controller,
         active: !!reg.active, installing: !!reg.installing, waiting: !!reg.waiting
       });
+      getRunningSwVersion().then(v => { cachedPageBuildVersion = v; });
       updateVersionDisplay();
       // A worker may already be waiting if it installed while this tab was
       // closed/backgrounded - only prompt if something is already actively
@@ -4770,6 +4820,7 @@
      the close button, tapping the backdrop, and the browser/gesture back button all work. */
   const viewDiagLogBtn = document.getElementById('view-diag-log-btn');
   const copyDiagLogBtn = document.getElementById('copy-diag-log-btn');
+  const clearDiagLogBtn = document.getElementById('clear-diag-log-btn');
   const diagLogResults = document.getElementById('diag-log-results');
   async function openDiagLogOverlay(){
     const entries = await readDiagLog();
@@ -4787,11 +4838,21 @@
       const text = formatDiagLog(entries);
       try{
         await navigator.clipboard.writeText(text);
-        showAppToast('Diagnostic log copied.');
+        showAppToast('Diagnostic log copied');
       }catch(e){
         await openDiagLogOverlay();
-        showAppToast("Couldn't copy automatically — log is shown below, select and copy manually.");
+        showAppToast("Couldn't copy automatically — log is shown below, select and copy manually");
       }
+    });
+  }
+  if(clearDiagLogBtn){
+    clearDiagLogBtn.addEventListener('click', async () => {
+      if(!confirm('Clear the diagnostic log on this device? This cannot be undone')) return;
+      await clearDiagLog();
+      if(diagLogResults && document.getElementById('diaglog-overlay').classList.contains('open')){
+        diagLogResults.textContent = formatDiagLog([]);
+      }
+      showAppToast('Diagnostic log cleared');
     });
   }
 
