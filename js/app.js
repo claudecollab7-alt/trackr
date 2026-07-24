@@ -2098,8 +2098,14 @@
       new Notification(title, { body });
     }catch(e){ console.error('Notification failed:', e); }
   }
+  // Whether a native OS notification actually shows depends entirely on Notification.permission
+  // being granted - most people never grant it. The in-app chime below is independent of that:
+  // it's just the same SFX system already used for credit/debit/goal cues, playing while the app
+  // happens to be open when something becomes newly due, regardless of OS notification setup.
+  // Background/closed-app sound (which WOULD require that permission, plus a real web push
+  // subscription) is a separate, larger feature, not this.
   async function maybeFireDueNotifications(){
-    if(!('Notification' in window) || Notification.permission!=='granted') return;
+    const canNotify = ('Notification' in window) && Notification.permission==='granted';
     const todayStr = toLocalDateStr(new Date());
     for(const r of reminders){
       const windowDays = Math.max(0, r.remindDaysBefore||0);
@@ -2108,14 +2114,16 @@
       const shouldNotify = status.overdue || status.diffDays <= windowDays;
       const key = r.id+'_'+todayStr;
       if(shouldNotify && !notifiedReminderIds.has(key)){
-        await fireNotification('Trackr reminder', `${r.title} — ${reminderStatusLabel(status)}`);
+        playSfx('reminder');
+        if(canNotify) await fireNotification('Trackr reminder', `${r.title} — ${reminderStatusLabel(status)}`);
         notifiedReminderIds.add(key);
       }
     }
     for(const d of debts){
       const key = 'debt_'+d.id+'_'+todayStr;
       if(d.type==='emi' && debtOverdueCount(d)>0 && debtRemaining(d)>0.004 && !notifiedReminderIds.has(key)){
-        await fireNotification('Trackr reminder', `${d.name} — EMI payment due`);
+        playSfx('reminder');
+        if(canNotify) await fireNotification('Trackr reminder', `${d.name} — EMI payment due`);
         notifiedReminderIds.add(key);
       }
     }
@@ -2469,10 +2477,27 @@
     updateBellBadge();
   }
 
+  let scheduleScrollFadeTimer = null;
+  // Toggles a .scrolling class on the schedule list's scroll container while it's actively being
+  // scrolled, removing it a moment after scrolling stops - mobile's native scrollbar otherwise
+  // shows at rest and only hides once scrolled to an edge, backwards from what's expected. Bound
+  // once (guarded so repeat opens don't stack duplicate listeners) since the container itself is
+  // never removed from the DOM, only shown/hidden.
+  function bindScheduleScrollFade(){
+    const body = document.querySelector('#schedule-overlay .search-overlay-body');
+    if(!body || body.dataset.scrollFadeBound) return;
+    body.dataset.scrollFadeBound = 'true';
+    body.addEventListener('scroll', () => {
+      body.classList.add('scrolling');
+      clearTimeout(scheduleScrollFadeTimer);
+      scheduleScrollFadeTimer = setTimeout(()=> body.classList.remove('scrolling'), 800);
+    });
+  }
   function openSchedule(debtId){
     const d = findInAnyDebtList(debtId); if(!d || d.type!=='emi') return;
     setText('schedule-debt-name', d.name);
     renderScheduleList(d);
+    bindScheduleScrollFade();
     showOverlay('schedule-overlay');
     history.pushState({ scheduleOpen:true }, '', '');
   }
@@ -3744,13 +3769,9 @@
         html += `<div class="card-label" style="margin-bottom:8px;">POSSIBLE DUPLICATE ENTRIES (${dupGroups.length})</div>`;
         dupGroups.forEach(({transactions: group, key})=>{
           html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-              <div>
-                <div style="font-weight:700;">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
-                <div class="period-hint">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
-              </div>
-              <button type="button" class="alert-dismiss-btn dup-dismiss-btn" data-key="${escapeHtml(key)}" aria-label="Dismiss this duplicate flag">×</button>
-            </div>
+            <div style="font-weight:700;">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
+            <div class="period-hint" style="margin-bottom:10px;">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
+            <button type="button" class="btn-pill btn-outline dup-dismiss-btn" data-key="${escapeHtml(key)}" style="padding:6px 14px; font-size:12px;">Not a duplicate — stop flagging this</button>
           </div>`;
         });
       }
@@ -4373,7 +4394,21 @@
     const bal = document.getElementById('home-balance');
     if(bal){ bal.classList.add('skeleton'); bal.textContent = 'Loading…'; }
   }
-  async function startAppForUser(user){
+  // Both the explicit post-signIn call (handleAuthSubmit) and the onAuthStateChange SIGNED_IN
+  // listener below can end up calling this for the very same login - confirmed via View Log: a
+  // "reauth" reveal logged a zero balance, immediately followed by a "first-start" reveal with
+  // the correct one, meaning two concurrent runs were racing on the same shared transactions/
+  // debts/etc arrays (one's loadData()/cloud-pull clobbering what the other had already
+  // computed, before its own refreshAll() got to run). Whichever call arrives first runs for
+  // real; a second call arriving before the first finishes piggybacks on the SAME in-flight
+  // promise instead of starting an independent, racing execution.
+  let startAppForUserPromise = null;
+  function startAppForUser(user){
+    if(startAppForUserPromise) return startAppForUserPromise;
+    startAppForUserPromise = startAppForUserImpl(user).finally(()=>{ startAppForUserPromise = null; });
+    return startAppForUserPromise;
+  }
+  async function startAppForUserImpl(user){
     if(appStarted){
       // attachUserAndSync (cloud pull + refreshAll, since refreshAfter=true) must finish BEFORE
       // the auth overlay hides - hiding it first (as this previously did) reveals whatever the
