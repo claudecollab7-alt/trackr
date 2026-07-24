@@ -530,6 +530,18 @@
   .schedule-status.upcoming{ background:var(--bg); color:var(--ink-soft); }
   .schedule-meta{ font-size:11px; color:var(--ink-soft); font-weight:600; margin-top:6px; padding-left:36px; }
 
+  /* Mobile: the native scrollbar here was showing at rest and only hiding once scrolled to an
+     edge - backwards from the usual "invisible until actively scrolling" expectation. The thumb
+     is transparent by default and only painted while the .scrolling class is present (added on
+     scroll, removed a moment after scrolling stops - see bindScheduleScrollFade() in js/app.js),
+     with a transition so it fades rather than snapping. Overridden below for desktop, which keeps
+     its own always-visible slim scrollbar unchanged. */
+  #schedule-overlay .search-overlay-body{ scrollbar-width:thin; scrollbar-color:transparent transparent; }
+  #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:6px; }
+  #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
+  #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:transparent; border-radius:999px; transition:background .3s ease; }
+  #schedule-overlay .search-overlay-body.scrolling::-webkit-scrollbar-thumb{ background:var(--line); }
+
   /* Desktop-only: the mobile single-column list gets a narrow, heavily-visible native
      scrollbar once there are more than a handful of installments. On wide screens there's
      room to lay rows out two-up (fewer inner scrolls needed) and to give any scrolling
@@ -615,7 +627,12 @@
     transform:translateX(-50%) translateY(160px);
     display:flex; align-items:center; gap:12px; background:var(--debit); color:#fff;
     padding:12px 16px; border-radius:14px; box-shadow:var(--shadow); font-size:13.5px; font-weight:600;
-    transition:transform var(--anim-duration) var(--anim-ease); width:calc(100vw - 32px); max-width:420px;
+    /* Hugs its own content instead of a fixed near-full-width box - a short message (e.g. "PIN
+       reset — you're back in.") was leaving visibly empty space, since every toast used to claim
+       the same width regardless of how little text it actually had. width:max-content sizes it to
+       its content, up to max-width as a cap so a genuinely long message still wraps sensibly
+       instead of stretching edge-to-edge or overflowing the viewport. */
+    transition:transform var(--anim-duration) var(--anim-ease); width:max-content; max-width:min(420px, calc(100vw - 32px));
   }
   @media (prefers-reduced-motion: reduce){ #app-toast{ transition:none; } }
   #app-toast.show{ transform:translateX(-50%) translateY(0); }
