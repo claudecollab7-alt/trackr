@@ -98,7 +98,12 @@
   let recentlyDeletedReceivableIds = new Set();
 
   const CAT_PALETTE = ['#16A34A','#DC2626','#F59E0B','#2563EB','#14B8A6','#9333EA','#0EA5E9','#F97316','#84CC16','#EC4899','#DC4018','#DC7E18','#CBCB16','#31DC18','#18DC96','#18C5DC','#1881DC','#2618DC','#DC18DB','#DC1849'];
-  const CAT_PALETTE_MOUNTY = ['#67301E','#55671E','#82671C','#37821C','#8E6129','#298E3F','#6D3717','#176D54','#7B6D24','#4E7B24','#977020','#209720','#67411E','#1E6741','#823A1C','#64821C','#8E7829','#3F8E29','#6D4B17','#176D2E','#7B4824','#247B65','#978C20','#549720','#67521E','#1E6721','#82521C','#1C8252','#8E4D29','#6B8E29','#6D5F17','#266D17','#7B5C24','#247B3F','#975820','#209780','#67321E','#3A671E','#826A1C','#1C8226','#8E6429','#298E64','#6D3A17','#4B6D17','#7B7024','#2E7B24','#977420','#20974C','#67441E','#1E675C'];
+  // Chosen for legibility as small badges/chips against Reddy's dark navy/charcoal surfaces
+  // (mid-tone, moderately saturated - unlike Mounty's muted earth tones, which existed
+  // specifically to not clash with that theme's photo background; Reddy has no such background).
+  // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
+  // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
+  const CAT_PALETTE_REDDY = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
 
   function defaultCategories(){
     return {
@@ -121,7 +126,7 @@
     ];
   }
   function categoryColor(name){
-    const palette = document.body.getAttribute('data-theme')==='mounty' ? CAT_PALETTE_MOUNTY : CAT_PALETTE;
+    const palette = document.body.getAttribute('data-theme')==='reddy' ? CAT_PALETTE_REDDY : CAT_PALETTE;
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
     const idx = allCats.indexOf(name);
     if(idx !== -1) return palette[idx % palette.length];
@@ -444,7 +449,7 @@
 
     let svg = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">`;
     const themeNow = document.body.getAttribute('data-theme');
-    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='mounty' ? '#123029' : '#E2E8F0');
+    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='reddy' ? '#17151B' : '#E2E8F0');
     svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${trackColor}" stroke-width="${strokeW}"/>`;
     let cursor = 0; const labels = []; let hitAreas = '';
     segments.forEach((seg,i)=>{
@@ -941,11 +946,11 @@
     if(window.Chart){
       const themeNow2 = document.body.getAttribute('data-theme');
       const isDark = themeNow2==='dark';
-      const isMounty = themeNow2==='mounty';
-      const gridColor = isDark ? '#232C42' : (isMounty ? '#123029' : '#E2E8F0');
-      const tickColor = isDark ? '#8B95AC' : (isMounty ? '#8EB69B' : '#64748B');
-      const creditColor = isMounty ? '#5FD98C' : '#16A34A';
-      const debitColor = isMounty ? '#E2795C' : '#DC2626';
+      const isReddy = themeNow2==='reddy';
+      const gridColor = isDark ? '#232C42' : (isReddy ? '#17151B' : '#E2E8F0');
+      const tickColor = isDark ? '#8B95AC' : (isReddy ? '#9A97A0' : '#64748B');
+      const creditColor = isReddy ? '#3DDC84' : '#16A34A';
+      const debitColor = isReddy ? '#FF7A59' : '#DC2626';
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -2478,19 +2483,45 @@
   }
 
   let scheduleScrollFadeTimer = null;
-  // Toggles a .scrolling class on the schedule list's scroll container while it's actively being
-  // scrolled, removing it a moment after scrolling stops - mobile's native scrollbar otherwise
-  // shows at rest and only hides once scrolled to an edge, backwards from what's expected. Bound
-  // once (guarded so repeat opens don't stack duplicate listeners) since the container itself is
-  // never removed from the DOM, only shown/hidden.
+  let scheduleScrollFadeRaf = null;
+  function hexToRgb(hex){
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec((hex||'').trim());
+    return m ? [parseInt(m[1],16), parseInt(m[2],16), parseInt(m[3],16)] : null;
+  }
+  // Shows the schedule list's native scrollbar thumb only while actively scrolling, fading it
+  // out a moment after scrolling stops - mobile's native scrollbar otherwise shows at rest and
+  // only hides once scrolled to an edge, backwards from what's expected. The fade itself is
+  // driven manually via rAF writing a --schedule-thumb-color custom property (read by the
+  // ::-webkit-scrollbar-thumb rule's background) through a sequence of alpha values, rather than
+  // relying on a CSS transition/opacity change on that pseudo-element - real-device testing
+  // confirmed neither reliably animates there (a background-color transition just snaps, and
+  // opacity was outright ignored, permanently showing the thumb). A plain background-color VALUE
+  // change does correctly repaint it though, so each rAF frame just writes a new one directly.
+  // Bound once (guarded so repeat opens don't stack duplicate listeners) since the container
+  // itself is never removed from the DOM, only shown/hidden.
   function bindScheduleScrollFade(){
     const body = document.querySelector('#schedule-overlay .search-overlay-body');
     if(!body || body.dataset.scrollFadeBound) return;
     body.dataset.scrollFadeBound = 'true';
+    function fadeOut(){
+      cancelAnimationFrame(scheduleScrollFadeRaf);
+      const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if(reduceMotion){ body.style.setProperty('--schedule-thumb-color', 'transparent'); return; }
+      const rgb = hexToRgb(getComputedStyle(body).getPropertyValue('--line')) || [148,163,184];
+      const duration = 260, start = performance.now();
+      function step(now){
+        const t = Math.min(1, (now - start) / duration);
+        body.style.setProperty('--schedule-thumb-color', `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${1 - t})`);
+        if(t < 1){ scheduleScrollFadeRaf = requestAnimationFrame(step); }
+        else { body.style.setProperty('--schedule-thumb-color', 'transparent'); }
+      }
+      scheduleScrollFadeRaf = requestAnimationFrame(step);
+    }
     body.addEventListener('scroll', () => {
-      body.classList.add('scrolling');
+      cancelAnimationFrame(scheduleScrollFadeRaf);
+      body.style.setProperty('--schedule-thumb-color', 'var(--line)');
       clearTimeout(scheduleScrollFadeTimer);
-      scheduleScrollFadeTimer = setTimeout(()=> body.classList.remove('scrolling'), 800);
+      scheduleScrollFadeTimer = setTimeout(fadeOut, 800);
     });
   }
   function openSchedule(debtId){
@@ -2873,7 +2904,7 @@
   }
 
   function applyTheme(theme){
-    if(theme==='sunset') theme = 'mounty';
+    if(theme==='sunset' || theme==='mounty') theme = 'reddy';
     document.body.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
@@ -4635,34 +4666,6 @@
       }catch(e){ resolve([]); }
     });
   }
-  // This log never trims itself (by design - see the comment above diagLogPage), which means a
-  // real device accumulates every entry from every build it's ever run, forever. Useful for
-  // reproducing something after the fact, but it also means an old, already-fixed occurrence can
-  // sit there indefinitely looking identical to a fresh one. This gives an explicit way to start
-  // clean before a retest, rather than needing to manually eyeball timestamps/build tags to tell
-  // old entries apart from new ones.
-  function clearDiagLog(){
-    return new Promise((resolve) => {
-      try{
-        const req = indexedDB.open(DIAG_DB_NAME, 1);
-        req.onupgradeneeded = () => {
-          if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
-            req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
-          }
-        };
-        req.onsuccess = () => {
-          const db = req.result;
-          try{
-            const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
-            tx.objectStore(DIAG_STORE_NAME).clear();
-            tx.oncomplete = () => { db.close(); resolve(true); };
-            tx.onerror = () => { db.close(); resolve(false); };
-          }catch(e){ try{ db.close(); }catch(e2){} resolve(false); }
-        };
-        req.onerror = () => resolve(false);
-      }catch(e){ resolve(false); }
-    });
-  }
   function formatDiagLog(entries){
     if(!entries.length) return 'No diagnostic events recorded yet on this device.';
     // This log persists across app updates, so an entry from a build that's since been fixed can
@@ -4822,7 +4825,6 @@
      the close button, tapping the backdrop, and the browser/gesture back button all work. */
   const viewDiagLogBtn = document.getElementById('view-diag-log-btn');
   const copyDiagLogBtn = document.getElementById('copy-diag-log-btn');
-  const clearDiagLogBtn = document.getElementById('clear-diag-log-btn');
   const diagLogResults = document.getElementById('diag-log-results');
   async function openDiagLogOverlay(){
     const entries = await readDiagLog();
@@ -4847,16 +4849,5 @@
       }
     });
   }
-  if(clearDiagLogBtn){
-    clearDiagLogBtn.addEventListener('click', async () => {
-      if(!confirm('Clear the diagnostic log on this device? This cannot be undone')) return;
-      await clearDiagLog();
-      if(diagLogResults && document.getElementById('diaglog-overlay').classList.contains('open')){
-        diagLogResults.textContent = formatDiagLog([]);
-      }
-      showAppToast('Diagnostic log cleared');
-    });
-  }
-
   init();
 })();
