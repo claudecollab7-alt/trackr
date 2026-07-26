@@ -3768,10 +3768,12 @@
       if(dupGroups.length>0){
         html += `<div class="card-label" style="margin-bottom:8px;">POSSIBLE DUPLICATE ENTRIES (${dupGroups.length})</div>`;
         dupGroups.forEach(({transactions: group, key})=>{
-          html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
-            <div style="font-weight:700;">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
-            <div class="period-hint" style="margin-bottom:10px;">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
-            <button type="button" class="btn-pill btn-outline dup-dismiss-btn" data-key="${escapeHtml(key)}" style="padding:6px 14px; font-size:12px;">Not a duplicate — stop flagging this</button>
+          html += `<div class="card integrity-dup-card" style="background:var(--bg); border-left:3px solid var(--debit);">
+            <div class="integrity-dup-title">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
+            <div class="integrity-dup-sub period-hint">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
+            <div class="integrity-dup-actions">
+              <button type="button" class="btn-pill btn-outline dup-dismiss-btn" data-key="${escapeHtml(key)}">Not a duplicate — stop flagging this</button>
+            </div>
           </div>`;
         });
       }
