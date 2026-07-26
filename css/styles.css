@@ -81,6 +81,11 @@
   .btn-outline{ background:#fff; color:var(--ink); border:1.5px solid var(--line); box-shadow:none; }
   .btn-outline:hover{ background:var(--bg); }
   .btn-danger{ background:var(--debit); color:#fff; }
+  /* Reset Everything gets its own visually distinct card (a tinted border/background, not just
+     another button stacked under Backup/Restore) so its irreversibility reads clearly before
+     anyone taps it, rather than looking like one more routine settings action. */
+  .danger-zone{ background:rgba(220,38,38,.05); border:1.5px solid rgba(220,38,38,.22); }
+  .danger-zone-label{ display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:var(--debit); text-transform:uppercase; letter-spacing:.5px; }
   .icon-btn-sm{ background:var(--bg); border:none; border-radius:8px; color:var(--ink-soft); padding:6px; display:flex; align-items:center; transition:background .12s, color .12s; }
   .icon-btn-sm:hover{ background:var(--line); color:var(--ink); }
 
@@ -400,72 +405,76 @@
   body[data-theme="dark"] .type-btn.credit.active{ color:#4ADE80; }
   body[data-theme="dark"] .type-btn.debit.active{ color:#F87171; }
 
-  /* ---------- Mounty theme ---------- */
-  body[data-theme="mounty"]{
-    --bg:#0B2B26;
-    --card:#1B4038;
-    --ink:#EAF6EC;
-    --ink-soft:#8EB69B;
-    --line:#2C6354;
-    --credit:#5FD98C;
-    --debit:#E2795C;
-    --gold:#D9A441;
-    --link:#6FA8C4;
-    --goal:#C98BD1;
-    --binder:#2F6B52;
-    --binder-light:#3D8567;
+  /* ---------- Reddy theme ----------
+     Token system built from the 4 specified colors (deep navy-black bg, charcoal card, crimson
+     accent, off-white ink), then everything else derived deliberately rather than defaulted:
+     - --debit is a warm coral-orange (#FF7A59), NOT the crimson accent. The brief specifically
+       flagged that #df0139 sits close to a typical expense-red, and money-leaving-your-account
+       must never look like "just a themed button" - shifting debit ~330° away in hue (magenta-
+       red accent vs orange-coral debit) keeps them visually unambiguous at a glance, verified via
+       WCAG contrast (6.4:1 against --bg) so it also reads clearly as text, not just as a swatch.
+     - --binder (primary CTA/FAB/active-nav-tab color) IS the exact crimson - that's where the
+       brief's "CTAs, active states, key highlights" language actually belongs. It is NOT used as
+       the background for segmented/type-btn "active" pills, though: white text on crimson passes
+       AA (5:1), but credit/debit-tinted text on crimson does not (checked: ~2:1) - those pills
+       keep the same neutral-charcoal-fill pattern Dark/Mounty already use, with credit/debit text
+       colors layered on top, so financial figures stay legible everywhere they appear.
+     - --ink-soft, --line, and every surface tone below were picked and checked against both --bg
+       and --card (4.5:1+ for text roles) rather than eyeballed, since this is a financial app
+       where every number has to stay readable, not just look right in a screenshot.
+     - No background photo/decoration (unlike Mounty) - matte and flat by design, so glass/blur
+       stays confined to the same signature surfaces already used for every theme (nav chrome via
+       .spine/.bottom-nav/.topbar, .icon-circle, and the handful of .card-glass hero cards) rather
+       than spreading blur across scrollable list content. */
+  body[data-theme="reddy"]{
+    --bg:#1E1E27;
+    --card:#28242A;
+    --ink:#E2E2E2;
+    --ink-soft:#9A97A0;
+    --line:#3A363E;
+    --credit:#3DDC84;
+    --debit:#FF7A59;
+    --gold:#F5B942;
+    --link:#FF5C8A;
+    --goal:#B98BFF;
+    --binder:#DF0139;
+    --binder-light:#FF2D63;
     --shadow:0 1px 3px rgba(0,0,0,.45), 0 16px 36px rgba(0,0,0,.55);
     --shadow-sm:0 1px 2px rgba(0,0,0,.35), 0 4px 12px rgba(0,0,0,.45);
     --shadow-glass:0 1px 2px rgba(0,0,0,.35), 0 24px 48px rgba(0,0,0,.55);
     --shadow-fab:0 8px 22px rgba(0,0,0,.55);
     --shadow-nav:0 -4px 20px rgba(0,0,0,.35);
-    --mounty-photo: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5MDAgNDAwIiBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJ4TWlkWU1heCBzbGljZSI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im1vb25HbG93IiBjeD0iNTAlIiBjeT0iNTAlIiByPSI1MCUiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjREFGMURFIiBzdG9wLW9wYWNpdHk9IjAuNTUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI0MCUiIHN0b3AtY29sb3I9IiM4RUI2OUIiIHN0b3Atb3BhY2l0eT0iMC4yMiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiM4RUI2OUIiIHN0b3Atb3BhY2l0eT0iMCIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0ibW9vbkNvcmUiIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNGM0ZCRjQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSI3MCUiIHN0b3AtY29sb3I9IiNEQUYxREUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjQjlERkMzIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJmYXJQZWFrcyIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjNkM5NTg1Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzRFNzc2NyIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ibWlkUGVha3MiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJGNUM0QyIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMxRjQ0MzgiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9Im5lYXJQZWFrcyIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjMTAyQTIyIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzA1MUYxQSIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CgogIDxjaXJjbGUgY3g9IjY2MCIgY3k9Ijg4IiByPSIxMjAiIGZpbGw9InVybCgjbW9vbkdsb3cpIi8+CiAgPGNpcmNsZSBjeD0iNjYwIiBjeT0iODgiIHI9IjM0IiBmaWxsPSJ1cmwoI21vb25Db3JlKSIvPgoKICA8ZyBzdHJva2U9IiNEQUYxREUiIHN0cm9rZS13aWR0aD0iMi40IiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuMjgiPgogICAgPHBhdGggZD0iTTEyMCw3MCBxOSwtMTMgMTgsMCBxOSwtMTMgMTgsMCIvPgogICAgPHBhdGggZD0iTTMxMCw0NSBxNywtMTAgMTQsMCBxNywtMTAgMTQsMCIvPgogICAgPHBhdGggZD0iTTQ4MCw5NSBxNiwtOSAxMiwwIHE2LC05IDEyLDAiLz4KICA8L2c+CgogIDxwYXRoIGQ9Ik0wLDIyMCBMNjAsMTkwIEwxMDAsMjA1IEwxNTAsMTYwIEwxOTAsMTg1IEwyMzAsMTQwIEwyNzAsMTc1IEwzMjAsMTUwIEwzNzAsMTkwIEw0MjAsMTU1IEw0NzAsMTg1IEw1MjAsMTQ1IEw1NzAsMTgwIEw2MjAsMTUwIEw2NzAsMTk1IEw3MjAsMTY1IEw3NzAsMjAwIEw4MjAsMTc1IEw5MDAsMTk1IEw5MDAsNDAwIEwwLDQwMCBaIiBmaWxsPSJ1cmwoI2ZhclBlYWtzKSIgb3BhY2l0eT0iMC4zMCIvPgoKICA8cGF0aCBkPSJNMCwyNjAgTDUwLDIzNSBMOTAsMjUwIEwxMzAsMTkwIEwxNjAsMTUwIEwxOTAsMTIwIEwyMTUsMTU1IEwyNTAsMjAwIEwyOTAsMTc1IEwzMzAsMjEwIEwzODAsMTgwIEw0MjAsMjE1IEw0NzAsMTg1IEw1MjAsMjI1IEw1NzAsMTk1IEw2MjAsMjMwIEw2NzAsMjAwIEw3MjAsMjM1IEw3NzAsMjA1IEw4MjAsMjMwIEw5MDAsMjE1IEw5MDAsNDAwIEwwLDQwMCBaIiBmaWxsPSJ1cmwoI21pZFBlYWtzKSIgb3BhY2l0eT0iMC42MiIvPgoKICA8cGF0aCBkPSJNMTc3LDEzOCBMMTkxLDExOSBMMjA2LDE0MiBMMTk2LDEzOSBMMTkwLDE1MCBMMTgzLDE0MCBaIiBmaWxsPSIjREFGMURFIiBvcGFjaXR5PSIwLjUiLz4KCiAgPHBhdGggZD0iTTAsMzEyIEw2MCwyODUgTDExMCwzMDAgTDE2MCwyNjAgTDIwMCwyODAgTDI1MCwyNTAgTDMwMCwyNzUgTDM1MCwyNDUgTDQwMCwyNzAgTDQ1MCwyNDAgTDUwMCwyNjUgTDU2MCwyMzUgTDYxMCwyNjUgTDY2MCwyNDUgTDcxMCwyNzAgTDc2MCwyNTAgTDgyMCwyNzUgTDkwMCwyNTUgTDkwMCw0MDAgTDAsNDAwIFoiIGZpbGw9InVybCgjbmVhclBlYWtzKSIvPgoKICA8ZyBmaWxsPSIjMDUxNjExIiBvcGFjaXR5PSIwLjkiPgogICAgPHBhdGggZD0iTTk1LDMwMCBMMTAxLDI4MCBMMTA3LDMwMCBaIi8+CiAgICA8cGF0aCBkPSJNMTA2LDMwMCBMMTEyLDI3NiBMMTE4LDMwMCBaIi8+CiAgICA8cGF0aCBkPSJNMjQwLDI3OCBMMjQ2LDI1NiBMMjUyLDI3OCBaIi8+CiAgICA8cGF0aCBkPSJNMjUyLDI3OCBMMjU4LDI2MCBMMjY0LDI3OCBaIi8+CiAgICA8cGF0aCBkPSJNMjYzLDI3OCBMMjY5LDI1NCBMMjc1LDI3OCBaIi8+CiAgICA8cGF0aCBkPSJNNDIwLDI2OCBMNDI2LDI0NiBMNDMyLDI2OCBaIi8+CiAgICA8cGF0aCBkPSJNNDMyLDI2OCBMNDM4LDI1MCBMNDQ0LDI2OCBaIi8+CiAgICA8cGF0aCBkPSJNNjAwLDI1OCBMNjA2LDIzNiBMNjEyLDI1OCBaIi8+CiAgICA8cGF0aCBkPSJNNjEyLDI1OCBMNjE4LDI0MCBMNjI0LDI1OCBaIi8+CiAgICA8cGF0aCBkPSJNNzQ1LDI2NCBMNzUxLDI0MiBMNzU3LDI2NCBaIi8+CiAgICA8cGF0aCBkPSJNNzU3LDI2NCBMNzYzLDI0NiBMNzY5LDI2NCBaIi8+CiAgPC9nPgo8L3N2Zz4K");
-    background-image: var(--mounty-photo), linear-gradient(180deg, #1B4038 0%, #0B2B26 40%, #071714 75%, #051009 100%);
-    background-repeat: no-repeat, no-repeat;
-    background-position: bottom center, top center;
-    background-size: cover, 100% 100%;
-    background-attachment: fixed, fixed;
   }
-  body[data-theme="mounty"] .spine{ background:rgba(27,64,56,.82); border-right-color:var(--line); }
-  body[data-theme="mounty"] .bottom-nav{ background:rgba(27,64,56,.82); border-top-color:var(--line); }
-  body[data-theme="mounty"] .topbar{ background:rgba(18,52,45,.74); border-bottom-color:var(--line); }
-  body[data-theme="mounty"] .icon-circle{ background:rgba(44,99,84,.68); border-color:rgba(255,255,255,.08); }
-  body[data-theme="mounty"] .card-glass{ background:rgba(27,64,56,.62); border-color:rgba(255,255,255,.09); }
-  body[data-theme="mounty"] .stamp-overlay .stamp{ background:rgba(20,52,46,.85); }
-  body[data-theme="mounty"] .data-table tr:hover{ background:rgba(255,255,255,.04); }
-  body[data-theme="mounty"] .ledger-form input, body[data-theme="mounty"] .ledger-form select,
-  body[data-theme="mounty"] .filter-row select, body[data-theme="mounty"] .search-input,
-  body[data-theme="mounty"] .period-inputs input, body[data-theme="mounty"] .budget-limit-input input,
-  body[data-theme="mounty"] .log-payment-form input, body[data-theme="mounty"] .log-payment-form select, body[data-theme="mounty"] .cat-col form input,
-  body[data-theme="mounty"] .settings-row input, body[data-theme="mounty"] .btn-outline,
-  body[data-theme="mounty"] .contribution-form input{
-    background:#163832; border-color:var(--line); color:var(--ink);
+  body[data-theme="reddy"] .spine{ background:rgba(38,34,42,.82); border-right-color:var(--line); }
+  body[data-theme="reddy"] .bottom-nav{ background:rgba(38,34,42,.82); border-top-color:var(--line); }
+  body[data-theme="reddy"] .topbar{ background:rgba(30,28,35,.74); border-bottom-color:var(--line); }
+  body[data-theme="reddy"] .icon-circle{ background:rgba(48,43,50,.78); border-color:rgba(255,255,255,.07); }
+  body[data-theme="reddy"] .card-glass{ background:rgba(40,36,42,.58); border-color:rgba(255,255,255,.08); }
+  body[data-theme="reddy"] .stamp-overlay .stamp{ background:rgba(30,27,34,.82); }
+  body[data-theme="reddy"] .data-table tr:hover{ background:rgba(255,255,255,.04); }
+  body[data-theme="reddy"] .ledger-form input, body[data-theme="reddy"] .ledger-form select,
+  body[data-theme="reddy"] .filter-row select, body[data-theme="reddy"] .search-input,
+  body[data-theme="reddy"] .period-inputs input, body[data-theme="reddy"] .budget-limit-input input,
+  body[data-theme="reddy"] .log-payment-form input, body[data-theme="reddy"] .log-payment-form select, body[data-theme="reddy"] .cat-col form input,
+  body[data-theme="reddy"] .settings-row input, body[data-theme="reddy"] .btn-outline,
+  body[data-theme="reddy"] .contribution-form input{
+    background:#2A252D; border-color:var(--line); color:var(--ink);
   }
-  body[data-theme="mounty"] .more-row, body[data-theme="mounty"] .summary-box, body[data-theme="mounty"] .insight-note,
-  body[data-theme="mounty"] .log-payment-form, body[data-theme="mounty"] .contribution-form{
+  body[data-theme="reddy"] .more-row, body[data-theme="reddy"] .summary-box, body[data-theme="reddy"] .insight-note,
+  body[data-theme="reddy"] .log-payment-form, body[data-theme="reddy"] .contribution-form{
     background:var(--card);
   }
-  body[data-theme="mounty"] .progress-track, body[data-theme="mounty"] .breakdown-track,
-  body[data-theme="mounty"] .budget-bar-track, body[data-theme="mounty"] .debt-bar-track,
-  body[data-theme="mounty"] .goal-bar-track{ background:#123029; }
-  body[data-theme="mounty"] .ring-period-btn.active,
-  body[data-theme="mounty"] .type-btn.active,
-  body[data-theme="mounty"] .segmented button.active{
-    background:#2E5D50; color:#FFFFFF; box-shadow:var(--shadow-sm);
+  body[data-theme="reddy"] .progress-track, body[data-theme="reddy"] .breakdown-track,
+  body[data-theme="reddy"] .budget-bar-track, body[data-theme="reddy"] .debt-bar-track,
+  body[data-theme="reddy"] .goal-bar-track{ background:#17151B; }
+  body[data-theme="reddy"] .ring-period-btn.active,
+  body[data-theme="reddy"] .type-btn.active,
+  body[data-theme="reddy"] .segmented button.active{
+    background:#3A2E33; color:#FFFFFF; box-shadow:var(--shadow-sm);
   }
-  body[data-theme="mounty"] .type-btn.credit.active{ color:#7FE5A8; }
-  body[data-theme="mounty"] .type-btn.debit.active{ color:#F0987A; }
-  body[data-theme="mounty"] .bottom-nav .tab-btn.active{ color:#6FE0A0; }
-  body[data-theme="mounty"] .balance-card, body[data-theme="mounty"] .ring-card{ overflow:hidden; }
-  body[data-theme="mounty"] .balance-card::before, body[data-theme="mounty"] .ring-card::before{
-    content:""; position:absolute; z-index:-1; left:0; right:0; bottom:0; height:70%;
-    background-image: var(--mounty-photo);
-    background-size:cover; background-position:bottom center; background-repeat:no-repeat;
-    opacity:.4; pointer-events:none;
-  }
-  body[data-theme="mounty"] .back-btn{ color:#DCEFE0; text-shadow:0 1px 4px rgba(0,0,0,.5); }
-  body[data-theme="mounty"] .back-btn:hover{ color:#FFFFFF; }
-  body[data-theme="mounty"] .more-sub > p.period-hint{ color:#D3E8D8; text-shadow:0 1px 4px rgba(0,0,0,.45); }
+  body[data-theme="reddy"] .type-btn.credit.active{ color:var(--credit); }
+  body[data-theme="reddy"] .type-btn.debit.active{ color:var(--debit); }
+  body[data-theme="reddy"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }
@@ -513,7 +522,6 @@
   @media (prefers-reduced-motion: reduce){
     #auth-overlay, #pinlock-overlay, #sw-update-banner, #backup-nag-banner, #loading-overlay, .views{ transition:none; }
     .view-fade-retrigger{ animation:none; }
-    #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ transition:none; }
   }
   .search-overlay-header{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-shrink:0; }
   .search-overlay-body{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -544,21 +552,24 @@
 
   /* Mobile: the native scrollbar here was showing at rest and only hiding once scrolled to an
      edge - backwards from the usual "invisible until actively scrolling" expectation. The thumb
-     is only shown while the .scrolling class is present (added on scroll, removed a moment after
-     scrolling stops - see bindScheduleScrollFade() in js/app.js). Faded via `opacity`, not a
-     background-color transition: Android Chrome renders this thumb as its own compositor overlay
-     layer, and confirmed by real-device testing that a background-color transition on it snaps
-     instantly instead of animating - opacity is the property that overlay layer actually animates
-     smoothly. webkit-only deliberately: mobile here means Chrome/Android, which renders scrollbars
-     via these pseudo-elements, not the standard scrollbar-width/scrollbar-color properties -
-     setting both at once (an earlier version of this fix did) left a stray gutter/line artifact on
-     real devices even outside the schedule overlay, since the two styling systems don't always
-     coexist cleanly. Overridden below for desktop, which keeps its own always-visible slim
-     scrollbar (and does use scrollbar-color, for Firefox). */
+     color is driven entirely by the --schedule-thumb-color custom property, which
+     bindScheduleScrollFade() in js/app.js writes directly (var(--line) while scrolling, then a
+     manual rAF-driven fade through partial-alpha values back to transparent once scrolling
+     stops) - NOT a CSS transition/opacity change on the pseudo-element itself. Real-device
+     testing found neither reliably animates there: a background-color transition just snaps
+     instantly, and opacity was outright ignored, permanently showing the thumb regardless of
+     state (Android renders this thumb as its own compositor overlay layer that doesn't run
+     through the usual transition/opacity pipeline). A plain background-color VALUE change does
+     correctly repaint it, which is what the JS fade relies on. webkit-only deliberately: mobile
+     here means Chrome/Android, which renders scrollbars via these pseudo-elements, not the
+     standard scrollbar-width/scrollbar-color properties - setting both at once (an earlier
+     version of this fix did) left a stray gutter/line artifact on real devices even outside the
+     schedule overlay, since the two styling systems don't always coexist cleanly. Overridden
+     below for desktop, which keeps its own always-visible slim scrollbar (and does use
+     scrollbar-color, for Firefox). */
   #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:6px; }
   #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
-  #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
-  #schedule-overlay .search-overlay-body.scrolling::-webkit-scrollbar-thumb{ opacity:1; }
+  #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--schedule-thumb-color, transparent); border-radius:999px; }
 
   /* Desktop-only: the mobile single-column list gets a narrow, heavily-visible native
      scrollbar once there are more than a handful of installments. On wide screens there's

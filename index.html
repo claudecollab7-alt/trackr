@@ -719,15 +719,19 @@
           <button class="btn-pill btn-outline" id="account-action-btn">Log In</button>
         </div>
         <div class="card settings-row" style="margin-top:14px; flex-direction:column; align-items:stretch;">
-          <p class="period-hint" id="backup-context-note" style="margin:0 0 12px;"></p>
+          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Backup &amp; Restore</label><span class="period-hint" id="backup-context-note"></span></div>
           <div class="settings-actions">
             <button class="btn-pill btn-outline" id="backup-btn"><span data-icon="download" data-icon-size="14"></span> Backup Data</button>
             <button class="btn-pill btn-outline" id="restore-btn"><span data-icon="upload" data-icon-size="14"></span> Restore Backup</button>
             <input type="file" id="restore-file-input" accept="application/json" style="display:none;">
           </div>
-          <button class="btn-pill btn-danger" id="reset-data-btn" style="margin-top:14px;"><span data-icon="trash" data-icon-size="14"></span> Reset Everything</button>
+          <p class="period-hint" id="last-backup-note" style="margin:12px 0 0;">You haven't backed up yet.</p>
         </div>
-        <p class="period-hint" id="last-backup-note" style="display:block; margin-top:12px;">You haven't backed up yet.</p>
+        <div class="card danger-zone" style="margin-top:16px;">
+          <div class="danger-zone-label"><span data-icon="trash" data-icon-size="13"></span> Danger Zone</div>
+          <p class="period-hint" style="margin:8px 0 14px;">Permanently deletes all entries, categories, budgets, debts, goals, accounts, recurring templates, and reminders you have saved. This cannot be undone.</p>
+          <button class="btn-pill btn-danger" id="reset-data-btn" style="width:100%; justify-content:center;"><span data-icon="trash" data-icon-size="14"></span> Reset Everything</button>
+        </div>
         <div class="card settings-row" style="margin-top:16px; flex-direction:column; align-items:stretch;">
           <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Data Integrity Check</label><span class="period-hint">Scans for likely duplicate entries and debt/transaction mismatches — worth running if you've used Trackr in more than one tab or device around the same time.</span></div>
           <button class="btn-pill btn-outline" id="integrity-check-btn" style="align-self:flex-start;"><span data-icon="search" data-icon-size="14"></span> Run Check</button>
@@ -742,7 +746,6 @@
           <div class="settings-actions">
             <button class="btn-pill btn-outline" id="view-diag-log-btn"><span data-icon="search" data-icon-size="14"></span> View Log</button>
             <button class="btn-pill btn-outline" id="copy-diag-log-btn"><span data-icon="download" data-icon-size="14"></span> Copy Log</button>
-            <button class="btn-pill btn-outline" id="clear-diag-log-btn">Clear Log</button>
           </div>
         </div>
       </div>
@@ -754,11 +757,11 @@
           <div><label>Currency symbol <input type="text" id="currency-input" maxlength="3"></label></div>
         </div>
         <div class="card settings-row" style="margin-top:14px; flex-direction:column; align-items:stretch;">
-          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Appearance</label><span class="period-hint">Light, Dark, or the new Mounty look (preview)</span></div>
+          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Appearance</label><span class="period-hint">Light, Dark, or the new Reddy look (preview)</span></div>
           <div class="segmented" id="theme-select" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:0;">
             <button type="button" data-theme-choice="light" class="active">Light</button>
             <button type="button" data-theme-choice="dark">Dark</button>
-            <button type="button" data-theme-choice="mounty">Mounty</button>
+            <button type="button" data-theme-choice="reddy">Reddy</button>
           </div>
         </div>
         <div class="card settings-row" style="margin-top:14px;">
