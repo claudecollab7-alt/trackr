@@ -63,6 +63,17 @@
     padding:8px 16px; font-size:13px;
   }
 
+  /* Integrity Check duplicate-entry cards: separates the flagged details from the dismiss
+     action with a divider and a full-width, standard-sized button (inheriting .btn-pill's
+     normal padding/font instead of a shrunk-down override), rather than a small button sitting
+     flush under the text with no breathing room - previously read as cramped/unorganized. */
+  .integrity-dup-card{ padding:18px 20px; }
+  .integrity-dup-card + .integrity-dup-card{ margin-top:12px; }
+  .integrity-dup-title{ font-weight:700; font-size:14.5px; margin-bottom:6px; }
+  .integrity-dup-sub{ line-height:1.5; }
+  .integrity-dup-actions{ margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
+  .integrity-dup-actions .dup-dismiss-btn{ width:100%; justify-content:center; }
+
   .btn-pill{ display:inline-flex; align-items:center; gap:7px; padding:11px 18px; border-radius:999px; font-weight:600; font-size:13.5px; border:none; transition:transform .12s, box-shadow .12s, filter .12s; box-shadow:var(--shadow-sm); }
   .btn-pill:hover{ transform:translateY(-1px); filter:brightness(1.04); }
   .btn-pill:active{ transform:translateY(0) scale(.97); }
@@ -502,6 +513,7 @@
   @media (prefers-reduced-motion: reduce){
     #auth-overlay, #pinlock-overlay, #sw-update-banner, #backup-nag-banner, #loading-overlay, .views{ transition:none; }
     .view-fade-retrigger{ animation:none; }
+    #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ transition:none; }
   }
   .search-overlay-header{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-shrink:0; }
   .search-overlay-body{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -532,18 +544,21 @@
 
   /* Mobile: the native scrollbar here was showing at rest and only hiding once scrolled to an
      edge - backwards from the usual "invisible until actively scrolling" expectation. The thumb
-     is transparent by default and only painted while the .scrolling class is present (added on
-     scroll, removed a moment after scrolling stops - see bindScheduleScrollFade() in js/app.js),
-     with a transition so it fades rather than snapping. webkit-only deliberately: mobile here
-     means Chrome/Android, which renders scrollbars via these pseudo-elements, not the standard
-     scrollbar-width/scrollbar-color properties - setting both at once (an earlier version of this
-     fix did) left a stray gutter/line artifact on real devices even outside the schedule overlay,
-     since the two styling systems don't always coexist cleanly. Overridden below for desktop,
-     which keeps its own always-visible slim scrollbar (and does use scrollbar-color, for Firefox). */
+     is only shown while the .scrolling class is present (added on scroll, removed a moment after
+     scrolling stops - see bindScheduleScrollFade() in js/app.js). Faded via `opacity`, not a
+     background-color transition: Android Chrome renders this thumb as its own compositor overlay
+     layer, and confirmed by real-device testing that a background-color transition on it snaps
+     instantly instead of animating - opacity is the property that overlay layer actually animates
+     smoothly. webkit-only deliberately: mobile here means Chrome/Android, which renders scrollbars
+     via these pseudo-elements, not the standard scrollbar-width/scrollbar-color properties -
+     setting both at once (an earlier version of this fix did) left a stray gutter/line artifact on
+     real devices even outside the schedule overlay, since the two styling systems don't always
+     coexist cleanly. Overridden below for desktop, which keeps its own always-visible slim
+     scrollbar (and does use scrollbar-color, for Firefox). */
   #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:6px; }
   #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
-  #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:transparent; border-radius:999px; transition:background .3s ease; }
-  #schedule-overlay .search-overlay-body.scrolling::-webkit-scrollbar-thumb{ background:var(--line); }
+  #schedule-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
+  #schedule-overlay .search-overlay-body.scrolling::-webkit-scrollbar-thumb{ opacity:1; }
 
   /* Desktop-only: the mobile single-column list gets a narrow, heavily-visible native
      scrollbar once there are more than a handful of installments. On wide screens there's
