@@ -4,11 +4,17 @@
        debts:        id, user_id, name, direction(i_owe/owed_to_me), debt_type(emi/one_time), total_amount, monthly_amount, installments, start_date, created_at
        goals:        id, user_id, name, target_amount, saved_amount, deadline, created_at
        budgets:      id, user_id, category, monthly_limit, created_at
+       accounts:     id (text, not uuid — local ids are plain strings like "acc_cash"),
+                     user_id, name, created_at
      Debts and receivables share the "debts" table, split by direction.
      There's no payments/contributions storage in this schema — see the notes
      on fromDebtRow/toGoalRow below for how those are handled.
-     Only these four tables exist server-side, so reminders/recurring/accounts/
-     categories/settings stay local-only. */
+     Wallets/accounts sync requires an `accounts` table + RLS policy to actually exist in the
+     real Supabase project — this code assumes it, but can't create or verify it from here (no
+     real network access). See the migration SQL in this round's PR description. Until that
+     table exists, every account upsert/delete just queues and retries harmlessly via the same
+     pending-write mechanism already used for any offline/unreachable write — reminders/
+     recurring/categories/settings remain genuinely local-only by design, unrelated to this. */
 
   // Captured before createClient() below, which asynchronously parses and strips
   // this same hash to auto-establish a session (detectSessionInUrl, on by default) —
@@ -93,6 +99,17 @@
       initialSaved: r.saved_amount || 0, targetDate: r.deadline || null,
       note: '', contributions: []
     };
+  }
+  // No created_at sent - local accounts never tracked one (unlike transactions, which fall back
+  // to `new Date().toISOString()` for exactly this reason), so this is omitted entirely rather
+  // than fabricated, letting the column's own DEFAULT now() apply on first insert and stay
+  // untouched on every later upsert of the same row (Supabase's upsert only SETs the columns
+  // actually present in the payload).
+  function toAccountRow(a, userId){
+    return { id: a.id, user_id: userId, name: a.name };
+  }
+  function fromAccountRow(r){
+    return { id: r.id, name: r.name };
   }
 
   /* ---------- Offline pending-write queue ----------
@@ -300,6 +317,8 @@
   function syncDeleteDebt(id){ return syncOrQueue({ kind:'delete', table:'debts', match:{ id } }); }
   function syncUpsertGoals(userId, rows){ return syncOrQueue({ kind:'upsert', table:'goals', rows: rows.map(g=>toGoalRow(g,userId)) }); }
   function syncDeleteGoal(id){ return syncOrQueue({ kind:'delete', table:'goals', match:{ id } }); }
+  function syncUpsertAccounts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'accounts', rows: rows.map(a=>toAccountRow(a,userId)) }); }
+  function syncDeleteAccount(id){ return syncOrQueue({ kind:'delete', table:'accounts', match:{ id } }); }
   async function syncBudgets(userId, budgetsObj){
     // Budgets have no local id/delete-tracking of their own (it's a plain
     // {category: limit} map) — reconcile against whatever's on the server
@@ -329,15 +348,16 @@
     return data || [];
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, error:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null };
     // Each table tagged with its own name so a thrown error can be traced back to which one
     // actually failed - Promise.all itself only ever surfaces the FIRST rejection it sees, with
-    // no indication of which of the 4 concurrent requests that was.
+    // no indication of which of the 5 concurrent requests that was.
     const tag = (p, table) => p.catch(e => { throw Object.assign(e instanceof Error ? e : new Error(String(e && e.message || e)), { __table: table }); });
     try{
-      const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
+      const [txRows, debtRows, goalRows, budgetRows, accountRows] = await Promise.all([
         tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
-        tag(pullTable('goals', userId), 'goals'), tag(pullTable('budgets', userId), 'budgets')
+        tag(pullTable('goals', userId), 'goals'), tag(pullTable('budgets', userId), 'budgets'),
+        tag(pullTable('accounts', userId), 'accounts')
       ]);
       const transactions = txRows.map(fromTransactionRow);
       const paymentsByDebtId = {};
@@ -358,6 +378,7 @@
       const budgetsObj = {};
       budgetRows.forEach(r=>{ budgetsObj[r.category] = r.monthly_limit; });
       result.budgets = budgetsObj;
+      result.accounts = accountRows.map(fromAccountRow);
     }catch(e){
       console.error('Cloud fetch failed, staying on local cache:', e);
       // navigator.onLine only ever reports "definitely offline" reliably - "true" doesn't
@@ -395,6 +416,14 @@
       if(localData.goals.length) await runOp({ kind:'upsert', table:'goals', rows: localData.goals.map(g=>toGoalRow(g,userId)) });
       const budgetRows = Object.keys(localData.budgets).map(cat=> ({ user_id:userId, category:cat, monthly_limit:localData.budgets[cat] }));
       if(budgetRows.length) await runOp({ kind:'upsert', table:'budgets', rows: budgetRows });
+      // Migrated separately and non-fatally: the accounts table is newer than the other four and
+      // may not exist in every Supabase project yet, so a failure here must not stop
+      // 'migrated_to_cloud' from being set - that would make the migration look like it never
+      // completed and re-upload everything else above on every future login, just because this
+      // one optional step couldn't land.
+      try{
+        if(localData.accounts && localData.accounts.length) await runOp({ kind:'upsert', table:'accounts', rows: localData.accounts.map(a=>toAccountRow(a,userId)) });
+      }catch(e2){ console.error('Accounts migration failed (table may not exist yet):', e2); }
       await window.storage.set('migrated_to_cloud', 'true');
     }catch(e){
       console.error('Initial cloud migration failed — will retry next login:', e);
@@ -411,7 +440,7 @@
   // retry, leaving the caller wrongly believing the cloud copy is gone.
   async function deleteAllCloudDataForUser(userId){
     const results = {};
-    for(const table of ['transactions','debts','goals','budgets']){
+    for(const table of ['transactions','debts','goals','budgets','accounts']){
       try{
         await runOp({ kind:'delete', table, match:{ user_id:userId } });
         results[table] = true;
@@ -430,6 +459,7 @@
     syncUpsertTransactions, syncDeleteTransaction,
     syncUpsertDebts, syncUpsertReceivables, syncDeleteDebt,
     syncUpsertGoals, syncDeleteGoal,
+    syncUpsertAccounts, syncDeleteAccount,
     syncBudgets,
     pullCloudData,
     migrateLocalDataToCloudIfNeeded,

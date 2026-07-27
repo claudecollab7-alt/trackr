@@ -81,6 +81,13 @@
   .btn-outline{ background:#fff; color:var(--ink); border:1.5px solid var(--line); box-shadow:none; }
   .btn-outline:hover{ background:var(--bg); }
   .btn-danger{ background:var(--debit); color:#fff; }
+  /* Add Debit needs a solid fill like Add Credit, using the same --debit color already shown
+     on debit amounts everywhere else - not a separate class from .btn-danger though, since
+     "record an expense" isn't a destructive action semantically, just happens to share the
+     same color token. White text passes contrast on light theme's --debit, but NOT on Dark/
+     Crimson's lighter coral tones (checked: ~2.6:1) - those two themes override the text
+     color to the theme's own --bg (a guaranteed-dark color) further below, which does pass. */
+  .btn-debit{ background:var(--debit); color:#fff; }
   /* Reset Everything gets its own visually distinct card (a tinted border/background, not just
      another button stacked under Backup/Restore) so its irreversibility reads clearly before
      anyone taps it, rather than looking like one more routine settings action. */
@@ -404,8 +411,9 @@
   }
   body[data-theme="dark"] .type-btn.credit.active{ color:#4ADE80; }
   body[data-theme="dark"] .type-btn.debit.active{ color:#F87171; }
+  body[data-theme="dark"] .btn-debit{ color:var(--bg); }
 
-  /* ---------- Reddy theme ----------
+  /* ---------- Crimson theme ----------
      Token system built from the 4 specified colors (deep navy-black bg, charcoal card, crimson
      accent, off-white ink), then everything else derived deliberately rather than defaulted:
      - --debit is a warm coral-orange (#FF7A59), NOT the crimson accent. The brief specifically
@@ -426,7 +434,7 @@
        stays confined to the same signature surfaces already used for every theme (nav chrome via
        .spine/.bottom-nav/.topbar, .icon-circle, and the handful of .card-glass hero cards) rather
        than spreading blur across scrollable list content. */
-  body[data-theme="reddy"]{
+  body[data-theme="crimson"]{
     --bg:#1E1E27;
     --card:#28242A;
     --ink:#E2E2E2;
@@ -445,36 +453,37 @@
     --shadow-fab:0 8px 22px rgba(0,0,0,.55);
     --shadow-nav:0 -4px 20px rgba(0,0,0,.35);
   }
-  body[data-theme="reddy"] .spine{ background:rgba(38,34,42,.82); border-right-color:var(--line); }
-  body[data-theme="reddy"] .bottom-nav{ background:rgba(38,34,42,.82); border-top-color:var(--line); }
-  body[data-theme="reddy"] .topbar{ background:rgba(30,28,35,.74); border-bottom-color:var(--line); }
-  body[data-theme="reddy"] .icon-circle{ background:rgba(48,43,50,.78); border-color:rgba(255,255,255,.07); }
-  body[data-theme="reddy"] .card-glass{ background:rgba(40,36,42,.58); border-color:rgba(255,255,255,.08); }
-  body[data-theme="reddy"] .stamp-overlay .stamp{ background:rgba(30,27,34,.82); }
-  body[data-theme="reddy"] .data-table tr:hover{ background:rgba(255,255,255,.04); }
-  body[data-theme="reddy"] .ledger-form input, body[data-theme="reddy"] .ledger-form select,
-  body[data-theme="reddy"] .filter-row select, body[data-theme="reddy"] .search-input,
-  body[data-theme="reddy"] .period-inputs input, body[data-theme="reddy"] .budget-limit-input input,
-  body[data-theme="reddy"] .log-payment-form input, body[data-theme="reddy"] .log-payment-form select, body[data-theme="reddy"] .cat-col form input,
-  body[data-theme="reddy"] .settings-row input, body[data-theme="reddy"] .btn-outline,
-  body[data-theme="reddy"] .contribution-form input{
+  body[data-theme="crimson"] .spine{ background:rgba(38,34,42,.82); border-right-color:var(--line); }
+  body[data-theme="crimson"] .bottom-nav{ background:rgba(38,34,42,.82); border-top-color:var(--line); }
+  body[data-theme="crimson"] .topbar{ background:rgba(30,28,35,.74); border-bottom-color:var(--line); }
+  body[data-theme="crimson"] .icon-circle{ background:rgba(48,43,50,.78); border-color:rgba(255,255,255,.07); }
+  body[data-theme="crimson"] .card-glass{ background:rgba(40,36,42,.58); border-color:rgba(255,255,255,.08); }
+  body[data-theme="crimson"] .stamp-overlay .stamp{ background:rgba(30,27,34,.82); }
+  body[data-theme="crimson"] .data-table tr:hover{ background:rgba(255,255,255,.04); }
+  body[data-theme="crimson"] .ledger-form input, body[data-theme="crimson"] .ledger-form select,
+  body[data-theme="crimson"] .filter-row select, body[data-theme="crimson"] .search-input,
+  body[data-theme="crimson"] .period-inputs input, body[data-theme="crimson"] .budget-limit-input input,
+  body[data-theme="crimson"] .log-payment-form input, body[data-theme="crimson"] .log-payment-form select, body[data-theme="crimson"] .cat-col form input,
+  body[data-theme="crimson"] .settings-row input, body[data-theme="crimson"] .btn-outline,
+  body[data-theme="crimson"] .contribution-form input{
     background:#2A252D; border-color:var(--line); color:var(--ink);
   }
-  body[data-theme="reddy"] .more-row, body[data-theme="reddy"] .summary-box, body[data-theme="reddy"] .insight-note,
-  body[data-theme="reddy"] .log-payment-form, body[data-theme="reddy"] .contribution-form{
+  body[data-theme="crimson"] .more-row, body[data-theme="crimson"] .summary-box, body[data-theme="crimson"] .insight-note,
+  body[data-theme="crimson"] .log-payment-form, body[data-theme="crimson"] .contribution-form{
     background:var(--card);
   }
-  body[data-theme="reddy"] .progress-track, body[data-theme="reddy"] .breakdown-track,
-  body[data-theme="reddy"] .budget-bar-track, body[data-theme="reddy"] .debt-bar-track,
-  body[data-theme="reddy"] .goal-bar-track{ background:#17151B; }
-  body[data-theme="reddy"] .ring-period-btn.active,
-  body[data-theme="reddy"] .type-btn.active,
-  body[data-theme="reddy"] .segmented button.active{
+  body[data-theme="crimson"] .progress-track, body[data-theme="crimson"] .breakdown-track,
+  body[data-theme="crimson"] .budget-bar-track, body[data-theme="crimson"] .debt-bar-track,
+  body[data-theme="crimson"] .goal-bar-track{ background:#17151B; }
+  body[data-theme="crimson"] .ring-period-btn.active,
+  body[data-theme="crimson"] .type-btn.active,
+  body[data-theme="crimson"] .segmented button.active{
     background:#3A2E33; color:#FFFFFF; box-shadow:var(--shadow-sm);
   }
-  body[data-theme="reddy"] .type-btn.credit.active{ color:var(--credit); }
-  body[data-theme="reddy"] .type-btn.debit.active{ color:var(--debit); }
-  body[data-theme="reddy"] .bottom-nav .tab-btn.active{ color:var(--binder); }
+  body[data-theme="crimson"] .type-btn.credit.active{ color:var(--credit); }
+  body[data-theme="crimson"] .type-btn.debit.active{ color:var(--debit); }
+  body[data-theme="crimson"] .btn-debit{ color:var(--bg); }
+  body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }
@@ -549,6 +558,10 @@
   .schedule-status.overdue{ background:rgba(220,38,38,.12); color:var(--debit); }
   .schedule-status.upcoming{ background:var(--bg); color:var(--ink-soft); }
   .schedule-meta{ font-size:11px; color:var(--ink-soft); font-weight:600; margin-top:6px; padding-left:36px; }
+  /* Empty on upcoming/overdue rows (always rendered now so the desktop grid below can reserve
+     its space) - collapses to nothing here on mobile, same as when the div wasn't rendered at
+     all, since mobile's single-column list has no side-by-side row to look mismatched against. */
+  .schedule-meta:empty{ display:none; }
 
   /* Mobile: the native scrollbar here was showing at rest and only hiding once scrolled to an
      edge - backwards from the usual "invisible until actively scrolling" expectation. The thumb
@@ -581,6 +594,11 @@
     #schedule-overlay .search-overlay-inner{ max-width:760px; }
     #schedule-list{ display:grid; grid-template-columns:1fr 1fr; gap:2px 24px; align-content:start; }
     #schedule-overlay .schedule-row{ border-bottom:none; background:var(--bg); border-radius:12px; padding:11px 14px; margin-bottom:8px; }
+    /* Paid rows show a 3rd line (paid-on date/time) that upcoming/overdue rows don't, which
+       otherwise left 2-line and 3-line cards visibly mismatched side-by-side in this 2-column
+       grid. Reserving the same space here whether or not there's text to show keeps every card
+       in the grid the same shape regardless of status. */
+    #schedule-overlay .schedule-meta:empty{ display:block; min-height:1em; }
     #schedule-overlay .search-overlay-body{ scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
     #schedule-overlay .search-overlay-body::-webkit-scrollbar{ width:8px; }
     #schedule-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
