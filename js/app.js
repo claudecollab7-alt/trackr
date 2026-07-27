@@ -497,11 +497,15 @@
     };
     renderRing('ring-wrap', segments, `Spent this ${label}`, fmt(total), segments.length ? onSliceClick : null);
     renderRing('insights-ring-wrap', segments, `Spent this ${label}`, fmt(total), segments.length ? onSliceClick : null);
-    renderInsightsBreakdownList(expenseTx, total);
+    // Desktop-only side panel next to Home's own ring (see .ring-with-breakdown in styles.css) -
+    // harmless to always populate even though it's hidden on mobile via CSS, same as how
+    // renderRing above already renders into both ring-wraps unconditionally.
+    renderBreakdownList('insights-breakdown-list', expenseTx, total);
+    renderBreakdownList('home-breakdown-list', expenseTx, total);
     document.querySelectorAll('.ring-period-btn[data-range]').forEach(b=> b.classList.toggle('active', b.dataset.range===ringRange));
   }
-  function renderInsightsBreakdownList(expenseTx, total){
-    const container = document.getElementById('insights-breakdown-list');
+  function renderBreakdownList(containerId, expenseTx, total){
+    const container = document.getElementById(containerId);
     if(!container) return;
     container.innerHTML='';
     if(expenseTx.length===0){ container.innerHTML = '<p class="empty-note">No spending in this period.</p>'; return; }
