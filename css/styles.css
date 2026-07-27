@@ -133,6 +133,20 @@
   @media (prefers-reduced-motion: reduce){ .view.active{ animation:none; } }
 
   .grid-2x2{ display:flex; flex-direction:column; gap:16px; margin-bottom:16px; }
+  /* Desktop-only: pairs Net Balance with Spending, and Recent Activity with Top Categories -
+     the same two-column model Add Entry already uses, applied here instead of leaving Home as
+     the mobile single-column stack simply stretched wider with a lot of unused side space. Each
+     card keeps its own normal internal vertical content; only their card-level arrangement
+     changes. Mobile is untouched - .grid-2x2 stays the plain stacked column it already was. */
+  @media (min-width:781px){
+    .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  }
+  /* Desktop-only (this whole section already never renders on mobile - see applyDesktopLayout()
+     in js/app.js): pairs the Debts & EMIs Overview and Receivables Overview stat cards side by
+     side, the same natural fit as the Insights stat-tile row above. The actual Active Debts/
+     Active Receivables lists stay full-width vertical lists below, unchanged in shape. */
+  .home-desktop-row{ display:flex; gap:18px; margin-top:18px; }
+  .home-desktop-row > .card{ flex:1; min-width:0; }
   .balance-amount{ font-size:30px; font-weight:700; margin:6px 0 18px; }
   .balance-amount.negative{ color:var(--debit); }
   /* Shown instead of the real figure whenever it isn't confirmed-ready yet (default state on
@@ -166,6 +180,18 @@
   .ring-center-label{ font-size:11px; color:var(--ink-soft); font-weight:600; margin-bottom:4px; }
   .ring-center-amount{ font-size:19px; font-weight:700; color:var(--ink); }
   .ring-tap-hint{ text-align:center; font-size:11px; color:var(--ink-soft); margin-top:8px; }
+  /* Desktop-only: Home's Spending card used to be just the donut with a lot of empty space
+     beside it - Insights' own Spending Breakdown card already solves this (ring + category
+     legend side by side), so this reuses that same layout here instead of inventing a new one.
+     display:contents on mobile makes the wrapper invisible to layout - .ring-wrap participates
+     directly in .ring-card's centered flex column exactly as if this wrapper didn't exist, so
+     mobile stays pixel-identical (the breakdown list itself also stays display:none there). */
+  .ring-with-breakdown{ display:contents; }
+  #home-breakdown-list{ display:none; }
+  @media (min-width:781px){
+    .ring-with-breakdown{ display:flex; align-items:center; gap:26px; flex-wrap:wrap; width:100%; }
+    #home-breakdown-list{ display:block; flex:1; min-width:230px; }
+  }
 
   .activity-group-label{ font-size:11.5px; font-weight:700; color:var(--ink-soft); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.4px; }
   .activity-group-label:first-child{ margin-top:0; }
@@ -250,6 +276,19 @@
   .log-payment-form{ margin-top:10px; background:#fff; border-radius:12px; padding:12px; }
   .log-payment-form label{ display:block; font-size:11.5px; color:var(--ink-soft); font-weight:700; margin-bottom:8px; }
   .log-payment-form input, .log-payment-form select{ width:100%; max-width:100%; min-width:0; margin-top:5px; padding:9px 10px; border:1.5px solid var(--line); border-radius:9px; font-size:16px; background:var(--bg); }
+
+  /* Desktop-only: Insights' Outstanding Debt / Owed to You / Savings Goals cards used to stack
+     full-width, one under another, for what's really just a number and a caption each - reuses
+     the same 3-across tile-row idea already working for Home's Debts & EMIs Overview /
+     Receivables Overview stat trios (.debt-overview-grid below), just applied to whole cards
+     instead of stats within one card. display:contents on mobile keeps these as ordinary stacked
+     cards exactly as before - each keeps its own inline margin-bottom for that spacing, so the
+     !important below only ever fires once the grid (and its own gap) takes over on desktop. */
+  .insight-stat-row{ display:contents; }
+  @media (min-width:781px){
+    .insight-stat-row{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:start; }
+    .insight-stat-row .card{ margin-bottom:0 !important; }
+  }
 
   .debt-overview-grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px; }
   .debt-overview-stat{ background:var(--bg); border-radius:14px; padding:12px 8px; text-align:center; }
