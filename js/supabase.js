@@ -348,16 +348,26 @@
     return data || [];
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null };
     // Each table tagged with its own name so a thrown error can be traced back to which one
     // actually failed - Promise.all itself only ever surfaces the FIRST rejection it sees, with
-    // no indication of which of the 5 concurrent requests that was.
+    // no indication of which of the 4 concurrent requests that was.
     const tag = (p, table) => p.catch(e => { throw Object.assign(e instanceof Error ? e : new Error(String(e && e.message || e)), { __table: table }); });
+    // Accounts is pulled concurrently with the other four, but deliberately kept OUT of their
+    // Promise.all and given its own independent catch: that table is newer than the other four
+    // and may not exist in every Supabase project yet (see the migration SQL from the previous
+    // round). Promise.all is all-or-nothing - lumping accounts in with it meant a single missing
+    // table poisoned the whole pull, discarding transactions/debts/goals/budgets that had already
+    // loaded fine and showing the generic "couldn't reach the cloud" toast for something that
+    // isn't actually a network problem at all. Isolating it here means the other four succeed on
+    // their own regardless of whether accounts exists yet.
+    const accountsPromise = pullTable('accounts', userId)
+      .then(rows => { result.accounts = rows.map(fromAccountRow); })
+      .catch(e => { result.accountsError = { table:'accounts', code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine }; });
     try{
-      const [txRows, debtRows, goalRows, budgetRows, accountRows] = await Promise.all([
+      const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
         tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
-        tag(pullTable('goals', userId), 'goals'), tag(pullTable('budgets', userId), 'budgets'),
-        tag(pullTable('accounts', userId), 'accounts')
+        tag(pullTable('goals', userId), 'goals'), tag(pullTable('budgets', userId), 'budgets')
       ]);
       const transactions = txRows.map(fromTransactionRow);
       const paymentsByDebtId = {};
@@ -378,7 +388,6 @@
       const budgetsObj = {};
       budgetRows.forEach(r=>{ budgetsObj[r.category] = r.monthly_limit; });
       result.budgets = budgetsObj;
-      result.accounts = accountRows.map(fromAccountRow);
     }catch(e){
       console.error('Cloud fetch failed, staying on local cache:', e);
       // navigator.onLine only ever reports "definitely offline" reliably - "true" doesn't
@@ -387,6 +396,7 @@
       // error while apparently online), which is the ambiguity this is meant to resolve.
       result.error = { table: e.__table || null, code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine };
     }
+    await accountsPromise;
     return result;
   }
 

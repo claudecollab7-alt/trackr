@@ -2782,6 +2782,28 @@
     populateEntryAccountSelect();
     refreshAll();
   }
+  // One-time-per-device reconciliation for the accounts table specifically. It's newer than the
+  // app's other synced tables, so any device that logged in before it existed (i.e. every
+  // existing user, on the first login after the table is created) has local wallets that were
+  // never pushed up - a plain "cloud replaces local" pull (the correct, normal behavior for every
+  // later sync) would silently discard those the moment such a device contacts a cloud that's
+  // still empty, or one another device already populated with ITS OWN divergent local wallets.
+  // Confirmed by test: two devices with different local wallets, both doing their first-ever
+  // pull against the same freshly-created table, would otherwise have whichever one syncs SECOND
+  // silently overwrite/lose whatever's unique to it. Merging by name (case-insensitive, matching
+  // handleAddAccount's own dedup rule) here - exactly once, ever, per device - means both
+  // devices' wallets survive regardless of sync order; every pull after this one uses the normal
+  // authoritative replace, so a real delete on one device still correctly removes it everywhere.
+  async function reconcileAccountsOnFirstContact(userId, cloudAccounts){
+    const byNameLower = new Map();
+    cloudAccounts.forEach(a=> byNameLower.set(a.name.trim().toLowerCase(), a));
+    accounts.forEach(a=>{ const key = a.name.trim().toLowerCase(); if(!byNameLower.has(key)) byNameLower.set(key, a); });
+    const merged = Array.from(byNameLower.values());
+    accounts = merged.length ? merged : defaultAccounts();
+    try{ await window.storage.set('accounts', JSON.stringify(accounts)); }catch(e){ console.error(e); }
+    window.trackrSync.syncUpsertAccounts(userId, accounts);
+    try{ await window.storage.set('accountsReconciledOnce', 'true'); }catch(e){}
+  }
 
   function renderMoreSubState(name){
     document.getElementById('more-menu').classList.remove('active');
@@ -3355,6 +3377,7 @@
     // local copy of it.
     await hardClearAllLocalDataNoSync();
     try{ await window.storage.set('migrated_to_cloud', 'false'); }catch(e){}
+    try{ await window.storage.set('accountsReconciledOnce', 'false'); }catch(e){}
     try{ await window.storage.set('skippedLogin', 'false'); }catch(e){}
     // signOut() firing a SIGNED_OUT event is what actually triggers the reload that uncovers the
     // screen (see the auth listener in init()) - if that never arrives (e.g. no network right at
@@ -4374,7 +4397,7 @@
       // was only ever logged to the console: the UI would silently keep showing whatever was in
       // local cache (empty, on a device that had never synced before) with zero indication to the
       // user that the numbers on screen didn't reflect what's actually in Supabase.
-      const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null || cloud.accounts===null;
+      const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null;
       // Persisted directly, NOT via saveTransactions/saveDebts/saveReceivables - a fresh cloud
       // pull is the account's authoritative state, but those functions merge the incoming data
       // against whatever's still sitting on THIS device's local disk (deliberate for ordinary
@@ -4389,10 +4412,32 @@
       if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['receivables', receivables]); }
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
-      // Falls back to the default 3 wallets rather than leaving the entry-account picker with
-      // literally nothing selectable - can happen for an account that logged in before the
-      // accounts table existed (nothing was ever migrated up) or one that's never added a wallet.
-      if(cloud.accounts!==null){ accounts = cloud.accounts.length ? cloud.accounts : defaultAccounts(); toPersist.push(['accounts', accounts]); }
+      if(cloud.accounts!==null){
+        let accountsReconciledOnce = false;
+        try{ const flag = await window.storage.get('accountsReconciledOnce'); accountsReconciledOnce = !!(flag && flag.value==='true'); }catch(e){}
+        if(!accountsReconciledOnce){
+          // See reconcileAccountsOnFirstContact's own comment - this device may have local
+          // wallets that were never pushed up, and another device may have already populated the
+          // cloud with ITS OWN divergent set. Persists and pushes internally, so it's
+          // deliberately NOT added to toPersist below (that would just redundantly re-write the
+          // same key with the same value).
+          await reconcileAccountsOnFirstContact(currentUser.id, cloud.accounts);
+        } else {
+          // Falls back to the default 3 wallets rather than leaving the entry-account picker
+          // with literally nothing selectable - shouldn't normally happen once reconciled, but a
+          // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
+          accounts = cloud.accounts.length ? cloud.accounts : defaultAccounts();
+          toPersist.push(['accounts', accounts]);
+        }
+      }
+      else if(cloud.accountsError){
+        // Expected, anticipated state until the accounts table + RLS exist in the real Supabase
+        // project - logged here for traceability (so it's never invisible if something's
+        // actually wrong), but deliberately NOT surfaced as the same "couldn't reach the cloud"
+        // toast below, which is reserved for a genuine failure of the four tables that already
+        // work today. Local accounts stay exactly as they are.
+        diagLogPage('page:accounts-pull-failed', cloud.accountsError);
+      }
       await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
       if(pullFailed){
