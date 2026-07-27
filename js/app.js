@@ -98,12 +98,12 @@
   let recentlyDeletedReceivableIds = new Set();
 
   const CAT_PALETTE = ['#16A34A','#DC2626','#F59E0B','#2563EB','#14B8A6','#9333EA','#0EA5E9','#F97316','#84CC16','#EC4899','#DC4018','#DC7E18','#CBCB16','#31DC18','#18DC96','#18C5DC','#1881DC','#2618DC','#DC18DB','#DC1849'];
-  // Chosen for legibility as small badges/chips against Reddy's dark navy/charcoal surfaces
+  // Chosen for legibility as small badges/chips against Crimson's dark navy/charcoal surfaces
   // (mid-tone, moderately saturated - unlike Mounty's muted earth tones, which existed
-  // specifically to not clash with that theme's photo background; Reddy has no such background).
+  // specifically to not clash with that theme's photo background; Crimson has no such background).
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
-  const CAT_PALETTE_REDDY = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
+  const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
 
   function defaultCategories(){
     return {
@@ -126,7 +126,7 @@
     ];
   }
   function categoryColor(name){
-    const palette = document.body.getAttribute('data-theme')==='reddy' ? CAT_PALETTE_REDDY : CAT_PALETTE;
+    const palette = document.body.getAttribute('data-theme')==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
     const idx = allCats.indexOf(name);
     if(idx !== -1) return palette[idx % palette.length];
@@ -283,7 +283,10 @@
     try{ await window.storage.set('goals', JSON.stringify(goals)); } catch(e){ console.error(e); }
     if(currentUser) window.trackrSync.syncUpsertGoals(currentUser.id, goals);
   }
-  async function saveAccounts(){ try{ await window.storage.set('accounts', JSON.stringify(accounts)); } catch(e){ console.error(e); } }
+  async function saveAccounts(){
+    try{ await window.storage.set('accounts', JSON.stringify(accounts)); } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertAccounts(currentUser.id, accounts);
+  }
   async function saveBudgets(){
     try{ await window.storage.set('budgets', JSON.stringify(budgets)); } catch(e){ console.error(e); }
     if(currentUser) window.trackrSync.syncBudgets(currentUser.id, budgets);
@@ -449,7 +452,7 @@
 
     let svg = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">`;
     const themeNow = document.body.getAttribute('data-theme');
-    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='reddy' ? '#17151B' : '#E2E8F0');
+    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='crimson' ? '#17151B' : '#E2E8F0');
     svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${trackColor}" stroke-width="${strokeW}"/>`;
     let cursor = 0; const labels = []; let hitAreas = '';
     segments.forEach((seg,i)=>{
@@ -946,11 +949,11 @@
     if(window.Chart){
       const themeNow2 = document.body.getAttribute('data-theme');
       const isDark = themeNow2==='dark';
-      const isReddy = themeNow2==='reddy';
-      const gridColor = isDark ? '#232C42' : (isReddy ? '#17151B' : '#E2E8F0');
-      const tickColor = isDark ? '#8B95AC' : (isReddy ? '#9A97A0' : '#64748B');
-      const creditColor = isReddy ? '#3DDC84' : '#16A34A';
-      const debitColor = isReddy ? '#FF7A59' : '#DC2626';
+      const isCrimson = themeNow2==='crimson';
+      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : '#E2E8F0');
+      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : '#64748B');
+      const creditColor = isCrimson ? '#3DDC84' : '#16A34A';
+      const debitColor = isCrimson ? '#FF7A59' : '#DC2626';
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -2554,7 +2557,7 @@
           </div>
           <span class="schedule-status ${statusClass}">${statusLabel}</span>
         </div>
-        ${ metaLine ? `<div class="schedule-meta">${metaLine}</div>` : '' }
+        <div class="schedule-meta">${metaLine}</div>
       `;
       container.appendChild(row);
     });
@@ -2775,6 +2778,7 @@
     if(!confirm(`Remove "${acc.name}"? Past entries already tagged to it will keep showing "${acc.name}", but it won't be selectable for new entries.`)) return;
     accounts = accounts.filter(a=>a.id!==id);
     await saveAccounts();
+    if(currentUser) window.trackrSync.syncDeleteAccount(id);
     populateEntryAccountSelect();
     refreshAll();
   }
@@ -2904,7 +2908,7 @@
   }
 
   function applyTheme(theme){
-    if(theme==='sunset' || theme==='mounty') theme = 'reddy';
+    if(theme==='sunset' || theme==='mounty' || theme==='reddy') theme = 'crimson';
     document.body.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
@@ -3706,7 +3710,8 @@
   const REJECTABLE_TABLES = {
     transactions: { lists: ()=>[['transactions',transactions]], save: ()=>saveTransactions(), markDeleted: id=>recentlyDeletedTxIds.add(id), label: t=> `${t.category} · ${fmt(t.amount)} · ${formatHuman(t.date)}${t.note?' — '+t.note:''}` },
     debts: { lists: ()=>[['debts',debts],['receivables',receivables]], save: ()=>Promise.all([saveDebts(),saveReceivables()]), markDeleted: (id,listName)=> (listName==='receivables' ? recentlyDeletedReceivableIds : recentlyDeletedDebtIds).add(id), label: d=> `${d.name}` },
-    goals: { lists: ()=>[['goals',goals]], save: ()=>saveGoals(), label: g=> `${g.name} (goal)` }
+    goals: { lists: ()=>[['goals',goals]], save: ()=>saveGoals(), label: g=> `${g.name} (goal)` },
+    accounts: { lists: ()=>[['accounts',accounts]], save: ()=>saveAccounts(), label: a=> `${a.name} (wallet)` }
   };
   // Cross-references the ids Supabase has permanently refused (an RLS violation - the row
   // belongs to a different account, most likely surviving a cross-account Restore Backup from
@@ -4344,7 +4349,7 @@
       `If you cancel, they won't be added, and this device will show your account's cloud data instead.`
     );
     if(wantsMerge){
-      await window.trackrSync.migrateLocalDataToCloudIfNeeded(userId, { transactions, debts, receivables, goals, budgets });
+      await window.trackrSync.migrateLocalDataToCloudIfNeeded(userId, { transactions, debts, receivables, goals, budgets, accounts });
     } else {
       await window.trackrSync.skipMigration();
       // Clear this device's declined data now, before the cloud pull below overwrites transactions/
@@ -4369,7 +4374,7 @@
       // was only ever logged to the console: the UI would silently keep showing whatever was in
       // local cache (empty, on a device that had never synced before) with zero indication to the
       // user that the numbers on screen didn't reflect what's actually in Supabase.
-      const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null;
+      const pullFailed = cloud.transactions===null || cloud.debts===null || cloud.receivables===null || cloud.goals===null || cloud.budgets===null || cloud.accounts===null;
       // Persisted directly, NOT via saveTransactions/saveDebts/saveReceivables - a fresh cloud
       // pull is the account's authoritative state, but those functions merge the incoming data
       // against whatever's still sitting on THIS device's local disk (deliberate for ordinary
@@ -4384,6 +4389,10 @@
       if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['receivables', receivables]); }
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
+      // Falls back to the default 3 wallets rather than leaving the entry-account picker with
+      // literally nothing selectable - can happen for an account that logged in before the
+      // accounts table existed (nothing was ever migrated up) or one that's never added a wallet.
+      if(cloud.accounts!==null){ accounts = cloud.accounts.length ? cloud.accounts : defaultAccounts(); toPersist.push(['accounts', accounts]); }
       await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
       if(pullFailed){
