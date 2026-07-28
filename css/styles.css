@@ -151,13 +151,42 @@
      deeper "browse more" cards with their own path to a fuller view - the DOM order (Net
      Balance, Spending, Recent Activity, Top Categories, for mobile's stacked reading order)
      doesn't match that pairing, so the visual grid position is reassigned per-card via `order`
-     rather than reordering the DOM (which would also reshuffle mobile's stack). */
+     rather than reordering the DOM (which would also reshuffle mobile's stack).
+     align-items is left at Grid's default (stretch, i.e. not overridden here) so each row's two
+     cards end up the SAME height - the taller card's natural height sets the row, the shorter
+     card stretches to match. This is safe now that pairing is by comparable card type (unlike an
+     earlier round, where mismatched pairs made stretching read as broken dead space): Net
+     Balance/Top Categories are both fixed-size snapshots, and Recent Activity/Spending's
+     breakdown list both have a capped max-height with their own internal scroll below (see
+     #home-activity-list/#home-breakdown-list) so neither can grow the row unbounded as data
+     accumulates over time - the row's height is always exactly one of the two cards' rendered
+     height, never an arbitrary fixed number. */
   @media (min-width:781px){
-    .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+    .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
     .grid-2x2 .balance-card{ order:1; }
     .grid-2x2 .home-topcat-card{ order:2; }
     .grid-2x2 .home-recent-card{ order:3; }
     .grid-2x2 .ring-card{ order:4; }
+    /* Recent Activity is already capped to 8 rows in JS (renderHomeActivity), but Spending's
+       breakdown list (renderBreakdownList) lists every distinct category with any spending this
+       period with no cap at all - genuinely unbounded as a user's category list grows over
+       months. Without a ceiling here, that card (and so its whole row, once stretched to match)
+       would silently start growing again exactly like the dead-space bug this pairing was
+       meant to fix, just from the opposite direction. 760px sits comfortably above Recent
+       Activity's current full 8-row height (~710px), so today's normal content on either card
+       never trips this cap - it only engages once real growth actually exceeds it, at which
+       point that card's own "View All" link is the intended way to see everything, same as
+       elsewhere in the app. */
+    #home-activity-list, #home-breakdown-list{
+      max-height: 760px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line) transparent;
+    }
+    #home-activity-list::-webkit-scrollbar, #home-breakdown-list::-webkit-scrollbar{ width:8px; }
+    #home-activity-list::-webkit-scrollbar-track, #home-breakdown-list::-webkit-scrollbar-track{ background:transparent; }
+    #home-activity-list::-webkit-scrollbar-thumb, #home-breakdown-list::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
+    #home-activity-list::-webkit-scrollbar-thumb:hover, #home-breakdown-list::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
   }
   /* Desktop-only (this whole section already never renders on mobile - see applyDesktopLayout()
      in js/app.js): pairs the Debts & EMIs Overview and Receivables Overview stat cards side by
