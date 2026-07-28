@@ -49,6 +49,14 @@
     -webkit-backdrop-filter: blur(22px) saturate(160%);
     border: 1px solid rgba(255,255,255,.65);
     box-shadow: var(--shadow-glass);
+    /* Forces its own compositing layer, isolated from the rest of the page's paint order. Without
+       this, some GPU/browser combinations have been seen re-using a stale backdrop-filter capture
+       after a nearby layout shift (e.g. a row's height changing), which can visibly "print" unrelated
+       page content that's actually elsewhere in the DOM through the blur - not a z-index/stacking
+       bug in this app's own CSS, but exactly the class of rendering artifact this class of fix exists
+       for on backdrop-filter elements. */
+    isolation: isolate;
+    transform: translateZ(0);
   }
   .grid-2x2, .card-header-row, .balance-card, .ring-card{ position:relative; z-index:1; }
   .card-label{ font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.5px; }
@@ -133,13 +141,23 @@
   @media (prefers-reduced-motion: reduce){ .view.active{ animation:none; } }
 
   .grid-2x2{ display:flex; flex-direction:column; gap:16px; margin-bottom:16px; }
-  /* Desktop-only: pairs Net Balance with Spending, and Recent Activity with Top Categories -
+  /* Desktop-only: pairs Net Balance with Top Categories, and Recent Activity with Spending -
      the same two-column model Add Entry already uses, applied here instead of leaving Home as
      the mobile single-column stack simply stretched wider with a lot of unused side space. Each
      card keeps its own normal internal vertical content; only their card-level arrangement
-     changes. Mobile is untouched - .grid-2x2 stays the plain stacked column it already was. */
+     changes. Mobile is untouched - .grid-2x2 stays the plain stacked column it already was.
+     Pairing is by comparable natural height rather than DOM order: Net Balance and Top
+     Categories are both compact "snapshot" cards, while Recent Activity and Spending are both
+     deeper "browse more" cards with their own path to a fuller view - the DOM order (Net
+     Balance, Spending, Recent Activity, Top Categories, for mobile's stacked reading order)
+     doesn't match that pairing, so the visual grid position is reassigned per-card via `order`
+     rather than reordering the DOM (which would also reshuffle mobile's stack). */
   @media (min-width:781px){
     .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+    .grid-2x2 .balance-card{ order:1; }
+    .grid-2x2 .home-topcat-card{ order:2; }
+    .grid-2x2 .home-recent-card{ order:3; }
+    .grid-2x2 .ring-card{ order:4; }
   }
   /* Desktop-only (this whole section already never renders on mobile - see applyDesktopLayout()
      in js/app.js): pairs the Debts & EMIs Overview and Receivables Overview stat cards side by
