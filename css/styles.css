@@ -11,9 +11,9 @@
     --goal:#9333EA;
     --binder:#1B2A4D;
     --binder-light:#27406B;
-    --shadow:0 1px 3px rgba(15,23,42,.06), 0 16px 36px rgba(15,23,42,.12);
+    --shadow:0 1px 2px rgba(15,23,42,.05), 0 8px 20px rgba(15,23,42,.08);
     --shadow-sm:0 1px 2px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.08);
-    --shadow-glass:0 1px 2px rgba(15,23,42,.06), 0 24px 48px rgba(15,23,42,.14);
+    --shadow-glass:0 1px 2px rgba(15,23,42,.05), 0 12px 28px rgba(15,23,42,.10);
     --shadow-fab:0 8px 20px rgba(15,23,42,.32);
     --shadow-nav:0 -4px 20px rgba(15,23,42,.06);
     /* App-wide transition standard: one duration, one easing curve, used for every screen/
@@ -139,7 +139,7 @@
      card keeps its own normal internal vertical content; only their card-level arrangement
      changes. Mobile is untouched - .grid-2x2 stays the plain stacked column it already was. */
   @media (min-width:781px){
-    .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
   }
   /* Desktop-only (this whole section already never renders on mobile - see applyDesktopLayout()
      in js/app.js): pairs the Debts & EMIs Overview and Receivables Overview stat cards side by
@@ -251,6 +251,12 @@
   .budget-row.clickable-row:active{ background:var(--line); }
   .budget-row-top{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:9px; }
   .budget-cat-left{ display:flex; align-items:center; gap:10px; }
+  /* Budget Watch (Insights) specifically: force every row to the same two-line shape regardless
+     of category-name length, instead of the previous behavior where only names too long to fit
+     alongside the amount wrapped - a mix of one-line and two-line rows in the same list. Scoped to
+     #budget-watch-list only; the Budget Set list and Wallets reuse .budget-row-top/.budget-cat-left
+     for narrower single-line rows (a limit input, a delete button) that must stay untouched. */
+  #budget-watch-list .budget-cat-left{ flex-basis:100%; }
   .budget-cat-name{ font-weight:700; font-size:13.5px; }
   .budget-limit-input{ display:flex; align-items:center; gap:6px; }
   .budget-limit-input input{ width:90px; padding:6px 9px; border:1.5px solid var(--line); border-radius:8px; background:#fff; font-size:16px; }
@@ -286,7 +292,7 @@
      !important below only ever fires once the grid (and its own gap) takes over on desktop. */
   .insight-stat-row{ display:contents; }
   @media (min-width:781px){
-    .insight-stat-row{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:start; }
+    .insight-stat-row{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:start; margin-bottom:16px; }
     .insight-stat-row .card{ margin-bottom:0 !important; }
   }
 
@@ -415,9 +421,9 @@
     --goal:#C084FC;
     --binder:#2563EB;
     --binder-light:#3B82F6;
-    --shadow:0 1px 3px rgba(0,0,0,.45), 0 16px 36px rgba(0,0,0,.55);
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 8px 20px rgba(0,0,0,.35);
     --shadow-sm:0 1px 2px rgba(0,0,0,.35), 0 4px 12px rgba(0,0,0,.45);
-    --shadow-glass:0 1px 2px rgba(0,0,0,.35), 0 24px 48px rgba(0,0,0,.55);
+    --shadow-glass:0 1px 2px rgba(0,0,0,.35), 0 12px 28px rgba(0,0,0,.40);
     --shadow-fab:0 8px 22px rgba(0,0,0,.55);
     --shadow-nav:0 -4px 20px rgba(0,0,0,.35);
   }
@@ -486,9 +492,9 @@
     --goal:#B98BFF;
     --binder:#DF0139;
     --binder-light:#FF2D63;
-    --shadow:0 1px 3px rgba(0,0,0,.45), 0 16px 36px rgba(0,0,0,.55);
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 8px 20px rgba(0,0,0,.35);
     --shadow-sm:0 1px 2px rgba(0,0,0,.35), 0 4px 12px rgba(0,0,0,.45);
-    --shadow-glass:0 1px 2px rgba(0,0,0,.35), 0 24px 48px rgba(0,0,0,.55);
+    --shadow-glass:0 1px 2px rgba(0,0,0,.35), 0 12px 28px rgba(0,0,0,.40);
     --shadow-fab:0 8px 22px rgba(0,0,0,.55);
     --shadow-nav:0 -4px 20px rgba(0,0,0,.35);
   }
