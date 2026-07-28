@@ -866,6 +866,24 @@
       views.style.paddingBottom = '';
     }
   }
+  // Distinguishes a genuine connectivity/server failure from a transient JWT clock-skew rejection
+  // ("JWT issued at future" et al - Supabase/PostgREST rejecting a token because the device's
+  // clock was briefly ahead or behind the server's when it was issued, e.g. around a reboot or an
+  // OS clock update). The device's date & time can be perfectly correct in general and this can
+  // still happen once - it's a momentary skew, not a real network problem, and it always
+  // self-resolves on the next token refresh/page load. Telling the user to check their clock
+  // settings here would be presumptuous (their settings may already be correct) and unhelpful
+  // (there's nothing for them to actually fix), so this gets its own honest, low-alarm message
+  // instead of the generic connectivity-failure toast.
+  function isClockSkewError(err){
+    const msg = err && err.message ? String(err.message) : '';
+    return /jwt issued at future|issued in the future/i.test(msg);
+  }
+  function cloudPullFailureMessage(err){
+    return isClockSkewError(err)
+      ? 'A temporary sync issue occurred — this usually resolves on its own. Try again in a moment.'
+      : "Couldn't reach the cloud — showing this device's saved data";
+  }
   function showAppToast(message, type){
     const el = document.getElementById('app-toast');
     document.getElementById('app-toast-msg').textContent = message;
@@ -4449,12 +4467,13 @@
         // (which table, what error code/message, whether the device even thought it was online)
         // rather than only ever showing the generic toast with nothing behind it in View Log.
         diagLogPage('page:cloud-pull-failed', cloud.error);
-        showAppToast("Couldn't reach the cloud — showing this device's saved data");
+        showAppToast(cloudPullFailureMessage(cloud.error));
       }
     }catch(e){
       console.error('Cloud sync failed, continuing with local cache:', e);
-      diagLogPage('page:cloud-pull-failed', { table:null, code:e && e.code || null, message: e && e.message || String(e), name: e && e.name || null, online: navigator.onLine, thrownOutsidePull:true });
-      showAppToast("Couldn't reach the cloud — showing this device's saved data");
+      const errInfo = { table:null, code:e && e.code || null, message: e && e.message || String(e), name: e && e.name || null, online: navigator.onLine, thrownOutsidePull:true };
+      diagLogPage('page:cloud-pull-failed', errInfo);
+      showAppToast(cloudPullFailureMessage(errInfo));
     }
     if(refreshAfter) refreshAll();
   }
