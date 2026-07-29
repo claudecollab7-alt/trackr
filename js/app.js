@@ -972,11 +972,11 @@
       const themeNow2 = document.body.getAttribute('data-theme');
       const isDark = themeNow2==='dark';
       const isCrimson = themeNow2==='crimson';
-      const isSunLight = themeNow2==='sunlight';
-      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isSunLight ? '#C7BFA0' : '#E2E8F0'));
-      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isSunLight ? '#333533' : '#64748B'));
-      const creditColor = isCrimson ? '#3DDC84' : (isSunLight ? '#166534' : '#16A34A');
-      const debitColor = isCrimson ? '#FF7A59' : (isSunLight ? '#9E301A' : '#DC2626');
+      const isPurply = themeNow2==='purply';
+      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isPurply ? '#EDE9FE' : '#E2E8F0'));
+      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isPurply ? '#5B5570' : '#64748B'));
+      const creditColor = isCrimson ? '#3DDC84' : (isPurply ? '#0F7A3D' : '#16A34A');
+      const debitColor = isCrimson ? '#FF7A59' : (isPurply ? '#BE123C' : '#DC2626');
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -2954,6 +2954,10 @@
 
   function applyTheme(theme){
     if(theme==='sunset' || theme==='mounty' || theme==='reddy') theme = 'crimson';
+    // Sun Light was removed entirely and replaced by Purply, which occupies the same light-theme
+    // picker slot - a device with "sunlight" already saved (from before this round) redirects to
+    // "purply" every time, same mechanism as the sunset/mounty/reddy -> crimson migration above.
+    if(theme==='sunlight') theme = 'purply';
     document.body.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
