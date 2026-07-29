@@ -3,9 +3,9 @@
 // CACHE_NAME never changing between deploys is why updates used to go
 // unnoticed forever (the activate handler's old-cache cleanup had nothing to
 // clean, since the "old" and "new" cache name were identical).
-const SW_VERSION = 'v29';
+const SW_VERSION = 'v30';
 const CACHE_NAME = 'trackr-' + SW_VERSION;
-const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
+const ASSETS = ['./', './index.html', './css/styles.css', './js/app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 // Last-resort response for a navigation when neither the network nor the cache has anything -
 // e.g. installed to the home screen and opened before the very first precache ever completed.
@@ -102,7 +102,17 @@ self.addEventListener('fetch', (event) => {
   const isNavigation = event.request.mode === 'navigate';
   if (isNavigation) diagLog('fetch:navigate-start', event.request.url);
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    // Scoped to THIS version's own cache (caches.open(CACHE_NAME), not the bare caches.match()
+    // this used to call) - the bare form searches every cache storage the origin has ever
+    // created, including an older version's cache that's about to be deleted by activate() but
+    // hasn't finished yet. css/styles.css and js/app.js are only ever cached opportunistically
+    // here (not precached at install - see ASSETS above), so their very first fetch after an
+    // update was exactly the scenario where this bit: a stale hit from the outgoing cache would
+    // get returned instead of a fresh network fetch, and since a cache hit returns early below
+    // without ever re-populating THIS version's cache, every later load kept re-serving that
+    // same stale file indefinitely - not a one-time flash, a permanently stuck old app-shell
+    // file on that device until a hard refresh cleared it manually.
+    caches.open(CACHE_NAME).then((cache) => cache.match(event.request)).then((cached) => {
       if (cached) {
         if (isNavigation) diagLog('fetch:navigate-served-from-cache', event.request.url);
         return cached;
@@ -123,7 +133,7 @@ self.addEventListener('fetch', (event) => {
         })
         .catch((err) => {
           if (isNavigation) diagLog('fetch:navigate-network-failed', event.request.url + ' - ' + (err && err.message));
-          return caches.match('./index.html').then((cached) => {
+          return caches.open(CACHE_NAME).then((cache) => cache.match('./index.html')).then((cached) => {
             if (cached) {
               if (isNavigation) diagLog('fetch:navigate-fallback-cached-index', event.request.url);
               return cached;

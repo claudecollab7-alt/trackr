@@ -973,10 +973,10 @@
       const isDark = themeNow2==='dark';
       const isCrimson = themeNow2==='crimson';
       const isSunLight = themeNow2==='sunlight';
-      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isSunLight ? '#C7C7C7' : '#E2E8F0'));
+      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isSunLight ? '#C7BFA0' : '#E2E8F0'));
       const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isSunLight ? '#333533' : '#64748B'));
       const creditColor = isCrimson ? '#3DDC84' : (isSunLight ? '#166534' : '#16A34A');
-      const debitColor = isCrimson ? '#FF7A59' : (isSunLight ? '#991B1B' : '#DC2626');
+      const debitColor = isCrimson ? '#FF7A59' : (isSunLight ? '#9E301A' : '#DC2626');
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
