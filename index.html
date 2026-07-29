@@ -14,6 +14,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- Purply theme only: headings (h1/h2) switch to this over Inter - see the Purply block in
+     css/styles.css for why. Loaded the same way Inter already is above; always requested
+     regardless of active theme, same tradeoff Inter itself already makes. -->
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -764,10 +768,10 @@
           <div><label>Currency symbol <input type="text" id="currency-input" maxlength="3"></label></div>
         </div>
         <div class="card settings-row" style="margin-top:14px; flex-direction:column; align-items:stretch;">
-          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Appearance</label><span class="period-hint">Light, Sun Light, Dark, or the Crimson look (preview)</span></div>
+          <div style="margin-bottom:12px;"><label style="display:block; margin-bottom:2px;">Appearance</label><span class="period-hint">Light, Purply, Dark, or the Crimson look (preview)</span></div>
           <div class="segmented" id="theme-select" style="margin-bottom:0;">
             <button type="button" data-theme-choice="light" class="active">Light</button>
-            <button type="button" data-theme-choice="sunlight">Sun Light</button>
+            <button type="button" data-theme-choice="purply">Purply</button>
             <button type="button" data-theme-choice="dark">Dark</button>
             <button type="button" data-theme-choice="crimson">Crimson</button>
           </div>
