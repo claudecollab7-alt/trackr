@@ -177,9 +177,15 @@
        never trips this cap - it only engages once real growth actually exceeds it, at which
        point that card's own "View All" link is the intended way to see everything, same as
        elsewhere in the app. */
+    /* overflow-x explicitly set here too (same reasoning as .search-overlay-body further down):
+       leaving overflow-y:auto with no explicit overflow-x makes the browser compute the other
+       axis as auto as well, so a few sub-pixels of horizontal overflow from a row's flex content
+       was enough to show a permanent horizontal scrollbar track under both lists with nothing
+       actually meant to scroll sideways. */
     #home-activity-list, #home-breakdown-list{
       max-height: 760px;
       overflow-y: auto;
+      overflow-x: hidden;
       scrollbar-width: thin;
       scrollbar-color: var(--line) transparent;
     }
@@ -415,7 +421,13 @@
   .summary-box.debit .mono-num{ color:var(--debit); }
   .summary-box .mono-num.negative{ color:var(--debit); }
 
-  .table-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  /* overflow-y:hidden added deliberately (not left to default): this wrapper's overflow-x:auto is
+     the one genuinely-intended case of horizontal scrolling in the app (wide report tables on
+     narrow viewports), but per the same overflow spec quirk noted elsewhere in this file, leaving
+     the other axis at its default 'visible' would make the browser compute it as 'auto' too,
+     risking an unwanted vertical scrollbar here as well. Closing it from this direction keeps the
+     intentional horizontal scroll while ruling out any accidental vertical one. */
+  .table-scroll{ overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch; }
   .data-table{ width:100%; min-width:560px; border-collapse:collapse; font-size:13.5px; }
   .data-table th{ text-align:left; padding:9px 8px; color:var(--ink-soft); font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; border-bottom:1.5px solid var(--line); }
   .data-table td{ padding:11px 8px; border-bottom:1px solid var(--bg); }
@@ -629,14 +641,9 @@
      - Shadows reuse Light's own recipe outright, same reasoning as Sun Light's - light-surface
        shadow physics doesn't change per theme, and color temperature is imperceptible at this
        opacity.
-     - Headings (h1/h2 - page titles and every More sub-page's section title) use Playfair
-       Display over the app's existing Inter, from ui-ux-pro-max's typography search ("Classic
-       Elegant" pairing, tagged for spa/beauty/high-end e-commerce) - chosen specifically because
-       its BODY font in that pairing is already Inter, this app's existing body/number font, so
-       adopting it only ever touches headings and never risks the tabular-number alignment
-       .mono-num relies on everywhere else. Scoped to this theme only, loaded the same way the
-       app already loads Inter (a second Google Fonts <link> in index.html) - not a new
-       mechanism, just one more font through the one already in use.
+     - Headings (h1/h2) use the app's existing Inter, same font-family/weight as Light/Dark/
+       Crimson - an earlier version of this theme switched these to Playfair Display, but that
+       was reverted to keep heading typography consistent app-wide across every theme.
      - No background photo/decoration, matte and flat, same reasoning as Crimson/Sun Light. */
   body[data-theme="purply"]{
     --bg:#FAF5FF;
@@ -665,7 +672,6 @@
   body[data-theme="purply"] .topbar{ background:rgba(250,245,255,.75); border-bottom-color:rgba(124,58,237,.08); }
   body[data-theme="purply"] .bottom-nav{ background:rgba(250,245,255,.78); border-top-color:rgba(124,58,237,.08); }
   body[data-theme="purply"] .card-label{ color:#6D28D9; }
-  body[data-theme="purply"] h1, body[data-theme="purply"] h2{ font-family:'Playfair Display', serif; }
 
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }
