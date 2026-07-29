@@ -578,11 +578,28 @@
   body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
   /* ---------- Sun Light theme ----------
-     Token system built from the 5 specified colors (light gray bg, near-black ink, dark
-     charcoal secondary ink, golden-yellow primary accent, brighter-yellow secondary highlight),
-     everything else derived deliberately rather than defaulted - internal key is "sunlight",
-     deliberately distinct from the legacy "sunset"/"mounty"/"reddy" values applyTheme() migrates
-     to Crimson (js/app.js), so this can never collide with that migration.
+     Round 2: the first build only changed --binder and left every neutral (bg/card/line) at the
+     same coolness as Light theme's own, so despite being a distinct set of tokens it read as
+     "Light with a couple of yellow buttons" rather than its own coordinated theme. Every neutral
+     below is now a deliberate warm-tinted blend TOWARD the accent yellow (not just adjacent to
+     it), not the literal untinted gray the palette brief gave for background - the "5 colors"
+     are the theme's identity to derive from, not a literal per-token lookup table.
+     - --bg is #D6D6D6 blended 15% toward #FFD100 (both computed, not eyeballed) -> #DCD5B6, a
+       warm sand/cream rather than neutral gray. Barely moves lightness (11.05:1/8.39:1 ink/
+       ink-soft on it, versus 11.21:1/8.51:1 before) so every existing contrast check below still
+       holds, but reads as sun-washed rather than "gray with yellow accents".
+     - --card is white blended 5% the same way -> #FFFDF2, a warm off-white - still clearly the
+       lightest/"most raised" surface in the theme (15.97:1 ink contrast), just not a stark pure
+       white sitting oddly on a now-warm page.
+     - --line is a warm mid-tone between bg and a deeper tan (#C7BFA0) rather than a desaturated
+       gray, so borders/dividers carry the same warmth rather than reading as a leftover neutral.
+     - .card-label (every section header app-wide - "NET BALANCE", "SPENDING", "RECENT
+       ACTIVITY", etc.) gets a warm olive-gold color (#6B5017, 5.11:1/7.39:1 on bg/card) instead
+       of the plain neutral --ink-soft every other theme uses - this is the single highest-
+       leverage way to extend the identity beyond 2-3 buttons, since section headers appear on
+       nearly every card in the app. .spine .tab-btn:hover and every .debt-overview-stat/
+       .summary-box tile already use var(--bg) directly, so they inherit this same warmth for
+       free with no separate override needed.
      - --binder is the exact golden yellow (#FFD100) - "CTAs, active states, key highlights" is
        squarely what the brief means for it. But yellow is inherently light/high-luminance: the
        app's existing .btn-black/.spine .tab-btn.active/.bottom-nav .tab-btn.fab/.cat-col form
@@ -590,35 +607,35 @@
        Dark/Crimson's dark accents but fails badly here (checked: ~1.5:1, nowhere near AA's
        4.5:1) - overridden below to --ink instead, checked at 11:1+ against both --binder and
        --binder-light.
-     - --credit/--debit are deliberately darker than Light/Dark/Crimson's own values - not a
-       different semantic, but the first theme where they have to work as small TEXT on a
-       background that isn't near-white or near-black. Light's own credit green (#16A34A)
-       checked at only 2.27:1 against this theme's #D6D6D6 bg, well under AA's 4.5:1 floor.
-       #166534/#991B1B checked at 4.91:1/7.13:1 and 5.72:1/8.31:1 against --bg/--card - both pass
-       everywhere they appear as text. Staying this dark also means the base .btn-debit rule's
-       white text (color:#fff) already passes (8.31:1) with no override needed, unlike Dark/
-       Crimson, which both had to swap it to color:var(--bg) since their debit is light/bright.
-     - --gold is deliberately NOT another yellow: it's the app's existing semantic "80%+ budget
-       used" warning color, sitting on a theme whose PRIMARY accent already is yellow - reusing
-       that hue here would make an ordinary button and a budget warning look identical. A
-       burnt-orange (#9A3412, 5.03:1/7.31:1 on bg/card) keeps the "amber warning" feel while
-       staying visually distinct from both --binder and --debit.
-     - --link/--goal are darkened the same way as credit/debit and for the same reason -
-       #1D4ED8/#7E22CE, checked at 4.61:1/6.70:1 and 4.80:1/6.98:1 against --bg/--card.
-     - --card is pure white, the same derivation Light itself already uses (a brighter, cleaner
-       surface than --bg for anything meant to read as "raised" above the page).
+     - --debit is a warm rust-red (#9E301A), not a plain/cool brick-red - the same "shift the hue
+       toward this theme's own warmth" treatment as bg/card, in the same spirit as --gold's
+       burnt-orange, while staying clearly its own color: darker and more saturated-red than
+       --gold (#9A3412) rather than another orange, so a negative amount and a budget warning
+       still read as two different things at a glance. Checked at 4.92:1/7.12:1 on bg/card - the
+       base .btn-debit rule's white text (color:#fff) still passes too (7.26:1), no override
+       needed, same reasoning as before: staying dark enough to work as text means it also works
+       under white fill text with no per-theme swap.
+     - --credit is unchanged (#166534, 4.83:1/6.99:1 on the new bg/card - re-checked, still
+       passes) - green doesn't need a "warmer" version to feel coordinated, since its role is
+       specifically to read as distinct FROM the theme's own warm palette (a credit shouldn't
+       look like it's "part of" the sun/yellow family).
+     - --gold (burnt-orange, unchanged, re-checked at 4.95:1/7.16:1 on the new bg/card) stays the
+       app's existing semantic "80%+ budget used" warning color, distinct from --binder so an
+       ordinary button and a budget warning don't look identical.
+     - --link/--goal are unchanged (#1D4ED8/#7E22CE) - re-checked against the new bg/card at
+       4.54:1/6.57:1 and 4.73:1/6.85:1 - both still clear AA, so no adjustment needed there.
      - Shadows reuse Light's own recipe outright (dark, low-opacity) rather than inventing new
-       values - both themes share the same light-surface-on-dark-shadow physics, nothing to
-       derive here that Light hasn't already solved.
+       values - both themes share the same light-surface-on-dark-shadow physics, and shadow color
+       temperature is imperceptible at this opacity regardless.
      - No background photo/decoration, matte and flat, same reasoning as Crimson's own note. */
   body[data-theme="sunlight"]{
-    --bg:#D6D6D6;
-    --card:#FFFFFF;
+    --bg:#DCD5B6;
+    --card:#FFFDF2;
     --ink:#202020;
     --ink-soft:#333533;
-    --line:#C7C7C7;
+    --line:#C7BFA0;
     --credit:#166534;
-    --debit:#991B1B;
+    --debit:#9E301A;
     --gold:#9A3412;
     --link:#1D4ED8;
     --goal:#7E22CE;
@@ -632,11 +649,13 @@
   }
   /* .topbar/.bottom-nav hardcode Light's own literal rgba tone rather than deriving from
      var(--bg) (that's why Dark/Crimson each override these two too) - tinted here toward this
-     theme's own #D6D6D6 instead of inheriting Light's slightly-bluer near-white by accident.
-     .spine/.icon-circle/.card-glass all use translucent WHITE already, which equals this
-     theme's own --card exactly (same as Light), so those need no override. */
-  body[data-theme="sunlight"] .topbar{ background:rgba(214,214,214,.75); border-bottom-color:rgba(32,32,32,.08); }
-  body[data-theme="sunlight"] .bottom-nav{ background:rgba(214,214,214,.78); border-top-color:rgba(32,32,32,.08); }
+     theme's own warm bg/card instead of inheriting Light's cooler tones by accident. */
+  body[data-theme="sunlight"] .topbar{ background:rgba(220,213,182,.75); border-bottom-color:rgba(32,32,32,.08); }
+  body[data-theme="sunlight"] .bottom-nav{ background:rgba(220,213,182,.78); border-top-color:rgba(32,32,32,.08); }
+  body[data-theme="sunlight"] .spine{ background:rgba(255,253,242,.78); }
+  body[data-theme="sunlight"] .icon-circle{ background:rgba(255,253,242,.75); }
+  body[data-theme="sunlight"] .card-glass{ background:rgba(255,253,242,.52); }
+  body[data-theme="sunlight"] .card-label{ color:#6B5017; }
   body[data-theme="sunlight"] .btn-black,
   body[data-theme="sunlight"] .spine .tab-btn.active,
   body[data-theme="sunlight"] .bottom-nav .tab-btn.fab,
