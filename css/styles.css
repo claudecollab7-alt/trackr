@@ -577,6 +577,80 @@
   body[data-theme="crimson"] .btn-debit{ color:var(--bg); }
   body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
+  /* ---------- Sun Light theme ----------
+     Token system built from the 5 specified colors (light gray bg, near-black ink, dark
+     charcoal secondary ink, golden-yellow primary accent, brighter-yellow secondary highlight),
+     everything else derived deliberately rather than defaulted - internal key is "sunlight",
+     deliberately distinct from the legacy "sunset"/"mounty"/"reddy" values applyTheme() migrates
+     to Crimson (js/app.js), so this can never collide with that migration.
+     - --binder is the exact golden yellow (#FFD100) - "CTAs, active states, key highlights" is
+       squarely what the brief means for it. But yellow is inherently light/high-luminance: the
+       app's existing .btn-black/.spine .tab-btn.active/.bottom-nav .tab-btn.fab/.cat-col form
+       button/#app-toast.info rules all hardcode white text over var(--binder), which passed for
+       Dark/Crimson's dark accents but fails badly here (checked: ~1.5:1, nowhere near AA's
+       4.5:1) - overridden below to --ink instead, checked at 11:1+ against both --binder and
+       --binder-light.
+     - --credit/--debit are deliberately darker than Light/Dark/Crimson's own values - not a
+       different semantic, but the first theme where they have to work as small TEXT on a
+       background that isn't near-white or near-black. Light's own credit green (#16A34A)
+       checked at only 2.27:1 against this theme's #D6D6D6 bg, well under AA's 4.5:1 floor.
+       #166534/#991B1B checked at 4.91:1/7.13:1 and 5.72:1/8.31:1 against --bg/--card - both pass
+       everywhere they appear as text. Staying this dark also means the base .btn-debit rule's
+       white text (color:#fff) already passes (8.31:1) with no override needed, unlike Dark/
+       Crimson, which both had to swap it to color:var(--bg) since their debit is light/bright.
+     - --gold is deliberately NOT another yellow: it's the app's existing semantic "80%+ budget
+       used" warning color, sitting on a theme whose PRIMARY accent already is yellow - reusing
+       that hue here would make an ordinary button and a budget warning look identical. A
+       burnt-orange (#9A3412, 5.03:1/7.31:1 on bg/card) keeps the "amber warning" feel while
+       staying visually distinct from both --binder and --debit.
+     - --link/--goal are darkened the same way as credit/debit and for the same reason -
+       #1D4ED8/#7E22CE, checked at 4.61:1/6.70:1 and 4.80:1/6.98:1 against --bg/--card.
+     - --card is pure white, the same derivation Light itself already uses (a brighter, cleaner
+       surface than --bg for anything meant to read as "raised" above the page).
+     - Shadows reuse Light's own recipe outright (dark, low-opacity) rather than inventing new
+       values - both themes share the same light-surface-on-dark-shadow physics, nothing to
+       derive here that Light hasn't already solved.
+     - No background photo/decoration, matte and flat, same reasoning as Crimson's own note. */
+  body[data-theme="sunlight"]{
+    --bg:#D6D6D6;
+    --card:#FFFFFF;
+    --ink:#202020;
+    --ink-soft:#333533;
+    --line:#C7C7C7;
+    --credit:#166534;
+    --debit:#991B1B;
+    --gold:#9A3412;
+    --link:#1D4ED8;
+    --goal:#7E22CE;
+    --binder:#FFD100;
+    --binder-light:#FFEE32;
+    --shadow:0 1px 2px rgba(15,23,42,.05), 0 8px 20px rgba(15,23,42,.08);
+    --shadow-sm:0 1px 2px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.08);
+    --shadow-glass:0 1px 2px rgba(15,23,42,.05), 0 12px 28px rgba(15,23,42,.10);
+    --shadow-fab:0 8px 20px rgba(15,23,42,.32);
+    --shadow-nav:0 -4px 20px rgba(15,23,42,.06);
+  }
+  /* .topbar/.bottom-nav hardcode Light's own literal rgba tone rather than deriving from
+     var(--bg) (that's why Dark/Crimson each override these two too) - tinted here toward this
+     theme's own #D6D6D6 instead of inheriting Light's slightly-bluer near-white by accident.
+     .spine/.icon-circle/.card-glass all use translucent WHITE already, which equals this
+     theme's own --card exactly (same as Light), so those need no override. */
+  body[data-theme="sunlight"] .topbar{ background:rgba(214,214,214,.75); border-bottom-color:rgba(32,32,32,.08); }
+  body[data-theme="sunlight"] .bottom-nav{ background:rgba(214,214,214,.78); border-top-color:rgba(32,32,32,.08); }
+  body[data-theme="sunlight"] .btn-black,
+  body[data-theme="sunlight"] .spine .tab-btn.active,
+  body[data-theme="sunlight"] .bottom-nav .tab-btn.fab,
+  body[data-theme="sunlight"] .cat-col form button,
+  body[data-theme="sunlight"] #app-toast.info{
+    color:var(--ink);
+  }
+  /* Unscoped elsewhere (.bottom-nav .tab-btn.active{ color:var(--binder); }) works as small
+     standalone text for every other theme's binder color against their own nav background, but
+     yellow at this luminance is illegible against either this theme's nav or card (checked:
+     ~1:1-1.5:1) - --ink reads as clearly "active" via weight/color contrast against the
+     inactive tabs' --ink-soft, without needing --binder's hue at all here. */
+  body[data-theme="sunlight"] .bottom-nav .tab-btn.active{ color:var(--ink); }
+
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }
   .theme-toggle.on{ background:var(--binder); }
@@ -625,7 +699,17 @@
     .view-fade-retrigger{ animation:none; }
   }
   .search-overlay-header{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-shrink:0; }
-  .search-overlay-body{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  /* overflow-x explicitly set (not left to default) on purpose: per the CSS overflow spec, when
+     one axis is a non-'visible' value (overflow-y:auto here) and the other is left at its default
+     'visible', the browser is required to instead compute the other axis as 'auto' too - it can't
+     leave one axis clipping-capable and the other genuinely unclipped. That silently turned this
+     into overflow-x:auto, and every one of this class's several popups (category detail, schedule,
+     notifications, search, transaction/debt/goal detail) has some row content that overflows its
+     container by a few sub-pixels (nowrap text, badge+amount rows at the container's exact width),
+     which was enough to trigger a permanent horizontal scrollbar with nothing genuinely meant to
+     scroll sideways. None of these popups have any content that's actually supposed to scroll
+     horizontally, so this is hidden outright rather than auto. */
+  .search-overlay-body{ overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; }
   .schedule-row{ padding:11px 4px; border-bottom:1px solid var(--bg); }
 
   .txdetail-hero{ text-align:center; padding:18px 0 20px; border-bottom:1px solid var(--line); margin-bottom:6px; }
