@@ -212,7 +212,13 @@
   const PERMANENT_FAILURE_CODES = new Set([RLS_VIOLATION_CODE, FK_VIOLATION_CODE]);
   async function runOp(op){
     if(op.kind==='upsert'){
-      const conflictCol = op.table==='budgets' ? 'user_id,category' : 'id';
+      // accounts' id alone used to be the primary key - every user's default wallets
+      // (acc_cash/acc_bank/acc_card, seeded with the same fixed ids for everyone) collided with
+      // whichever account first created rows with those ids, since a second user's upsert was
+      // evaluated as an update of a row they don't own rather than an insert. The table's PK is
+      // now composite (user_id, id) (see the accompanying SQL migration), the same shape budgets
+      // already used for exactly this reason - so the conflict target here must match.
+      const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : 'id';
       const { error } = await supabaseClient.from(op.table).upsert(op.rows, { onConflict: conflictCol });
       if(!error) return;
       logSyncError(op, error);
