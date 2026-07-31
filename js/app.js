@@ -3176,11 +3176,21 @@
   // Supabase returns generic PostgrestError-style messages — map the ones users
   // actually hit to distinct, actionable copy instead of one generic error for all of them.
   function authErrorMessage(error, context){
-    const msg = ((error && error.message) || '').toLowerCase();
+    const rawMsg = error && error.message;
+    const msg = (rawMsg || '').toLowerCase();
     if(context==='signup' && msg.includes('already registered')) return 'This email is already registered — log in instead.';
+    if(context==='signup' && (msg.includes('rate limit') || msg.includes('too many'))) return 'Too many attempts — please wait a minute and try again.';
     if(context==='login' && msg.includes('email not confirmed')) return 'Please confirm your email before logging in.';
     if(context==='login' && msg.includes('invalid login credentials')) return 'Incorrect email or password.';
-    return (error && error.message) || 'Something went wrong. Please try again.';
+    // Guard against a message that isn't actually human-readable — a malformed response from an
+    // edge function, a proxy, or a misconfigured SMTP provider can leave a Supabase AuthError with
+    // no .message at all, or with .message set to little more than a stringified empty response
+    // body ("{}", "[object Object]"). Falling through to error.message unconditionally in that
+    // case is exactly what showed a literal "{}" to a real sign-up attempt instead of any
+    // actionable text.
+    const isReadable = rawMsg && rawMsg.trim() && !/^[{\[]/.test(rawMsg.trim()) && rawMsg.trim().toLowerCase() !== '[object object]';
+    if(isReadable) return rawMsg;
+    return context==='signup' ? 'Something went wrong creating your account. Please try again in a moment.' : 'Something went wrong. Please try again.';
   }
   function updateResendButtonState(){
     const btn = document.getElementById('auth-resend-btn');
@@ -3340,10 +3350,16 @@
     try{
       if(authMode==='signup'){
         const { data, error } = await window.trackrSync.client.auth.signUp({ email, password });
-        if(error){ showAuthError(authErrorMessage(error, 'signup')); return; }
+        if(error){
+          diagLogPage('auth:signup-failed', { code: error.code, status: error.status, message: error.message });
+          showAuthError(authErrorMessage(error, 'signup'));
+          return;
+        }
         if(data.session){
+          diagLogPage('auth:signup-succeeded', { autoConfirmed: true });
           await startAppForUser(data.session.user);
         } else {
+          diagLogPage('auth:signup-succeeded', { autoConfirmed: false });
           showAuthCheckInboxView(email);
         }
       } else {
@@ -3352,6 +3368,7 @@
         await startAppForUser(data.session.user);
       }
     } catch(e){
+      if(authMode==='signup') diagLogPage('auth:signup-threw', e && e.message);
       showAuthError('Something went wrong. Check your connection and try again.');
     } finally {
       submitBtn.disabled = false;
