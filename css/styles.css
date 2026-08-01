@@ -680,6 +680,11 @@
 
   /* ---------- Search overlay ---------- */
   .search-overlay{ position:fixed; inset:0; background:rgba(15,23,42,.45); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); z-index:300; display:none; align-items:flex-start; justify-content:center; padding:64px 16px 20px; opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
+  /* Lets View Log (normally z-index 300, same as every other .search-overlay) render above the
+     login/signup gate (z-index 4000) when opened via the long-press-the-logo shortcut on that
+     screen - the one path a signed-out user has to their own diagnostic log, since the rest of
+     Install Diagnostics lives behind More -> Profile & Backup, which the auth gate blocks. */
+  .search-overlay.above-auth-gate{ z-index:4500; }
   .search-overlay.open{ opacity:1; }
   .search-overlay-inner{ background:var(--card); border-radius:20px; max-width:560px; width:100%; max-height:78vh; box-shadow:var(--shadow); padding:18px; display:flex; flex-direction:column; opacity:0; transform:translateY(18px) scale(.96); transition:opacity var(--anim-duration) var(--anim-ease), transform var(--anim-duration) var(--anim-ease); }
   .search-overlay.open .search-overlay-inner{ opacity:1; transform:translateY(0) scale(1); }

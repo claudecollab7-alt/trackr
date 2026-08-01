@@ -3020,6 +3020,7 @@
   let currentUser = null;
   let authMode = 'login';
   let appStarted = false;
+  let unsyncableToastShownThisLaunch = false;
   // The code-based password reset signs out of its recovery session in the same page load it
   // was established in (no link, no navigation - onAuthStateChange is already listening the
   // whole time, unlike the old link flow which returned before ever registering it). Without
@@ -3065,6 +3066,8 @@
   function showAuthCheckInboxView(email){
     showOnlyAuthView('auth-checkinbox-view');
     document.getElementById('auth-checkinbox-email').textContent = email;
+    document.getElementById('auth-signupcode-input').value = '';
+    document.getElementById('auth-signupcode-error').style.display = 'none';
     pendingConfirmEmail = email;
     resendCooldownUntil = 0;
     updateResendButtonState();
@@ -3212,11 +3215,19 @@
     try{
       const { error } = await window.trackrSync.client.auth.resend({ type:'signup', email: pendingConfirmEmail });
       if(error){
-        note.style.display = 'block'; note.textContent = 'Could not resend — try again shortly.';
+        diagLogPage('auth:signup-resend-failed', { code: error.code, status: error.status, message: error.message });
+        // Supabase enforces its own 60s-per-user minimum interval on resend regardless of the
+        // 30s cooldown this button already applies locally (e.g. after a page reload resets the
+        // local timer but the server-side window hasn't elapsed yet) - that specific rejection
+        // reads as an ordinary readable message already (not JSON-shaped), so authErrorMessage's
+        // is-it-readable check passes it straight through rather than falling back to something
+        // generic and less actionable.
+        note.style.display = 'block'; note.textContent = authErrorMessage(error, 'signup');
         updateResendButtonState();
         return;
       }
     }catch(e){
+      diagLogPage('auth:signup-resend-threw', e && e.message);
       note.style.display = 'block'; note.textContent = 'Could not resend — check your connection.';
       updateResendButtonState();
       return;
@@ -3228,6 +3239,40 @@
       if(Date.now() >= resendCooldownUntil){ clearInterval(resendCooldownTimer); resendCooldownTimer = null; }
     }, 1000);
     updateResendButtonState();
+  }
+  // Redeems the code from the signup confirmation email directly, exactly like
+  // handleForgotCodeSubmit does for password recovery - verifyOtp() with type:'signup' (not
+  // 'email', not 'recovery') both confirms the account AND returns a live session in one step, so
+  // the user lands straight in the app rather than being sent back to re-enter credentials on the
+  // login form. Accepts 6-10 digits rather than a hardcoded 8, matching handleForgotCodeSubmit's
+  // own reasoning - this project's Email OTP length is currently configured to 8, but that's a
+  // Supabase project setting this app doesn't control and has already been wrong once before.
+  async function handleSignupCodeSubmit(e){
+    e.preventDefault();
+    const code = document.getElementById('auth-signupcode-input').value.trim();
+    const errEl = document.getElementById('auth-signupcode-error');
+    if(!/^[0-9]{6,10}$/.test(code)){ errEl.textContent = 'Enter the 8-digit code from your email.'; errEl.style.display = 'block'; return; }
+    if(!pendingConfirmEmail){ errEl.textContent = 'Something went wrong — go back and sign up again.'; errEl.style.display = 'block'; return; }
+    const submitBtn = document.getElementById('auth-signupcode-submit-btn');
+    submitBtn.disabled = true;
+    errEl.style.display = 'none';
+    try{
+      const { data, error } = await window.trackrSync.client.auth.verifyOtp({
+        email: pendingConfirmEmail, token: code, type: 'signup'
+      });
+      if(error){
+        diagLogPage('auth:signup-verify-failed', { code: error.code, status: error.status, message: error.message });
+        errEl.textContent = authErrorMessage(error, 'signup'); errEl.style.display = 'block';
+        return;
+      }
+      diagLogPage('auth:signup-verify-succeeded', {});
+      await startAppForUser(data.session.user);
+    }catch(e){
+      diagLogPage('auth:signup-verify-threw', e && e.message);
+      errEl.textContent = 'Something went wrong. Check your connection and try again.'; errEl.style.display = 'block';
+    }finally{
+      submitBtn.disabled = false;
+    }
   }
   function togglePasswordVisibility(){
     const input = document.getElementById('auth-password');
@@ -3319,7 +3364,10 @@
     submitBtn.disabled = true;
     try{
       const { error } = await window.trackrSync.client.auth.updateUser({ password });
-      if(error){ errEl.textContent = error.message || 'Could not update your password. Try again.'; errEl.style.display = 'block'; return; }
+      // Same unconditional error.message passthrough that showed a literal "{}" on signup once
+      // already - routed through the same authErrorMessage() readability guard rather than
+      // trusting Supabase's message is always human-readable.
+      if(error){ errEl.textContent = authErrorMessage(error, 'login'); errEl.style.display = 'block'; return; }
       // The recovery link left a live session behind (that's how updateUser() above could act
       // on this account at all) - sign out of it deliberately, matching the rest of this auth
       // flow's pattern of never silently dropping someone into a session from an email-link
@@ -4497,6 +4545,24 @@
       diagLogPage('page:cloud-pull-failed', errInfo);
       showAppToast(cloudPullFailureMessage(errInfo));
     }
+    // A permanently-rejected write (RLS/FK violation - see PERMANENT_FAILURE_CODES in
+    // js/supabase.js) never throws and never reaches cloudPullFailureMessage above - runOp()
+    // records it and moves on, by design, so one bad row doesn't block every other sync. That
+    // silence was itself the bug once (a whole table's default rows rejected on every login with
+    // literally nothing shown to the user, not even a wrong message - the wallet-id-collision
+    // case this was written for). Told once per app launch, deliberately worded as ongoing
+    // rather than "temporary" - retrying the identical write changes nothing here, this only
+    // clears once the underlying id conflict itself is resolved.
+    if(!unsyncableToastShownThisLaunch){
+      try{
+        const unsyncable = await findUnsyncableRecords();
+        if(unsyncable.length){
+          unsyncableToastShownThisLaunch = true;
+          diagLogPage('page:unsyncable-records-found', { count: unsyncable.length, tables: [...new Set(unsyncable.map(u=>u.table))] });
+          showAppToast(`${unsyncable.length} item${unsyncable.length===1?'':'s'} can't sync to your account — see Integrity Check under Account & Backup.`);
+        }
+      }catch(e){}
+    }
     if(refreshAfter) refreshAll();
   }
   // Logged at every moment the app shell's reveal state changes (auth overlay hiding, the loading
@@ -4629,6 +4695,7 @@
     });
     document.getElementById('auth-password-toggle').addEventListener('click', togglePasswordVisibility);
     document.getElementById('auth-resend-btn').addEventListener('click', handleResendConfirmation);
+    document.getElementById('auth-signupcode-form').addEventListener('submit', handleSignupCodeSubmit);
     document.getElementById('auth-checkinbox-back-btn').addEventListener('click', ()=> showAuthOverlay('login'));
     document.getElementById('auth-confirmed-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
     document.getElementById('auth-forgot-password-btn').addEventListener('click', showAuthForgotView);
@@ -4640,6 +4707,37 @@
     document.getElementById('auth-reset-password-toggle').addEventListener('click', toggleResetPasswordVisibility);
     document.getElementById('auth-reset-password-form').addEventListener('submit', handleResetPasswordSubmit);
     document.getElementById('auth-reset-done-login-btn').addEventListener('click', ()=> showAuthOverlay('login'));
+    // Long-press-the-logo shortcut to View Log from the auth screen - the only path a signed-out
+    // user has to their own device's diagnostic log. auth:signup-* entries are written on exactly
+    // the device of someone who by definition can't log in yet, and the rest of Install
+    // Diagnostics lives behind More -> Profile & Backup, which this same auth gate blocks - so
+    // without this, those entries were permanently unreachable by the only people who generate
+    // them. Deliberately not a visible button (keeps the login screen uncluttered for the
+    // overwhelming majority who never need it) - mirrors the discreet long-press pattern already
+    // used nowhere else in this app, chosen over a link that only appears after an error since a
+    // thrown exception before any error UI renders would otherwise still leave someone stuck.
+    (function(){
+      const brandMark = document.getElementById('auth-brand-mark');
+      if(!brandMark) return;
+      let pressTimer = null;
+      const LONG_PRESS_MS = 900;
+      function start(){
+        clear();
+        pressTimer = setTimeout(()=>{
+          pressTimer = null;
+          const overlay = document.getElementById('diaglog-overlay');
+          if(overlay) overlay.classList.add('above-auth-gate');
+          openDiagLogOverlay();
+        }, LONG_PRESS_MS);
+      }
+      function clear(){ if(pressTimer){ clearTimeout(pressTimer); pressTimer = null; } }
+      brandMark.addEventListener('mousedown', start);
+      brandMark.addEventListener('mouseup', clear);
+      brandMark.addEventListener('mouseleave', clear);
+      brandMark.addEventListener('touchstart', start, { passive:true });
+      brandMark.addEventListener('touchend', clear);
+      brandMark.addEventListener('touchcancel', clear);
+    })();
 
     // A confirmation-link click lands back here with the email-verification token still
     // in the URL — createClient() above auto-detects it and would otherwise silently log
@@ -4931,7 +5029,13 @@
     showOverlay('diaglog-overlay');
     if(!(history.state && history.state.diagLogOpen)) history.pushState({ diagLogOpen:true }, '', '');
   }
-  function closeDiagLogOverlay(){ hideOverlay('diaglog-overlay'); }
+  function closeDiagLogOverlay(){
+    hideOverlay('diaglog-overlay');
+    // Always stripped here regardless of how this closed (close button, backdrop tap, back
+    // gesture) - harmless no-op if it was never added (opened the ordinary way, from More).
+    const overlayEl = document.getElementById('diaglog-overlay');
+    if(overlayEl) overlayEl.classList.remove('above-auth-gate');
+  }
   if(viewDiagLogBtn) viewDiagLogBtn.addEventListener('click', openDiagLogOverlay);
   document.getElementById('close-diaglog-btn').addEventListener('click', ()=> history.back());
   document.getElementById('diaglog-overlay').addEventListener('click', (e)=>{ if(e.target.id==='diaglog-overlay') history.back(); });
