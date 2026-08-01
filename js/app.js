@@ -385,6 +385,11 @@
     await persistLocalKeys([
       ['categories', categories], ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
     ]);
+    // Stored under its own key, separate from the arrays above, so it wasn't being touched by any
+    // of this - a marker recorded against one account's records was surviving logout intact, then
+    // getting re-matched against whatever the next login's cloud pull re-fetched under the same
+    // ids and flagged all over again, even after the server-side cause was long fixed.
+    if(window.trackrSync.clearAllPermanentlyRejectedRecords) await window.trackrSync.clearAllPermanentlyRejectedRecords();
   }
 
   function renderTabUI(tabName){
@@ -2762,13 +2767,69 @@
       row.innerHTML = `
         <div class="budget-row-top">
           <span class="budget-cat-left"><span class="cat-badge sm" style="background:${categoryColor(a.name)};">${categoryInitial(a.name)}</span><span class="budget-cat-name">${escapeHtml(a.name)}</span></span>
-          <button class="icon-btn-sm del-account-btn" data-id="${a.id}" aria-label="Delete account ${escapeHtml(a.name)}">${icon('trash',14)}</button>
+          <span style="display:flex; gap:4px;">
+            <button class="icon-btn-sm rename-account-btn" data-id="${a.id}" aria-label="Rename account ${escapeHtml(a.name)}">${icon('edit',14)}</button>
+            <button class="icon-btn-sm del-account-btn" data-id="${a.id}" aria-label="Delete account ${escapeHtml(a.name)}">${icon('trash',14)}</button>
+          </span>
         </div>
         <div class="budget-row-meta" style="font-size:14px; font-weight:700; color:${bal<0?'var(--debit)':'var(--ink)'};">${fmt(bal)}</div>
+        <form class="rename-account-form" data-id="${a.id}" style="display:none; gap:8px; margin-top:8px;">
+          <input type="text" class="rename-account-input" required style="flex:1; min-width:0; padding:8px 10px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font-size:14px;">
+          <button type="submit" class="btn-pill btn-black" style="padding:8px 14px; font-size:12.5px;">Save</button>
+          <button type="button" class="btn-pill btn-outline cancel-rename-account-btn" style="padding:8px 14px; font-size:12.5px;">Cancel</button>
+        </form>
       `;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-account-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteAccount(btn.dataset.id)));
+    container.querySelectorAll('.rename-account-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const row = btn.closest('.budget-row');
+        const acc = accounts.find(a=>a.id===btn.dataset.id); if(!acc) return;
+        row.querySelector('.budget-row-top').style.display = 'none';
+        row.querySelector('.budget-row-meta').style.display = 'none';
+        const form = row.querySelector('.rename-account-form');
+        form.style.display = 'flex';
+        const input = form.querySelector('.rename-account-input');
+        input.value = acc.name;
+        input.focus(); input.select();
+      });
+    });
+    container.querySelectorAll('.cancel-rename-account-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=> renderAccountsList());
+    });
+    container.querySelectorAll('.rename-account-form').forEach(form=>{
+      form.addEventListener('submit', (e)=>{
+        e.preventDefault();
+        handleRenameAccount(form.dataset.id, form.querySelector('.rename-account-input').value.trim());
+      });
+    });
+  }
+  async function handleRenameAccount(id, newName){
+    if(!newName) return;
+    const acc = accounts.find(a=>a.id===id); if(!acc) return;
+    const oldName = acc.name;
+    if(oldName===newName){ renderAccountsList(); return; }
+    if(accounts.some(a=>a.id!==id && a.name.toLowerCase()===newName.toLowerCase())){
+      alert('Another wallet already has this name.');
+      return;
+    }
+    // Transactions reference a wallet by its NAME, not its id (there is no wallet foreign key on
+    // a transaction row - see getTxAccount/accountBalance) - both mutations below happen
+    // synchronously, before either persist/sync call starts, so a rename can't land half-done:
+    // it's never possible for the wallet's name to change without every transaction that
+    // referenced the old name changing with it in the same pass. A partial rename would silently
+    // orphan those transactions - they'd stop appearing under the renamed wallet and stop
+    // counting toward its balance, with no error to explain why.
+    acc.name = newName;
+    let affectedTx = false;
+    transactions.forEach(t=>{ if(t.account===oldName){ t.account = newName; affectedTx = true; } });
+    // Both upsert the SAME row(s) by id (accounts: user_id+id; transactions: id) with the new
+    // name - an UPDATE in place, not an insert, so this can't create a duplicate row under the
+    // new name either locally or in Supabase.
+    await Promise.all([saveAccounts(), affectedTx ? saveTransactions() : Promise.resolve()]);
+    populateEntryAccountSelect();
+    refreshAll();
   }
   function renderAccountsHome(){
     const card = document.getElementById('accounts-home-card'); const list = document.getElementById('accounts-home-list');
@@ -3830,10 +3891,15 @@
   };
   // Cross-references the ids Supabase has permanently refused (an RLS violation - the row
   // belongs to a different account, most likely surviving a cross-account Restore Backup from
-  // before ids were regenerated on restore) against what's still actually sitting in local
-  // storage right now, so a record already cleared some other way doesn't show up as a stale
-  // false positive here.
+  // before ids were regenerated on restore - OR a permissions/policy misconfiguration, which is
+  // an entirely different, operator-fixable thing that happens to raise the same Postgres error
+  // code; see reasonFor() in runIntegrityCheck for how those two are actually told apart) against
+  // what's still actually sitting in local storage right now, so a record already cleared some
+  // other way doesn't show up as a stale false positive here. Always retries each marked id
+  // first (see retryPermanentlyRejectedOnce) - a marker is never trusted as still-accurate on its
+  // own, since the server-side cause it recorded may since have been fixed.
   async function findUnsyncableRecords(){
+    if(currentUser) await retryPermanentlyRejectedOnce();
     const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
     const found = [];
     Object.keys(REJECTABLE_TABLES).forEach(table=>{
@@ -3842,11 +3908,53 @@
       entries.forEach(entry=>{
         for(const [listName, list] of lists){
           const record = list.find(r=>r.id===entry.id);
-          if(record){ found.push({ table, listName, id: entry.id, record, code: entry.code }); break; }
+          if(record){ found.push({ table, listName, id: entry.id, record, code: entry.code, message: entry.message }); break; }
         }
       });
     });
     return found;
+  }
+  // Re-attempts the write for every record still marked permanently unsyncable, on the actual
+  // current local copy of that record (not whatever it looked like when first rejected) - if the
+  // server accepts it now, the marker clears itself silently, with no toast or dialog, exactly
+  // like any other successful background sync. This is what makes a record able to recover once
+  // its real cause (a missing GRANT, a corrected RLS policy) is fixed operator-side, instead of
+  // staying flagged forever just because it was rejected once. Safe to call often - a record with
+  // nothing marked against it costs nothing here, and one still genuinely rejected just gets its
+  // stored reason refreshed (see recordPermanentlyRejected's upsert-by-id behavior).
+  let retryPermanentlyRejectedInFlight = null;
+  async function retryPermanentlyRejectedOnce(){
+    if(!currentUser || !navigator.onLine) return;
+    if(retryPermanentlyRejectedInFlight) return retryPermanentlyRejectedInFlight;
+    retryPermanentlyRejectedInFlight = (async ()=>{
+      try{
+        const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
+        for(const table of Object.keys(REJECTABLE_TABLES)){
+          const entries = Array.isArray(store[table]) ? store[table] : [];
+          if(!entries.length) continue;
+          const lists = REJECTABLE_TABLES[table].lists();
+          for(const entry of entries){
+            let record = null, listName = null;
+            for(const [ln, list] of lists){
+              const r = list.find(x=>x.id===entry.id);
+              if(r){ record = r; listName = ln; break; }
+            }
+            if(!record){
+              // No longer exists locally under any list for this table (deleted some other way
+              // since) - nothing left to retry, so the marker is just dead weight now.
+              if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord(table, entry.id);
+              continue;
+            }
+            const result = await window.trackrSync.retryPermanentWrite(table, listName, record, currentUser.id);
+            if(result && result.ok){
+              diagLogPage('page:permanently-rejected-recovered', { table, id: entry.id });
+              if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord(table, entry.id);
+            }
+          }
+        }
+      }catch(e){}
+    })();
+    try{ await retryPermanentlyRejectedInFlight; } finally { retryPermanentlyRejectedInFlight = null; }
   }
   async function removeUnsyncableRecord(table, listName, id){
     const cfg = REJECTABLE_TABLES[table]; if(!cfg) return;
@@ -3854,6 +3962,20 @@
     const [, list] = cfg.lists().find(([name])=>name===listName) || [];
     if(list){ const idx = list.findIndex(r=>r.id===id); if(idx>-1) list.splice(idx,1); }
     await cfg.save();
+    // Explicitly deletes the row server-side too, matching every other delete path in this app
+    // (deleteTransaction/deleteDebt/deleteGoal/deleteAccount all call the matching syncDelete*
+    // immediately after removing locally) - cfg.save() above only re-upserts whatever's LEFT in
+    // the array, it was never itself a delete of this specific row. Without this, a record removed
+    // here because it genuinely belongs to a different account harmlessly no-ops against RLS (this
+    // session was never going to be allowed to delete a row it doesn't own anyway), but a record
+    // removed because a user mistakenly assumed a stale marker was still valid would otherwise sit
+    // there forever as invisible, un-deletable orphan data instead of actually being gone.
+    if(currentUser){
+      if(table==='transactions') window.trackrSync.syncDeleteTransaction(id);
+      else if(table==='debts') window.trackrSync.syncDeleteDebt(id);
+      else if(table==='goals') window.trackrSync.syncDeleteGoal(id);
+      else if(table==='accounts') window.trackrSync.syncDeleteAccount(id);
+    }
     if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord(table, id);
   }
   async function runIntegrityCheck(){
@@ -3898,18 +4020,32 @@
         unsyncable.forEach(u=> (byTable[u.table] = byTable[u.table]||[]).push(u));
         html += `<div class="card-label" style="margin-bottom:8px;">CAN'T SYNC TO YOUR ACCOUNT (${unsyncable.length})</div>`;
         html += `<div class="card" style="background:var(--bg); margin-bottom:10px; border-left:3px solid var(--debit);">
-          <p class="period-hint" style="margin:0 0 10px;">Your account's server permanently refuses these. They stay only on this device and will never sync; nothing else here is affected.</p>`;
-        // 42501 (RLS) means the row belongs to a different account - most likely left over from
-        // a Restore Backup that brought in records from a different account. 23503 (a foreign
-        // key violation) means it references something, most likely a debt, that doesn't exist
-        // server-side. Distinct reasons get distinct copy rather than one blanket explanation.
-        const reasonFor = code => code==='42501'
-          ? "Belongs to a different account"
-          : code==='23503' ? "References something that no longer exists on the server" : "Server permanently rejected this";
+          <p class="period-hint" style="margin:0 0 10px;">Retried automatically just now - these still didn't sync. Nothing else here is affected.</p>`;
+        // Postgres reports BOTH a genuine RLS ownership mismatch (the row really does belong to a
+        // different account - most likely left over from a cross-account Restore Backup) and a
+        // server-side permissions misconfiguration (e.g. a missing GRANT on the table, entirely
+        // unrelated to who owns the row) under the exact same code, 42501. The message text is
+        // the only thing that actually tells them apart ("row-level security policy" vs
+        // "permission denied"). These need very different copy: an ownership mismatch never
+        // resolves on retry and is what Remove is for; a permissions error is an operator-fixable
+        // server misconfiguration that this app already retries on its own (see
+        // retryPermanentlyRejectedOnce/findUnsyncableRecords above) - calling it "permanent" here
+        // was factually wrong and needlessly alarming for rows that belonged to the right account
+        // the whole time.
+        const reasonFor = entry => {
+          const msg = (entry.message || '').toLowerCase();
+          if(entry.code==='42501'){
+            return msg.includes('permission denied')
+              ? "Blocked by a server permissions setting, not a data problem — retried automatically"
+              : "Belongs to a different account";
+          }
+          if(entry.code==='23503') return "References something that no longer exists on the server";
+          return "Server rejected this — retried automatically";
+        };
         Object.keys(byTable).forEach(table=>{
           byTable[table].forEach(u=>{
             html += `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line);">
-              <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName} — ${reasonFor(u.code)})</span></span>
+              <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName} — ${escapeHtml(reasonFor(u))})</span></span>
               <button type="button" class="btn-pill btn-outline unsyncable-remove-btn" data-table="${table}" data-list="${u.listName}" data-id="${u.id}" style="padding:4px 10px; font-size:12px;">Remove</button>
             </div>`;
           });

@@ -193,9 +193,15 @@
       const store = await getPermanentlyRejectedRecords();
       if(!Array.isArray(store[table])) store[table] = [];
       ids.forEach(id=>{
-        if(id && !store[table].some(r=>r.id===id)){
-          store[table].push({ id, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString() });
-        }
+        if(!id) return;
+        // Upsert-by-id rather than insert-only-if-absent: a retried write that fails AGAIN can
+        // fail for a DIFFERENT reason than the first time (e.g. a missing-GRANT permission error
+        // gets fixed server-side, but the row genuinely does belong to another account) - the
+        // stored code/message needs to reflect the latest attempt, not freeze on whatever was
+        // true the first time this id was ever seen.
+        const idx = store[table].findIndex(r=>r.id===id);
+        const entry = { id, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString() };
+        if(idx>-1) store[table][idx] = entry; else store[table].push(entry);
       });
       await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify(store));
     }catch(e){}
@@ -206,6 +212,16 @@
       if(Array.isArray(store[table])) store[table] = store[table].filter(r=>r.id!==id);
       await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify(store));
     }catch(e){}
+  }
+  // Used by logout (and Reset Everything, which shares the same local-clear call) - the marker
+  // list is stored under its own key, separate from the transactions/debts/goals/accounts arrays
+  // it describes, so the ordinary "clear this device's copy of the account's data" step was
+  // silently leaving it behind. On the next login, the same records get re-pulled from the cloud
+  // with the same ids, re-matched against these stale markers, and flagged all over again - a
+  // second account on the same device, or the same account re-logging in after the server-side
+  // cause was fixed, saw the exact same stale "can't sync" list either way.
+  async function clearAllPermanentlyRejectedRecords(){
+    try{ await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify({})); }catch(e){}
   }
   const RLS_VIOLATION_CODE = '42501';
   const FK_VIOLATION_CODE = '23503';
@@ -257,6 +273,33 @@
     if(!navigator.onLine){ await queuePendingWrite(op); return; }
     try{ await runOp(op); }
     catch(e){ await queuePendingWrite(op); }
+  }
+  // Re-attempts the write for a single record the server previously refused permanently
+  // (RLS/FK, see PERMANENT_FAILURE_CODES above) instead of leaving it flagged forever. A 42501
+  // in particular can be an operator-fixable condition (a missing GRANT, a corrected policy) as
+  // much as a genuine ownership mismatch - the record deserves a real chance to clear its own
+  // flag once whatever caused it is actually resolved, not a permanent, one-way label. Called
+  // from app.js's REJECTABLE_TABLES-driven retry loop, which already knows which local list
+  // (debts vs receivables) an id belongs to - direction can't be recovered from the id alone.
+  async function retryPermanentWrite(table, listName, localRow, userId){
+    if(!navigator.onLine) return { ok:false, skipped:true };
+    let row, conflictCol;
+    if(table==='accounts'){ row = toAccountRow(localRow, userId); conflictCol = 'user_id,id'; }
+    else if(table==='transactions'){ row = toTransactionRow(localRow, userId); conflictCol = 'id'; }
+    else if(table==='goals'){ row = toGoalRow(localRow, userId); conflictCol = 'id'; }
+    else if(table==='debts'){ row = toDebtRow(localRow, userId, listName==='receivables'); conflictCol = 'id'; }
+    else return { ok:false };
+    try{
+      const { error } = await supabaseClient.from(table).upsert([row], { onConflict: conflictCol });
+      if(!error) return { ok:true };
+      if(PERMANENT_FAILURE_CODES.has(error.code)){
+        await recordPermanentlyRejected(table, [localRow.id], error);
+        return { ok:false };
+      }
+      // A different, retryable-shaped error (network blip, etc) - leave the existing marker
+      // untouched; this same retry runs again on the next launch or Run Check regardless.
+      return { ok:false };
+    }catch(e){ return { ok:false }; }
   }
   // Used by logout to decide whether it's safe to clear this device's local copy of the
   // account's data - a non-zero count means there's still something made offline (or that
@@ -486,5 +529,7 @@
     deleteAllCloudDataForUser,
     purgeQueuedTables,
     getPermanentlyRejectedRecords,
-    clearPermanentlyRejectedRecord
+    clearPermanentlyRejectedRecord,
+    clearAllPermanentlyRejectedRecords,
+    retryPermanentWrite
   };
