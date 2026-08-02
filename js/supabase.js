@@ -111,6 +111,13 @@
   function fromAccountRow(r){
     return { id: r.id, name: r.name };
   }
+  // dismissed_duplicates has no id column of its own - (user_id, group_key) IS the primary key,
+  // since a dismissal is nothing more than "this exact group_key is dismissed for this user" (see
+  // the SQL migration in this round's PR description). No created_at needed client-side either,
+  // same reasoning as accounts above - the column's own DEFAULT now() covers it.
+  function toDismissedDuplicateRow(userId, groupKey){
+    return { user_id: userId, group_key: groupKey };
+  }
 
   /* ---------- Offline pending-write queue ----------
      Every background sync call goes through here. On failure (offline, or any
@@ -147,7 +154,9 @@
   const DIAG_DB_NAME = 'trackrDiagnostics';
   const DIAG_STORE_NAME = 'events';
   function logSyncError(op, error){
-    const ids = op.kind==='upsert' ? op.rows.map(r=>r.id).filter(Boolean) : Object.values(op.match||{});
+    const ids = op.kind==='upsert'
+      ? op.rows.map(r=> op.table==='dismissed_duplicates' ? r.group_key : r.id).filter(Boolean)
+      : Object.values(op.match||{});
     const detail = {
       table: op.table, kind: op.kind, ids,
       code: error && error.code, message: error && error.message,
@@ -225,7 +234,69 @@
   }
   const RLS_VIOLATION_CODE = '42501';
   const FK_VIOLATION_CODE = '23503';
+  // Historically the only two codes treated as "permanent" (isolated per-record into
+  // recordPermanentlyRejected, surfaced by Data Integrity Check) - everything else fell through to
+  // `throw error` below, which syncOrQueue's catch re-queues for retry exactly like a genuine
+  // offline blip. That was wrong for ANY other Postgrest-returned error, not just these two: a
+  // cardinality violation (21000 - "ON CONFLICT DO UPDATE command cannot affect row a second
+  // time", the actual shape of the accounts duplicate-id bug), a check violation, an invalid-enum
+  // value, anything - all mean the exact same thing 42501/23503 do, which is that Supabase was
+  // REACHED and responded with an authoritative rejection of this exact payload. Retrying an
+  // unchanged payload against an unchanged schema can only ever repeat that same rejection. A
+  // genuinely transient failure (offline, DNS failure, a dropped connection) never reaches this
+  // line at all - fetch throws before postgrest-js ever has a `{error}` response to hand back, and
+  // that thrown exception is what syncOrQueue's own try/catch (and retryPendingWrites' `instanceof
+  // TypeError` check) already exists to handle. So the real dividing line was never "which
+  // error code" - it's "did we get a response back at all" - and this is kept as a named set only
+  // because 42501/23503 need their own copy in reasonFor() (js/app.js) to explain what kind of
+  // rejection it is, not because other codes are treated any differently below.
   const PERMANENT_FAILURE_CODES = new Set([RLS_VIOLATION_CODE, FK_VIOLATION_CODE]);
+  // Last-resort safety net, for every synced table, immediately before any upsert ever reaches
+  // Postgres: a duplicate key within a single batch makes the whole upsert fail with a cardinality
+  // violation (21000) - and since that's a real response (not a thrown exception), the op used to
+  // sit at recordPermanentlyRejected or, before this round, get silently re-queued forever,
+  // blocking every other write behind it. Two distinct legitimate records can never collide here -
+  // every id in this app is generated as either a uuid or (for accounts specifically, post the
+  // composite-key fix) unique per user, and dismissed_duplicates has no id column at all - its key
+  // is group_key, already unique per user by construction (see dismissDuplicateGroup) - so a
+  // collision can only ever mean the SAME record made it into the array twice, never two different
+  // records that both deserve to exist. Keeps whichever occurrence is LAST in the array, since
+  // callers always build `rows` from their own in-memory array in save-order, so the last
+  // occurrence reflects the most recently saved local state.
+  function dedupeRowsById(table, rows){
+    const keyOf = table==='dismissed_duplicates' ? (r=>r.group_key) : (r=>r.id);
+    const byKey = new Map();
+    rows.forEach(r=> byKey.set(keyOf(r), r));
+    if(byKey.size !== rows.length){
+      const seen = new Set(); const duplicateKeys = [];
+      rows.forEach(r=>{ const k = keyOf(r); if(seen.has(k)) duplicateKeys.push(k); else seen.add(k); });
+      logDedupeCollision(table, duplicateKeys, byKey.size, rows.length);
+    }
+    return Array.from(byKey.values());
+  }
+  // Same diagnostic store logSyncError writes to - a collision caught here is exactly the kind of
+  // thing a later bug report needs to be diagnosable from View Log rather than reproduced blind.
+  function logDedupeCollision(table, duplicateIds, keptCount, originalCount){
+    console.warn('Deduped duplicate id(s) before upsert:', table, duplicateIds);
+    try{
+      const req = indexedDB.open(DIAG_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+          req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        try{
+          const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+          tx.objectStore(DIAG_STORE_NAME).add({ ts: Date.now(), source:'sync', event:'sync-dedupe-collision', detail: JSON.stringify({ table, duplicateIds, keptCount, originalCount }) });
+          tx.oncomplete = () => db.close();
+          tx.onerror = () => db.close();
+        }catch(e){ try{ db.close(); }catch(e2){} }
+      };
+      req.onerror = () => {};
+    }catch(e){}
+  }
   async function runOp(op){
     if(op.kind==='upsert'){
       // accounts' id alone used to be the primary key - every user's default wallets
@@ -234,39 +305,38 @@
       // evaluated as an update of a row they don't own rather than an insert. The table's PK is
       // now composite (user_id, id) (see the accompanying SQL migration), the same shape budgets
       // already used for exactly this reason - so the conflict target here must match.
-      const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : 'id';
-      const { error } = await supabaseClient.from(op.table).upsert(op.rows, { onConflict: conflictCol });
+      const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : op.table==='dismissed_duplicates' ? 'user_id,group_key' : 'id';
+      const rows = dedupeRowsById(op.table, op.rows);
+      const { error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol });
       if(!error) return;
-      logSyncError(op, error);
-      if(PERMANENT_FAILURE_CODES.has(error.code)){
-        if(op.rows.length>1){
-          // A batch upsert fails as one Postgres statement - whether it's an RLS violation (row
-          // belongs to a different account) or a foreign-key violation (references a debt_id
-          // that doesn't exist server-side), neither is fixed by resending the identical batch,
-          // so isolate exactly which row(s) are rejected by retrying one at a time, letting the
-          // rest of the batch succeed instead of every future write to this whole table being
-          // blocked behind one bad row.
-          const rejectedIds = [];
-          for(const row of op.rows){
-            const { error: rowErr } = await supabaseClient.from(op.table).upsert([row], { onConflict: conflictCol });
-            if(rowErr && PERMANENT_FAILURE_CODES.has(rowErr.code)) rejectedIds.push(row.id);
-            else if(rowErr){ logSyncError({ ...op, rows:[row] }, rowErr); throw rowErr; }
-          }
-          if(rejectedIds.length) await recordPermanentlyRejected(op.table, rejectedIds, error);
-          return;
+      logSyncError({ ...op, rows }, error);
+      // See PERMANENT_FAILURE_CODES' own comment above - ANY error resolved here (not just
+      // 42501/23503) means the server responded and rejected this exact payload, so it's isolated
+      // per-record rather than thrown for syncOrQueue to blindly re-queue.
+      const keyOf = op.table==='dismissed_duplicates' ? (r=>r.group_key) : (r=>r.id);
+      if(rows.length>1){
+        // A batch upsert fails as one Postgres statement - isolate exactly which row(s) are
+        // rejected by retrying one at a time, letting the rest of the batch succeed instead of
+        // every future write to this whole table being blocked behind one bad row.
+        const rejectedIds = [];
+        for(const row of rows){
+          const { error: rowErr } = await supabaseClient.from(op.table).upsert([row], { onConflict: conflictCol });
+          if(rowErr) rejectedIds.push(keyOf(row));
         }
-        await recordPermanentlyRejected(op.table, [op.rows[0].id], error);
-        return; // Not thrown - the caller would otherwise queue this for a pointless retry.
+        if(rejectedIds.length) await recordPermanentlyRejected(op.table, rejectedIds, error);
+        return;
       }
-      throw error;
+      await recordPermanentlyRejected(op.table, [keyOf(rows[0])], error);
+      return; // Not thrown - the caller would otherwise queue this for a pointless retry.
     } else if(op.kind==='delete'){
       let q = supabaseClient.from(op.table).delete();
       Object.keys(op.match).forEach(k=>{ q = q.eq(k, op.match[k]); });
       const { error } = await q;
       if(!error) return;
       logSyncError(op, error);
-      if(PERMANENT_FAILURE_CODES.has(error.code)) return; // Retrying the identical delete won't change the outcome either way.
-      throw error;
+      // Same reasoning as the upsert branch above - a resolved error here is the server's final
+      // word on this exact delete; retrying it unchanged would only ever repeat it.
+      return;
     }
   }
   async function syncOrQueue(op){
@@ -292,12 +362,11 @@
     try{
       const { error } = await supabaseClient.from(table).upsert([row], { onConflict: conflictCol });
       if(!error) return { ok:true };
-      if(PERMANENT_FAILURE_CODES.has(error.code)){
-        await recordPermanentlyRejected(table, [localRow.id], error);
-        return { ok:false };
-      }
-      // A different, retryable-shaped error (network blip, etc) - leave the existing marker
-      // untouched; this same retry runs again on the next launch or Run Check regardless.
+      // See runOp's PERMANENT_FAILURE_CODES comment - any resolved error here means the server
+      // responded and rejected this exact row, regardless of which code it carries, so the marker
+      // is refreshed to reflect the latest attempt rather than left stale. A genuine connectivity
+      // failure never reaches this line - it throws instead, caught below.
+      await recordPermanentlyRejected(table, [localRow.id], error);
       return { ok:false };
     }catch(e){ return { ok:false }; }
   }
@@ -310,13 +379,15 @@
   }
   // Distinguishes "still offline" (navigator.onLine is false, or the request itself never
   // reached the server) from a genuinely stuck write (we're online and the server actively
-  // rejected it — a malformed row, a stale foreign key, etc). The two need different messaging:
-  // the first resolves itself once connectivity returns, the second never will no matter how
-  // many times it's retried, so callers need to know which one they're looking at instead of
-  // getting the same dead-end "reconnect and try again." RLS violations (42501) never reach
-  // this queue at all - runOp() above resolves those immediately into the separate
-  // permanently-rejected-records store instead, since retrying is never worth it and lumping
-  // them in with this generic "stuck" messaging would be actively wrong.
+  // rejected it — a malformed row, a stale foreign key, a duplicate id, etc). The two need
+  // different messaging: the first resolves itself once connectivity returns, the second never
+  // will no matter how many times it's retried, so callers need to know which one they're looking
+  // at instead of getting the same dead-end "reconnect and try again." No server-rejected write
+  // (any Postgrest error code, not just 42501/23503) ever reaches this queue at all any more -
+  // runOp() above resolves every one of those immediately into the separate
+  // permanently-rejected-records store instead, since retrying an identical payload is never worth
+  // it and lumping them in with this generic "stuck" messaging would be actively wrong. This queue
+  // is reserved for genuine connectivity failures only.
   async function getPendingWriteSummary(){
     await loadPendingQueue();
     const tables = [...new Set(pendingQueue.map(op=>op.table))];
@@ -375,6 +446,13 @@
   function syncDeleteGoal(userId, id){ return syncOrQueue({ kind:'delete', table:'goals', match:{ user_id:userId, id } }); }
   function syncUpsertAccounts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'accounts', rows: rows.map(a=>toAccountRow(a,userId)) }); }
   function syncDeleteAccount(userId, id){ return syncOrQueue({ kind:'delete', table:'accounts', match:{ user_id:userId, id } }); }
+  // A "keep both" dismissal - see js/app.js's dismissDuplicateGroup - upserted as its own row so it
+  // reaches every device for this account, not just the one it was made on. Deleted (not just left
+  // to expire) the moment the group it describes stops existing - see syncDeleteDismissedDuplicate
+  // and pruneDuplicateDismissalsForDeletedTx - so a stale dismissal can never wrongly suppress a
+  // future, genuinely different group that happens to reuse the same group_key shape.
+  function syncUpsertDismissedDuplicate(userId, groupKey){ return syncOrQueue({ kind:'upsert', table:'dismissed_duplicates', rows: [toDismissedDuplicateRow(userId, groupKey)] }); }
+  function syncDeleteDismissedDuplicate(userId, groupKey){ return syncOrQueue({ kind:'delete', table:'dismissed_duplicates', match:{ user_id:userId, group_key:groupKey } }); }
   async function syncBudgets(userId, budgetsObj){
     // Budgets have no local id/delete-tracking of their own (it's a plain
     // {category: limit} map) — reconcile against whatever's on the server
@@ -404,7 +482,7 @@
     return data || [];
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null, dismissedDuplicates:null, dismissedDuplicatesError:null };
     // Each table tagged with its own name so a thrown error can be traced back to which one
     // actually failed - Promise.all itself only ever surfaces the FIRST rejection it sees, with
     // no indication of which of the 4 concurrent requests that was.
@@ -420,6 +498,12 @@
     const accountsPromise = pullTable('accounts', userId)
       .then(rows => { result.accounts = rows.map(fromAccountRow); })
       .catch(e => { result.accountsError = { table:'accounts', code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine }; });
+    // Same isolation as accounts above, and for the same reason - dismissed_duplicates is newer
+    // still and may not exist in every Supabase project yet, so it must never be able to poison
+    // the four core tables' Promise.all below.
+    const dismissedDuplicatesPromise = pullTable('dismissed_duplicates', userId)
+      .then(rows => { result.dismissedDuplicates = rows.map(r=>r.group_key); })
+      .catch(e => { result.dismissedDuplicatesError = { table:'dismissed_duplicates', code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine }; });
     try{
       const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
         tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
@@ -453,6 +537,7 @@
       result.error = { table: e.__table || null, code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine };
     }
     await accountsPromise;
+    await dismissedDuplicatesPromise;
     return result;
   }
 
@@ -506,7 +591,7 @@
   // retry, leaving the caller wrongly believing the cloud copy is gone.
   async function deleteAllCloudDataForUser(userId){
     const results = {};
-    for(const table of ['transactions','debts','goals','budgets','accounts']){
+    for(const table of ['transactions','debts','goals','budgets','accounts','dismissed_duplicates']){
       try{
         await runOp({ kind:'delete', table, match:{ user_id:userId } });
         results[table] = true;
@@ -526,6 +611,7 @@
     syncUpsertDebts, syncUpsertReceivables, syncDeleteDebt,
     syncUpsertGoals, syncDeleteGoal,
     syncUpsertAccounts, syncDeleteAccount,
+    syncUpsertDismissedDuplicate, syncDeleteDismissedDuplicate,
     syncBudgets,
     pullCloudData,
     migrateLocalDataToCloudIfNeeded,
