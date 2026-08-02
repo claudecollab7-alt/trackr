@@ -359,15 +359,22 @@
   window.addEventListener('online', retryPendingWrites);
 
   /* ---------- Upsert / delete entry points, one per table ---------- */
+  // Every delete below is scoped by BOTH user_id and id, not id alone - RLS's own USING clause
+  // (auth.uid() = user_id) already makes a cross-account delete impossible today regardless of
+  // what the client sends, but this project has already hit one real server-side misconfiguration
+  // that silently widened what a policy actually allowed (the missing GRANT that caused the
+  // accounts collision investigated in an earlier round). Scoping explicitly client-side too means
+  // a delete can never reach past its own account's rows even if RLS itself were ever broken,
+  // instead of depending entirely on the server getting that one thing right.
   function syncUpsertTransactions(userId, rows){ return syncOrQueue({ kind:'upsert', table:'transactions', rows: rows.map(t=>toTransactionRow(t,userId)) }); }
-  function syncDeleteTransaction(id){ return syncOrQueue({ kind:'delete', table:'transactions', match:{ id } }); }
+  function syncDeleteTransaction(userId, id){ return syncOrQueue({ kind:'delete', table:'transactions', match:{ user_id:userId, id } }); }
   function syncUpsertDebts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'debts', rows: rows.map(d=>toDebtRow(d,userId,false)) }); }
   function syncUpsertReceivables(userId, rows){ return syncOrQueue({ kind:'upsert', table:'debts', rows: rows.map(d=>toDebtRow(d,userId,true)) }); }
-  function syncDeleteDebt(id){ return syncOrQueue({ kind:'delete', table:'debts', match:{ id } }); }
+  function syncDeleteDebt(userId, id){ return syncOrQueue({ kind:'delete', table:'debts', match:{ user_id:userId, id } }); }
   function syncUpsertGoals(userId, rows){ return syncOrQueue({ kind:'upsert', table:'goals', rows: rows.map(g=>toGoalRow(g,userId)) }); }
-  function syncDeleteGoal(id){ return syncOrQueue({ kind:'delete', table:'goals', match:{ id } }); }
+  function syncDeleteGoal(userId, id){ return syncOrQueue({ kind:'delete', table:'goals', match:{ user_id:userId, id } }); }
   function syncUpsertAccounts(userId, rows){ return syncOrQueue({ kind:'upsert', table:'accounts', rows: rows.map(a=>toAccountRow(a,userId)) }); }
-  function syncDeleteAccount(id){ return syncOrQueue({ kind:'delete', table:'accounts', match:{ id } }); }
+  function syncDeleteAccount(userId, id){ return syncOrQueue({ kind:'delete', table:'accounts', match:{ user_id:userId, id } }); }
   async function syncBudgets(userId, budgetsObj){
     // Budgets have no local id/delete-tracking of their own (it's a plain
     // {category: limit} map) — reconcile against whatever's on the server

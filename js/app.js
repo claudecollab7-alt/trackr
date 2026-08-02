@@ -69,6 +69,15 @@
   let categories = defaultCategories();
   let settings = { currency: '₹' };
   let budgets = {};
+  // Kept OUTSIDE settings deliberately, and OUTSIDE the permanently-rejected-records marker store
+  // (js/supabase.js) too - this is a real user decision ("I looked at this, it's not a duplicate"),
+  // not a sync-error marker, so it must survive exactly what markers must NOT: logout, app restart,
+  // re-login. Scoped per-account (keyed by user id, or '__local__' for a device never logged in) so
+  // a genuinely different person logging into this same device still starts with nothing dismissed -
+  // the same cross-account-leak concern that used to justify wiping this on logout, solved without
+  // having to actually wipe anything. Still device-local (not synced to Supabase) for now - see
+  // dismissDuplicateGroup's own comment for what syncing this would actually take.
+  let duplicateDismissals = {};
   let debts = [];
   let receivables = [];
   let recurring = [];
@@ -196,19 +205,24 @@
     try{ const rm = await window.storage.get('reminders'); reminders = rm ? JSON.parse(rm.value) : []; } catch(e){ reminders = []; }
     try{ const g = await window.storage.get('goals'); goals = g ? JSON.parse(g.value) : []; } catch(e){ goals = []; }
     try{ const a = await window.storage.get('accounts'); accounts = a ? JSON.parse(a.value) : defaultAccounts(); } catch(e){ accounts = defaultAccounts(); }
+    try{ const dd = await window.storage.get('duplicateDismissals'); duplicateDismissals = dd ? JSON.parse(dd.value) : {}; } catch(e){ duplicateDismissals = {}; }
+    if(!duplicateDismissals || typeof duplicateDismissals !== 'object' || Array.isArray(duplicateDismissals)) duplicateDismissals = {};
     // Defensive shape checks — guards against corrupted/legacy storage causing crashes downstream
     if(!Array.isArray(transactions)) transactions = [];
     if(!categories || !Array.isArray(categories.income) || !Array.isArray(categories.expense)) categories = defaultCategories();
     if(!settings || typeof settings !== 'object') settings = { currency:'₹' };
     if(!settings.currency) settings.currency = '₹';
     if(!settings.theme) settings.theme = 'light';
-    // Dismissal state for notification/Integrity-Check items the user has already reviewed -
-    // device-local, same as every other entry in settings (theme, hideBalances, etc.), not synced
-    // to the cloud. That's a deliberate call, not an oversight: these are purely "have I already
-    // looked at this on THIS device" markers, not financial data, so a second device seeing a
-    // dismissed alert again isn't data loss - unlike every other synced collection here.
+    // Dismissal state for notification items the user has already reviewed - device-local, same
+    // as every other entry in settings (theme, hideBalances, etc.), not synced to the cloud.
+    // That's a deliberate call, not an oversight: these are purely "have I already looked at this
+    // on THIS device" markers, not financial data, so a second device seeing a dismissed alert
+    // again isn't data loss - unlike every other synced collection here. Duplicate-group
+    // dismissals used to live here too, but that made them a "device preference" that logout wipes
+    // along with everything else - wrong for a deliberate "keep both, this is intentional" review
+    // decision, which needs to survive the SAME account's own logout/login. See
+    // duplicateDismissals' own declaration above for where that moved to instead.
     if(!settings.dismissedBudgetAlerts || typeof settings.dismissedBudgetAlerts !== 'object' || Array.isArray(settings.dismissedBudgetAlerts)) settings.dismissedBudgetAlerts = {};
-    if(!settings.dismissedDuplicateGroups || typeof settings.dismissedDuplicateGroups !== 'object' || Array.isArray(settings.dismissedDuplicateGroups)) settings.dismissedDuplicateGroups = {};
     if(!budgets || typeof budgets !== 'object' || Array.isArray(budgets)) budgets = {};
     if(!Array.isArray(debts)) debts = [];
     debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; });
@@ -365,12 +379,15 @@
       ['transactions', transactions], ['debts', debts], ['receivables', receivables],
       ['goals', goals], ['budgets', budgets]
     ]);
-    // Unlike theme/currency, these two settings fields reference the data just wiped above
-    // (category names, specific transaction ids) - carrying them over on logout would risk a
-    // different account's genuinely new alert staying wrongly suppressed by a previous account's
-    // dismissal of what was, coincidentally, the same category/id shape.
-    if(settings.dismissedBudgetAlerts || settings.dismissedDuplicateGroups){
-      settings.dismissedBudgetAlerts = {}; settings.dismissedDuplicateGroups = {};
+    // Unlike theme/currency, this settings field references the data just wiped above (category
+    // names) - carrying it over on logout would risk a different account's genuinely new alert
+    // staying wrongly suppressed by a previous account's dismissal of what was, coincidentally,
+    // the same category shape. duplicateDismissals is NOT cleared here on purpose - it's scoped
+    // per-account already (see its own declaration), so it doesn't have this problem, and clearing
+    // it here is exactly the bug this round fixed: a deliberate "keep both" review decision must
+    // survive this account's own logout/login, not reset every time.
+    if(settings.dismissedBudgetAlerts){
+      settings.dismissedBudgetAlerts = {};
       await saveSettings();
     }
   }
@@ -634,6 +651,21 @@
     const ampm = h>=12 ? 'PM' : 'AM';
     h = h%12; if(h===0) h=12;
     return `${h}:${String(m).padStart(2,'0')} ${ampm}`;
+  }
+  // The strongest single signal for telling an accidental double-submit apart from two real,
+  // separate events - a duplicate created 16 seconds apart is almost certainly a double-tap; one
+  // created 36 minutes apart is much more likely two genuine entries that happen to match. Always
+  // rounds to a single, coarsest-reasonable unit (never "1 minute 4 seconds") since the goal here
+  // is a fast read, not a precise duration.
+  function formatTimeGap(ms){
+    const sec = Math.max(0, Math.round(ms/1000));
+    if(sec < 60) return `${sec} second${sec===1?'':'s'}`;
+    const min = Math.round(sec/60);
+    if(min < 60) return `${min} minute${min===1?'':'s'}`;
+    const hr = Math.round(min/60);
+    if(hr < 24) return `${hr} hour${hr===1?'':'s'}`;
+    const day = Math.round(hr/24);
+    return `${day} day${day===1?'':'s'}`;
   }
   function openTransactionDetail(id){
     const t = transactions.find(x=>x.id===id); if(!t) return;
@@ -1110,11 +1142,37 @@
   }
 
   async function deleteTransaction(id){
-    if(!confirm('Delete this entry? This cannot be undone.')) return false;
+    const t = transactions.find(x=>x.id===id);
+    if(!t) return false;
+    // A transaction with a debtId is one half of a linked pair (see logDebtPayment) - the debt's
+    // own payments array carries a matching entry (by txId), which is what debtPaid/debtRemaining
+    // actually sum. Deleting the transaction without also removing that payment entry would leave
+    // the debt's balance permanently wrong - exactly the "logged payments don't match History"
+    // mismatch Integrity Check already checks for, just self-inflicted instead of caught later.
+    let linkedDebt = null, linkedIsReceivable = false;
+    if(t.debtId){
+      linkedDebt = debts.find(d=>d.id===t.debtId);
+      if(linkedDebt){ linkedIsReceivable = false; }
+      else { linkedDebt = receivables.find(d=>d.id===t.debtId); linkedIsReceivable = true; }
+    }
+    let msg = 'Delete this entry? This cannot be undone.';
+    if(linkedDebt){
+      const remainingBefore = debtRemaining(linkedDebt);
+      const paidWithoutThis = debtPaid(linkedDebt) - t.amount;
+      const remainingAfter = Math.max(0, linkedDebt.total - paidWithoutThis);
+      const noun = linkedIsReceivable ? 'what they still owe you' : 'what you still owe';
+      msg += `\n\nThis entry is linked to "${linkedDebt.name}" - deleting it will change ${noun} from ${fmt(remainingBefore)} to ${fmt(remainingAfter)}.`;
+    }
+    if(!confirm(msg)) return false;
     recentlyDeletedTxIds.add(id);
-    transactions = transactions.filter(t=>t.id!==id);
+    transactions = transactions.filter(x=>x.id!==id);
+    if(linkedDebt){
+      linkedDebt.payments = (linkedDebt.payments||[]).filter(p=>p.txId!==id);
+      await (linkedIsReceivable ? saveReceivables() : saveDebts());
+    }
     await saveTransactions();
-    if(currentUser) window.trackrSync.syncDeleteTransaction(id);
+    if(currentUser) window.trackrSync.syncDeleteTransaction(currentUser.id, id);
+    await pruneDuplicateDismissalsForDeletedTx(id);
     refreshAll();
     return true;
   }
@@ -1722,7 +1780,7 @@
     if(!confirm('Delete this savings goal? This only removes the goal tracker — it does not affect any of your transactions.')) return false;
     goals = goals.filter(g=>g.id!==id);
     await saveGoals();
-    if(currentUser) window.trackrSync.syncDeleteGoal(id);
+    if(currentUser) window.trackrSync.syncDeleteGoal(currentUser.id, id);
     refreshAll();
     return true;
   }
@@ -1961,7 +2019,7 @@
     transactions.forEach(t=>{ if(t.debtId===id){ t.debtId = null; orphanedTransactions = true; } });
     if(orphanedTransactions) await saveTransactions();
     await saveFn();
-    if(currentUser) window.trackrSync.syncDeleteDebt(id);
+    if(currentUser) window.trackrSync.syncDeleteDebt(currentUser.id, id);
     refreshAll();
     return true;
   }
@@ -2400,8 +2458,11 @@
         // A backup taken before this feature existed won't have these fields at all, and even one
         // that does references transaction ids/categories from the OLD data just replaced above -
         // dismissal state describing data that no longer exists (or, worse, the same id
-        // coincidentally reused by something new) shouldn't carry over either way.
-        settings.dismissedBudgetAlerts = {}; settings.dismissedDuplicateGroups = {};
+        // coincidentally reused by something new) shouldn't carry over either way. Only this
+        // account's own scope is reset - a different account that previously logged into this
+        // device isn't touched by a restore that only ever replaces the CURRENT account's data.
+        settings.dismissedBudgetAlerts = {};
+        delete duplicateDismissals[duplicateDismissalScopeKey()];
         // Written directly, NOT via saveTransactions/saveDebts/saveReceivables - those merge
         // against whatever's still on local disk (deliberate for ordinary edits), which is
         // exactly what silently kept this device's prior entries alongside the restored ones
@@ -2410,7 +2471,8 @@
         await persistLocalKeys([
           ['transactions', transactions], ['debts', debts], ['receivables', receivables],
           ['goals', goals], ['budgets', budgets], ['categories', categories], ['settings', settings],
-          ['recurring', recurring], ['reminders', reminders], ['accounts', accounts]
+          ['recurring', recurring], ['reminders', reminders], ['accounts', accounts],
+          ['duplicateDismissals', duplicateDismissals]
         ]);
         if(currentUser){
           // Debts/receivables must be AWAITED before transactions sync - a transaction's debt_id
@@ -2862,7 +2924,7 @@
     if(!confirm(`Remove "${acc.name}"? Past entries already tagged to it will keep showing "${acc.name}", but it won't be selectable for new entries.`)) return;
     accounts = accounts.filter(a=>a.id!==id);
     await saveAccounts();
-    if(currentUser) window.trackrSync.syncDeleteAccount(id);
+    if(currentUser) window.trackrSync.syncDeleteAccount(currentUser.id, id);
     populateEntryAccountSelect();
     refreshAll();
   }
@@ -3956,26 +4018,21 @@
     })();
     try{ await retryPermanentlyRejectedInFlight; } finally { retryPermanentlyRejectedInFlight = null; }
   }
+  // Local-only, deliberately - reverted from a previous round's attempt to also issue a remote
+  // delete here. That change assumed a record only ever reaches this list for one of two
+  // reasons - it genuinely belongs to a different account (remote delete harmlessly no-ops
+  // against RLS) or it's a stale false-positive (remote delete then destroys a healthy record).
+  // Proven wrong in production: four wallets were flagged as unsyncable while healthy and
+  // correctly owned the entire time, and the v35 retry fix silently cleared all four on its own -
+  // meaning the remote delete's only real-world effect was ever the second, harmful case. This
+  // button removes the record from THIS DEVICE ONLY; the cloud copy (if the record is in fact
+  // fine) is untouched.
   async function removeUnsyncableRecord(table, listName, id){
     const cfg = REJECTABLE_TABLES[table]; if(!cfg) return;
     if(cfg.markDeleted) cfg.markDeleted(id, listName);
     const [, list] = cfg.lists().find(([name])=>name===listName) || [];
     if(list){ const idx = list.findIndex(r=>r.id===id); if(idx>-1) list.splice(idx,1); }
     await cfg.save();
-    // Explicitly deletes the row server-side too, matching every other delete path in this app
-    // (deleteTransaction/deleteDebt/deleteGoal/deleteAccount all call the matching syncDelete*
-    // immediately after removing locally) - cfg.save() above only re-upserts whatever's LEFT in
-    // the array, it was never itself a delete of this specific row. Without this, a record removed
-    // here because it genuinely belongs to a different account harmlessly no-ops against RLS (this
-    // session was never going to be allowed to delete a row it doesn't own anyway), but a record
-    // removed because a user mistakenly assumed a stale marker was still valid would otherwise sit
-    // there forever as invisible, un-deletable orphan data instead of actually being gone.
-    if(currentUser){
-      if(table==='transactions') window.trackrSync.syncDeleteTransaction(id);
-      else if(table==='debts') window.trackrSync.syncDeleteDebt(id);
-      else if(table==='goals') window.trackrSync.syncDeleteGoal(id);
-      else if(table==='accounts') window.trackrSync.syncDeleteAccount(id);
-    }
     if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord(table, id);
   }
   async function runIntegrityCheck(){
@@ -3994,7 +4051,7 @@
     // underlying duplicate data is no longer the same thing that was reviewed and dismissed.
     const dupGroups = Object.values(seen).filter(g=> g.length > 1)
       .map(g=> ({ transactions: g, key: 'dup:' + g.map(t=>t.id).sort().join(',') }))
-      .filter(g=> !settings.dismissedDuplicateGroups || !settings.dismissedDuplicateGroups[g.key]);
+      .filter(g=> !isDuplicateGroupDismissed(g.key));
 
     const debtMismatches = [];
     debts.forEach(d=>{
@@ -4046,20 +4103,53 @@
           byTable[table].forEach(u=>{
             html += `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line);">
               <span style="font-size:13px;">${escapeHtml(REJECTABLE_TABLES[table].label(u.record))} <span class="period-hint">(${u.listName} — ${escapeHtml(reasonFor(u))})</span></span>
-              <button type="button" class="btn-pill btn-outline unsyncable-remove-btn" data-table="${table}" data-list="${u.listName}" data-id="${u.id}" style="padding:4px 10px; font-size:12px;">Remove</button>
+              <button type="button" class="btn-pill btn-outline unsyncable-remove-btn" data-table="${table}" data-list="${u.listName}" data-id="${u.id}" style="padding:4px 10px; font-size:12px;">Remove from this device</button>
             </div>`;
           });
         });
         html += `</div>`;
       }
       if(dupGroups.length>0){
-        html += `<div class="card-label" style="margin-bottom:8px;">POSSIBLE DUPLICATE ENTRIES (${dupGroups.length})</div>`;
-        dupGroups.forEach(({transactions: group, key})=>{
-          html += `<div class="card integrity-dup-card" style="background:var(--bg); border-left:3px solid var(--debit);">
+        // Repeated identical entries are frequently legitimate for a finance app (two identical
+        // fares in a day, a bill split into equal instalments) - framing every repeat as a
+        // "possible duplicate" problem with only a dismiss action offered no way to act on one
+        // that genuinely IS an accidental double-submit. This section is a neutral review now,
+        // with a real decision either way.
+        html += `<div class="card-label" style="margin-bottom:8px;">REPEATED ENTRIES — CHECK THESE ARE INTENTIONAL (${dupGroups.length})</div>`;
+        dupGroups.forEach((groupObj, groupIdx)=>{
+          const group = groupObj.transactions, key = groupObj.key;
+          // The created-at gap is the single strongest signal for telling an accidental
+          // double-submit (created seconds apart) from two real, separate events (created
+          // minutes or hours apart) - it already exists on every row and was never shown before.
+          const sortedByCreated = [...group].sort((a,b)=> new Date(a.createdAt||0) - new Date(b.createdAt||0));
+          const oldest = sortedByCreated[0], newest = sortedByCreated[sortedByCreated.length-1];
+          const gapMs = new Date(newest.createdAt||0) - new Date(oldest.createdAt||0);
+          const gapText = group.length===2
+            ? `created ${formatTimeGap(gapMs)} apart`
+            : `created within ${formatTimeGap(gapMs)} of each other`;
+          // Defaults to the most recently created copy for deletion - a double-tap or accidental
+          // resubmit is the one that landed SECOND, so it's the likelier accident. The user can
+          // still pick a different one via the radios below.
+          const defaultPickId = newest.id;
+          html += `<div class="card integrity-dup-card" style="background:var(--bg); border-left:3px solid var(--debit); overflow-x:hidden;">
             <div class="integrity-dup-title">${escapeHtml(group[0].category)} · ${fmt(group[0].amount)} · ${formatHuman(group[0].date)}</div>
-            <div class="integrity-dup-sub period-hint">${escapeHtml(group[0].note||'(no note)')} — appears ${group.length} times, all identical</div>
-            <div class="integrity-dup-actions">
-              <button type="button" class="btn-pill btn-outline dup-dismiss-btn" data-key="${escapeHtml(key)}">Not a duplicate — stop flagging this</button>
+            <div class="integrity-dup-sub period-hint">${group.length} copies · ${gapText}</div>
+            <div class="integrity-dup-copies" style="margin:10px 0;">
+              ${sortedByCreated.map(t=>{
+                const timeStr = t.createdAt ? formatTime12h(t.createdAt) : null;
+                const createdLabel = timeStr ? `${formatHuman(t.date)}, ${timeStr}` : formatHuman(t.date);
+                return `<label class="integrity-dup-copy-row" style="display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-top:1px solid var(--line); cursor:pointer;">
+                  <input type="radio" name="dup-pick-${groupIdx}" class="dup-pick-radio" value="${t.id}" ${t.id===defaultPickId?'checked':''} style="margin-top:3px; flex-shrink:0;">
+                  <span style="flex:1; min-width:0;">
+                    <span style="display:block; font-size:13px; font-weight:600;">${escapeHtml(t.category)} · ${fmt(t.amount)} · ${formatHuman(t.date)}</span>
+                    <span class="period-hint" style="display:block;">${escapeHtml(getTxAccount(t))} · ${escapeHtml(t.note||'(no note)')} · created ${createdLabel}</span>
+                  </span>
+                </label>`;
+              }).join('')}
+            </div>
+            <div class="integrity-dup-actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="btn-pill btn-outline dup-keep-btn" data-key="${escapeHtml(key)}">Keep both — this is intentional</button>
+              <button type="button" class="btn-pill btn-black dup-delete-btn">Delete selected copy</button>
             </div>
           </div>`;
         });
@@ -4079,23 +4169,74 @@
     results.querySelectorAll('.unsyncable-remove-btn').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const table = btn.dataset.table, listName = btn.dataset.list, id = btn.dataset.id;
-        if(!confirm(`Remove this record from this device? It has never been backed up to your account and can't be — this permanently deletes it, with no way to undo.`)) return;
+        if(!confirm(`Remove this record from this device only? Your account's cloud copy, if one exists, is not touched — this only affects local data on this device, with no way to undo.`)) return;
         btn.disabled = true;
         await removeUnsyncableRecord(table, listName, id);
         refreshAll();
         runIntegrityCheck();
       });
     });
-    results.querySelectorAll('.dup-dismiss-btn').forEach(btn=>{
+    results.querySelectorAll('.dup-keep-btn').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         await dismissDuplicateGroup(btn.dataset.key);
         runIntegrityCheck();
       });
     });
+    results.querySelectorAll('.dup-delete-btn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        // Only one copy is ever deleted per click, whichever radio is currently selected in THIS
+        // card - never a bulk "reduce to one". A group of 3+ is handled by deleting one at a time
+        // and letting the group get re-evaluated fresh (via runIntegrityCheck() below) after each
+        // deletion, exactly like any other transaction count change would.
+        const card = btn.closest('.integrity-dup-card');
+        const picked = card.querySelector('.dup-pick-radio:checked');
+        if(!picked) return;
+        // deleteTransaction already owns the confirm dialog, the linked-debt balance warning, the
+        // debt.payments cleanup, the Supabase delete, and pruning any now-dead dismissal entry -
+        // reusing it here instead of a separate deletion path means a duplicate copy gets exactly
+        // the same safety net as deleting it from History would.
+        const deleted = await deleteTransaction(picked.value);
+        if(deleted) runIntegrityCheck();
+      });
+    });
+  }
+  function duplicateDismissalScopeKey(){ return currentUser ? currentUser.id : '__local__'; }
+  async function saveDuplicateDismissals(){
+    try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
+  }
+  // Device-local only for now, same as dismissedBudgetAlerts - a second device (or this same
+  // device after Reset Everything) sees the group flagged again rather than silently missing a
+  // review someone did elsewhere. Syncing this for real would need either a dedicated
+  // dismissed_duplicates table (id, user_id, group_key, created_at) keyed by the same sorted-
+  // transaction-id signature already used locally, or a column directly on transactions (messier -
+  // a dismissal describes a PAIR/GROUP of rows, not one row, so it'd have to be duplicated onto
+  // every member or live on an arbitrarily-chosen "primary" one). Either needs a real schema
+  // migration and RLS policy, the same kind of manual, reviewed-before-shipping step the accounts
+  // composite-key migration was. Not built this round - this is the estimate, not the change.
+  function isDuplicateGroupDismissed(key){
+    const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
+    return !!(bucket && bucket[key]);
   }
   async function dismissDuplicateGroup(key){
-    settings.dismissedDuplicateGroups[key] = true;
-    await saveSettings();
+    const scope = duplicateDismissalScopeKey();
+    if(!duplicateDismissals[scope]) duplicateDismissals[scope] = {};
+    duplicateDismissals[scope][key] = true;
+    await saveDuplicateDismissals();
+  }
+  // A dismissal keyed by an exact set of transaction ids can never match again once any one of
+  // those ids stops existing (see the dupGroups key comment) - it's already permanently inert,
+  // never capable of wrongly suppressing a future, genuinely different group. This just clears the
+  // dead entry out of storage instead of leaving it there forever, so the mechanism doesn't
+  // accumulate orphans the way the sync-rejection markers used to get stuck.
+  async function pruneDuplicateDismissalsForDeletedTx(id){
+    const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
+    if(!bucket) return;
+    let changed = false;
+    Object.keys(bucket).forEach(key=>{
+      const ids = key.slice(4).split(',');
+      if(ids.includes(id)){ delete bucket[key]; changed = true; }
+    });
+    if(changed) await saveDuplicateDismissals();
   }
 
   function bindCrossTabSync(){
@@ -4533,8 +4674,14 @@
       // local state, which would delete every cloud budget category the instant local budgets
       // becomes {} regardless of whether cloud deletion was actually opted into just above.
       await hardClearAllLocalDataNoSync();
-      settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{}, dismissedDuplicateGroups:{} };
+      settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
       try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
+      // Reset Everything is a full wipe of this account's data on this device, unlike an ordinary
+      // logout - duplicateDismissals stays intentionally untouched by logout (see its own
+      // declaration), but this deliberately-more-aggressive action clears this account's own
+      // dismissal scope too, same as everything else here.
+      delete duplicateDismissals[duplicateDismissalScopeKey()];
+      try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
       if(alsoDeleteCloud && currentUser){
         // Drop any older queued write for these tables first - a stale queued upsert flushing
         // (e.g. via the 'online' listener) after the delete below runs could otherwise
