@@ -79,8 +79,12 @@
   .integrity-dup-card + .integrity-dup-card{ margin-top:12px; }
   .integrity-dup-title{ font-weight:700; font-size:14.5px; margin-bottom:6px; }
   .integrity-dup-sub{ line-height:1.5; }
+  /* Two real actions now (Keep both / Delete selected copy) instead of the one dismiss-only
+     button this used to lay out full-width - each gets equal width side by side on a normal
+     screen, wrapping to stack full-width on anything too narrow to fit both comfortably. */
   .integrity-dup-actions{ margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
-  .integrity-dup-actions .dup-dismiss-btn{ width:100%; justify-content:center; }
+  .integrity-dup-actions .dup-keep-btn, .integrity-dup-actions .dup-delete-btn{ flex:1 1 160px; justify-content:center; }
+  .integrity-dup-copy-row:first-child{ border-top:none; padding-top:0; }
 
   .btn-pill{ display:inline-flex; align-items:center; gap:7px; padding:11px 18px; border-radius:999px; font-weight:600; font-size:13.5px; border:none; transition:transform .12s, box-shadow .12s, filter .12s; box-shadow:var(--shadow-sm); }
   .btn-pill:hover{ transform:translateY(-1px); filter:brightness(1.04); }
