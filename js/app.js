@@ -78,6 +78,24 @@
   // having to actually wipe anything. Still device-local (not synced to Supabase) for now - see
   // dismissDuplicateGroup's own comment for what syncing this would actually take.
   let duplicateDismissals = {};
+  // Per-account, exactly like duplicateDismissals above - keyed by user id so a genuinely
+  // different person logging into this same device still gets their own first-contact
+  // reconciliation (see reconcileAccountsOnFirstContact), without the SAME account re-triggering
+  // it on every ordinary logout/login. This used to be a single flag reset to 'false' on every
+  // logout specifically so a second user got their own pass (see PR #39's own reasoning) - but
+  // that reset also re-ran the name-based merge for the SAME returning user, against local wallets
+  // that hardClearAllLocalDataNoSync had just reseeded back to defaultAccounts() - producing an id
+  // collision every single time (this is the actual, confirmed cause of the wallet re-seed
+  // duplicate-id bug). Scoping by user id gets the original intent right without that side effect:
+  // this is never reset on logout at all now, it just naturally starts unset for any user id that
+  // has never reconciled on this device before.
+  let accountsReconciledOnce = {};
+  // Set by dedupeAccountsById() (called from loadData(), before a user is ever attached) when it
+  // finds and repairs an existing id collision in local storage - consumed once by
+  // startAppForUserImpl right after attachUserAndSync, to push the corrected accounts (and any
+  // transactions renamed along with them) up to Supabase and drop any stale queued accounts op
+  // that might still be carrying the pre-repair, duplicate-id snapshot.
+  let accountsRepairedThisLoad = false;
   let debts = [];
   let receivables = [];
   let recurring = [];
@@ -133,6 +151,46 @@
       { id:'acc_bank', name:'Bank' },
       { id:'acc_card', name:'Card' }
     ];
+  }
+  // A collision can only ever happen between a genuine record and a re-seeded DEFAULT (see
+  // reconcileAccountsOnFirstContact and accountsReconciledOnce's own comments for how) -
+  // defaultAccounts()'s own hardcoded name for that id is therefore the one signal that reliably
+  // tells the two apart: whichever of the pair does NOT match the literal default name is the one
+  // the user actually customized (renamed, or genuinely created), so it wins. Falls back to the
+  // later array entry if neither/both match the default (shouldn't happen in practice).
+  function pickAccountDedupeWinner(candidates){
+    const defaults = defaultAccounts();
+    const nonDefault = candidates.filter(a=>{
+      const def = defaults.find(d=>d.id===a.id);
+      return !def || def.name.trim().toLowerCase() !== (a.name||'').trim().toLowerCase();
+    });
+    if(nonDefault.length===1) return nonDefault[0];
+    return candidates[candidates.length-1];
+  }
+  // Repairs a local `accounts` array that ended up with more than one record sharing the same id.
+  // Runs unconditionally on every launch (called from loadData(), before anything else reads
+  // `accounts`) - deliberately not gated on being logged in or on a successful cloud pull, since
+  // the corruption lives entirely in local storage and must self-heal regardless of network state.
+  // Since transactions reference a wallet by NAME, not id (see handleRenameAccount), reassigns any
+  // transaction pointing at a losing record's name over to the winner's name first, exactly like a
+  // rename - so a merge here can never orphan a transaction the way a naive "just delete one" would.
+  function dedupeAccountsById(){
+    const byId = new Map();
+    accounts.forEach(a=>{ if(!byId.has(a.id)) byId.set(a.id, []); byId.get(a.id).push(a); });
+    const dupIds = [...byId.keys()].filter(id=> byId.get(id).length>1);
+    if(!dupIds.length) return false;
+    const winners = new Map();
+    dupIds.forEach(id=>{
+      const group = byId.get(id);
+      const winner = pickAccountDedupeWinner(group);
+      winners.set(id, winner);
+      group.forEach(loser=>{
+        if(loser===winner) return;
+        transactions.forEach(t=>{ if(t.account===loser.name) t.account = winner.name; });
+      });
+    });
+    accounts = accounts.filter(a=> !winners.has(a.id) || a===winners.get(a.id));
+    return true;
   }
   function categoryColor(name){
     const palette = document.body.getAttribute('data-theme')==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
@@ -207,6 +265,14 @@
     try{ const a = await window.storage.get('accounts'); accounts = a ? JSON.parse(a.value) : defaultAccounts(); } catch(e){ accounts = defaultAccounts(); }
     try{ const dd = await window.storage.get('duplicateDismissals'); duplicateDismissals = dd ? JSON.parse(dd.value) : {}; } catch(e){ duplicateDismissals = {}; }
     if(!duplicateDismissals || typeof duplicateDismissals !== 'object' || Array.isArray(duplicateDismissals)) duplicateDismissals = {};
+    try{ const aro = await window.storage.get('accountsReconciledOnce'); accountsReconciledOnce = aro ? JSON.parse(aro.value) : {}; } catch(e){ accountsReconciledOnce = {}; }
+    // Older installs stored this as the bare string 'true'/'false' (a single flag reset on every
+    // logout - see accountsReconciledOnce's own declaration for why that was the bug). JSON.parse
+    // of that legacy value yields a boolean, not an object, so the shape guard below resets it to
+    // {} and every already-migrated account transparently re-runs reconcileAccountsOnFirstContact
+    // exactly once more - now safe by construction (see that function's id-first rewrite), so this
+    // one-time extra pass is a harmless, self-correcting side effect of the upgrade, not a bug.
+    if(!accountsReconciledOnce || typeof accountsReconciledOnce !== 'object' || Array.isArray(accountsReconciledOnce)) accountsReconciledOnce = {};
     // Defensive shape checks — guards against corrupted/legacy storage causing crashes downstream
     if(!Array.isArray(transactions)) transactions = [];
     if(!categories || !Array.isArray(categories.income) || !Array.isArray(categories.expense)) categories = defaultCategories();
@@ -233,6 +299,24 @@
     if(!Array.isArray(goals)) goals = [];
     goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; });
     if(!Array.isArray(accounts) || accounts.length===0) accounts = defaultAccounts();
+    // Auto-repair for a device already stuck with a duplicate-id accounts array (see
+    // dedupeAccountsById's own comment) - runs on every launch, before anything else reads
+    // `accounts`, regardless of login state. currentUser doesn't exist yet at this point in the
+    // app's startup sequence (loadData() always runs before attachUserAndSync sets it), so the
+    // actual re-sync to Supabase happens later, once startAppForUserImpl has a user attached -
+    // this only fixes local storage and flags that a re-sync is owed.
+    accountsRepairedThisLoad = dedupeAccountsById();
+    if(accountsRepairedThisLoad){
+      try{ await window.storage.set('accounts', JSON.stringify(accounts)); }catch(e){}
+      try{ await window.storage.set('transactions', JSON.stringify(transactions)); }catch(e){}
+      // A previously-queued accounts upsert may still be carrying the stale, duplicate-id
+      // snapshot from the moment this corruption first happened (queued before this repair ever
+      // ran) - same reasoning as the legacy-id-remap migration just below: left in place, it would
+      // keep resending the bad rows and getting rejected on every retry, blocking every other
+      // queued account write behind it forever. The corrected state gets pushed fresh once a user
+      // is attached (see startAppForUserImpl), so dropping the stale op here can't lose anything.
+      if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(['accounts']);
+    }
     // Migration: 'EMI / Loan' is no longer a default manual-entry category — it's auto-added only
     // when a real debt payment is logged. Strip it from installs that still have the old default
     // saved, but only if it was never actually used (so real history is never touched).
@@ -2928,7 +3012,7 @@
     populateEntryAccountSelect();
     refreshAll();
   }
-  // One-time-per-device reconciliation for the accounts table specifically. It's newer than the
+  // One-time-per-account reconciliation for the accounts table specifically. It's newer than the
   // app's other synced tables, so any device that logged in before it existed (i.e. every
   // existing user, on the first login after the table is created) has local wallets that were
   // never pushed up - a plain "cloud replaces local" pull (the correct, normal behavior for every
@@ -2936,19 +3020,34 @@
   // still empty, or one another device already populated with ITS OWN divergent local wallets.
   // Confirmed by test: two devices with different local wallets, both doing their first-ever
   // pull against the same freshly-created table, would otherwise have whichever one syncs SECOND
-  // silently overwrite/lose whatever's unique to it. Merging by name (case-insensitive, matching
-  // handleAddAccount's own dedup rule) here - exactly once, ever, per device - means both
-  // devices' wallets survive regardless of sync order; every pull after this one uses the normal
-  // authoritative replace, so a real delete on one device still correctly removes it everywhere.
+  // silently overwrite/lose whatever's unique to it.
+  //
+  // Matches by ID FIRST, falling back to name only for a local record with no id match at all.
+  // This used to match by name only - and that let a locally re-seeded default wallet (id
+  // acc_cash, name "Cash", from hardClearAllLocalDataNoSync's unconditional
+  // accounts=defaultAccounts() on every logout) survive alongside a cloud row that shares that
+  // SAME id but was renamed ("Cash in hand"): the two don't name-match, so the old code kept both,
+  // producing two local records sharing one id - which Postgres then refuses to upsert together
+  // (21000, "ON CONFLICT DO UPDATE command cannot affect row a second time"), and which is exactly
+  // the reported wallet re-seed duplicate bug. An id match now always lets the cloud's row win
+  // outright (the local one is dropped, never merged in under it) - an id collision can no longer
+  // produce two local records. Name-only matching (no id match) still applies for two genuinely
+  // different devices that each created a same-named wallet before ever syncing - the cloud's id
+  // wins there too, same as before.
   async function reconcileAccountsOnFirstContact(userId, cloudAccounts){
-    const byNameLower = new Map();
-    cloudAccounts.forEach(a=> byNameLower.set(a.name.trim().toLowerCase(), a));
-    accounts.forEach(a=>{ const key = a.name.trim().toLowerCase(); if(!byNameLower.has(key)) byNameLower.set(key, a); });
-    const merged = Array.from(byNameLower.values());
+    const cloudById = new Map(cloudAccounts.map(a=>[a.id, a]));
+    const cloudNameLower = new Set(cloudAccounts.map(a=> a.name.trim().toLowerCase()));
+    const merged = [...cloudAccounts];
+    accounts.forEach(a=>{
+      if(cloudById.has(a.id)) return; // Same id already represented in the cloud - it wins.
+      if(cloudNameLower.has(a.name.trim().toLowerCase())) return; // Same wallet, different id - cloud wins.
+      merged.push(a); // Genuinely new to the cloud (no id or name match) - a real, distinct local wallet.
+    });
     accounts = merged.length ? merged : defaultAccounts();
     try{ await window.storage.set('accounts', JSON.stringify(accounts)); }catch(e){ console.error(e); }
     window.trackrSync.syncUpsertAccounts(userId, accounts);
-    try{ await window.storage.set('accountsReconciledOnce', 'true'); }catch(e){}
+    accountsReconciledOnce[userId] = true;
+    try{ await window.storage.set('accountsReconciledOnce', JSON.stringify(accountsReconciledOnce)); }catch(e){}
   }
 
   function renderMoreSubState(name){
@@ -3592,7 +3691,10 @@
     // local copy of it.
     await hardClearAllLocalDataNoSync();
     try{ await window.storage.set('migrated_to_cloud', 'false'); }catch(e){}
-    try{ await window.storage.set('accountsReconciledOnce', 'false'); }catch(e){}
+    // accountsReconciledOnce is deliberately NOT reset here any more - see its own declaration for
+    // why resetting it on every logout was the actual cause of the wallet re-seed duplicate-id
+    // bug. It's scoped per-account already, so a genuinely different user logging in on this same
+    // device still gets their own first-contact reconciliation without needing anything wiped.
     try{ await window.storage.set('skippedLogin', 'false'); }catch(e){}
     // signOut() firing a SIGNED_OUT event is what actually triggers the reload that uncovers the
     // screen (see the auth listener in init()) - if that never arrives (e.g. no network right at
@@ -3951,15 +4053,20 @@
     goals: { lists: ()=>[['goals',goals]], save: ()=>saveGoals(), label: g=> `${g.name} (goal)` },
     accounts: { lists: ()=>[['accounts',accounts]], save: ()=>saveAccounts(), label: a=> `${a.name} (wallet)` }
   };
-  // Cross-references the ids Supabase has permanently refused (an RLS violation - the row
+  // Cross-references the ids Supabase has permanently refused - an RLS violation (the row
   // belongs to a different account, most likely surviving a cross-account Restore Backup from
-  // before ids were regenerated on restore - OR a permissions/policy misconfiguration, which is
-  // an entirely different, operator-fixable thing that happens to raise the same Postgres error
-  // code; see reasonFor() in runIntegrityCheck for how those two are actually told apart) against
-  // what's still actually sitting in local storage right now, so a record already cleared some
-  // other way doesn't show up as a stale false positive here. Always retries each marked id
-  // first (see retryPermanentlyRejectedOnce) - a marker is never trusted as still-accurate on its
-  // own, since the server-side cause it recorded may since have been fixed.
+  // before ids were regenerated on restore), a permissions/policy misconfiguration (an entirely
+  // different, operator-fixable thing that happens to raise the same 42501 code as the above -
+  // see reasonFor() in runIntegrityCheck for how those two are told apart), a foreign-key
+  // violation, a cardinality violation from a duplicate id (21000 - see dedupeAccountsById and
+  // reconcileAccountsOnFirstContact for why that could happen at all), or any other error Postgrest
+  // actually returned a response for (see runOp's PERMANENT_FAILURE_CODES comment in
+  // js/supabase.js for why every one of those, not just the two originally-named codes, ends up
+  // recorded here instead of silently retried forever) - against what's still actually sitting in
+  // local storage right now, so a record already cleared some other way doesn't show up as a
+  // stale false positive here. Always retries each marked id first (see
+  // retryPermanentlyRejectedOnce) - a marker is never trusted as still-accurate on its own, since
+  // the server-side cause it recorded may since have been fixed.
   async function findUnsyncableRecords(){
     if(currentUser) await retryPermanentlyRejectedOnce();
     const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
@@ -4204,15 +4311,12 @@
   async function saveDuplicateDismissals(){
     try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
   }
-  // Device-local only for now, same as dismissedBudgetAlerts - a second device (or this same
-  // device after Reset Everything) sees the group flagged again rather than silently missing a
-  // review someone did elsewhere. Syncing this for real would need either a dedicated
-  // dismissed_duplicates table (id, user_id, group_key, created_at) keyed by the same sorted-
-  // transaction-id signature already used locally, or a column directly on transactions (messier -
-  // a dismissal describes a PAIR/GROUP of rows, not one row, so it'd have to be duplicated onto
-  // every member or live on an arbitrarily-chosen "primary" one). Either needs a real schema
-  // migration and RLS policy, the same kind of manual, reviewed-before-shipping step the accounts
-  // composite-key migration was. Not built this round - this is the estimate, not the change.
+  // Synced via the dismissed_duplicates table (see the SQL migration in this round's PR
+  // description) - a dismissal made on one device now reaches every device for the same account
+  // (see attachUserAndSync's dismissedDuplicates merge), and still survives this account's own
+  // logout/login (duplicateDismissals is kept outside settings for exactly that reason - see its
+  // own declaration). A genuinely different user logging into this same device still starts with
+  // nothing dismissed, since this is scoped by user id, same as accountsReconciledOnce.
   function isDuplicateGroupDismissed(key){
     const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
     return !!(bucket && bucket[key]);
@@ -4222,21 +4326,27 @@
     if(!duplicateDismissals[scope]) duplicateDismissals[scope] = {};
     duplicateDismissals[scope][key] = true;
     await saveDuplicateDismissals();
+    if(currentUser) window.trackrSync.syncUpsertDismissedDuplicate(currentUser.id, key);
   }
   // A dismissal keyed by an exact set of transaction ids can never match again once any one of
   // those ids stops existing (see the dupGroups key comment) - it's already permanently inert,
   // never capable of wrongly suppressing a future, genuinely different group. This just clears the
   // dead entry out of storage instead of leaving it there forever, so the mechanism doesn't
-  // accumulate orphans the way the sync-rejection markers used to get stuck.
+  // accumulate orphans the way the sync-rejection markers used to get stuck. Also deletes the
+  // cloud-side row for the exact same reason - left behind, it would just get pulled back down by
+  // a different device (or this one, on its next login) and merged right back into
+  // duplicateDismissals, undoing the local prune the moment a sync happened to run.
   async function pruneDuplicateDismissalsForDeletedTx(id){
     const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
     if(!bucket) return;
     let changed = false;
+    const deadKeys = [];
     Object.keys(bucket).forEach(key=>{
       const ids = key.slice(4).split(',');
-      if(ids.includes(id)){ delete bucket[key]; changed = true; }
+      if(ids.includes(id)){ delete bucket[key]; changed = true; deadKeys.push(key); }
     });
     if(changed) await saveDuplicateDismissals();
+    if(currentUser) deadKeys.forEach(key=> window.trackrSync.syncDeleteDismissedDuplicate(currentUser.id, key));
   }
 
   function bindCrossTabSync(){
@@ -4788,9 +4898,7 @@
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
       if(cloud.accounts!==null){
-        let accountsReconciledOnce = false;
-        try{ const flag = await window.storage.get('accountsReconciledOnce'); accountsReconciledOnce = !!(flag && flag.value==='true'); }catch(e){}
-        if(!accountsReconciledOnce){
+        if(!accountsReconciledOnce[currentUser.id]){
           // See reconcileAccountsOnFirstContact's own comment - this device may have local
           // wallets that were never pushed up, and another device may have already populated the
           // cloud with ITS OWN divergent set. Persists and pushes internally, so it's
@@ -4812,6 +4920,27 @@
         // toast below, which is reserved for a genuine failure of the four tables that already
         // work today. Local accounts stay exactly as they are.
         diagLogPage('page:accounts-pull-failed', cloud.accountsError);
+      }
+      if(cloud.dismissedDuplicates!==null){
+        // A pure UNION with whatever's already local, never an authoritative replace like the
+        // other tables above - a dismissal is additive-only by nature (made via "Keep both",
+        // cleared via pruneDuplicateDismissalsForDeletedTx, which already deletes the cloud row
+        // too), so there's no "this device's copy is stale, discard it" case to protect against
+        // here the way there is for transactions/debts/goals/budgets/accounts. Adding cloud-only
+        // keys in means a dismissal made on a different device now applies here too; keeping any
+        // local-only key (e.g. made moments ago, still offline, not yet pushed) means it isn't
+        // lost just because this pull happened to land first.
+        const scope = duplicateDismissalScopeKey();
+        if(!duplicateDismissals[scope]) duplicateDismissals[scope] = {};
+        let dismissalsChanged = false;
+        cloud.dismissedDuplicates.forEach(key=>{
+          if(!duplicateDismissals[scope][key]){ duplicateDismissals[scope][key] = true; dismissalsChanged = true; }
+        });
+        if(dismissalsChanged) toPersist.push(['duplicateDismissals', duplicateDismissals]);
+      } else if(cloud.dismissedDuplicatesError){
+        // Same reasoning as cloud.accountsError above - a new, optional table that may not exist
+        // in every Supabase project yet; local dismissals stay exactly as they are.
+        diagLogPage('page:dismissed-duplicates-pull-failed', cloud.dismissedDuplicatesError);
       }
       await persistLocalKeys(toPersist);
       window.trackrSync.retryPendingWrites();
@@ -4921,6 +5050,16 @@
     // actually covering the screen throughout, so this move doesn't change anything for that path.)
     try{ await loadData(); }catch(e){ console.error(e); }
     await attachUserAndSync(user, false);
+    // dedupeAccountsById() (inside loadData(), before currentUser existed) may have already
+    // repaired a local id collision - push the corrected accounts/transactions up now that a user
+    // is actually attached. Harmless even if attachUserAndSync's own cloud-pull branch already
+    // replaced `accounts` wholesale with the (already-correct) cloud copy in the meantime - this
+    // is then just an idempotent re-upsert of the same rows.
+    if(accountsRepairedThisLoad && currentUser){
+      await saveAccounts();
+      await saveTransactions();
+      accountsRepairedThisLoad = false;
+    }
     injectIcons();
     applyTheme(settings.theme || 'light');
     populateEntryCategorySelect('income');
