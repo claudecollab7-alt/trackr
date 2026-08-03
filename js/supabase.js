@@ -153,9 +153,22 @@
   // next stuck-write report can be read straight out of the log instead of reproduced blind.
   const DIAG_DB_NAME = 'trackrDiagnostics';
   const DIAG_STORE_NAME = 'events';
+  // The one field that actually identifies a row varies by table: most have `id`, but
+  // dismissed_duplicates has no id column at all (its key is group_key), and budgets rows are
+  // built as {user_id, category, monthly_limit} with no id field either. Getting this wrong for
+  // budgets specifically was a real, confirmed bug: every synced-row key function in this file
+  // defaulted to `r.id`, which is undefined for a budget row, so a batch with 2+ budget
+  // categories collapsed to a single row wherever a key was needed (the dedupe below in
+  // particular) - silently and permanently discarding every category but one, most seriously
+  // during a first-ever cloud migration where there's no earlier successful save to fall back on.
+  function syncedRowKeyOf(table){
+    if(table==='dismissed_duplicates') return r=>r.group_key;
+    if(table==='budgets') return r=>r.category;
+    return r=>r.id;
+  }
   function logSyncError(op, error){
     const ids = op.kind==='upsert'
-      ? op.rows.map(r=> op.table==='dismissed_duplicates' ? r.group_key : r.id).filter(Boolean)
+      ? op.rows.map(syncedRowKeyOf(op.table)).filter(Boolean)
       : Object.values(op.match||{});
     const detail = {
       table: op.table, kind: op.kind, ids,
@@ -232,6 +245,61 @@
   async function clearAllPermanentlyRejectedRecords(){
     try{ await window.storage.set(PERMANENT_REJECT_KEY, JSON.stringify({})); }catch(e){}
   }
+  // Companion store for DELETE failures - a resolved error on a delete used to just get logged
+  // and dropped outright, never queued or recorded anywhere retryable (confirmed in production:
+  // a dismissal auto-clear delete that failed while dismissed_duplicates didn't exist yet -
+  // PGRST205 - never got retried once the table was created; the stale dismissal stayed in the
+  // cloud forever). A delete's match (e.g. {user_id, id} or {user_id, group_key}) IS the whole
+  // "record" here - there's no local row to look up the way an upsert retry needs one, so this is
+  // a flat list of match objects per table, deduped by their own JSON-stable key.
+  const PERMANENT_REJECT_DELETE_KEY = 'permanentlyRejectedDeletes';
+  function matchKeyOf(match){ return JSON.stringify(Object.keys(match).sort().map(k=>[k, match[k]])); }
+  async function getPermanentlyRejectedDeletes(){
+    try{
+      const raw = await window.storage.get(PERMANENT_REJECT_DELETE_KEY);
+      return raw ? JSON.parse(raw.value) : {};
+    }catch(e){ return {}; }
+  }
+  async function recordPermanentlyRejectedDelete(table, match, error){
+    try{
+      const store = await getPermanentlyRejectedDeletes();
+      if(!Array.isArray(store[table])) store[table] = [];
+      const matchKey = matchKeyOf(match);
+      const entry = { matchKey, match, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString() };
+      const idx = store[table].findIndex(e=>e.matchKey===matchKey);
+      if(idx>-1) store[table][idx] = entry; else store[table].push(entry);
+      await window.storage.set(PERMANENT_REJECT_DELETE_KEY, JSON.stringify(store));
+    }catch(e){}
+  }
+  async function clearPermanentlyRejectedDelete(table, matchKey){
+    try{
+      const store = await getPermanentlyRejectedDeletes();
+      if(Array.isArray(store[table])) store[table] = store[table].filter(e=>e.matchKey!==matchKey);
+      await window.storage.set(PERMANENT_REJECT_DELETE_KEY, JSON.stringify(store));
+    }catch(e){}
+  }
+  async function clearAllPermanentlyRejectedDeletes(){
+    try{ await window.storage.set(PERMANENT_REJECT_DELETE_KEY, JSON.stringify({})); }catch(e){}
+  }
+  // Re-attempts every still-outstanding failed delete, on every successful sync (see where this
+  // is called from in app.js) - not only the next time the user happens to take some other
+  // action. Retrying the exact same match is always safe here: a delete is idempotent (deleting
+  // an already-gone or never-existent row is just 0 rows affected, no error), so there's no
+  // "does the local record still exist" check to make the way the upsert-retry needs one.
+  async function retryPermanentlyRejectedDeletesOnce(){
+    if(!navigator.onLine) return;
+    const store = await getPermanentlyRejectedDeletes();
+    for(const table of Object.keys(store)){
+      for(const entry of (store[table]||[])){
+        try{
+          let q = supabaseClient.from(table).delete();
+          Object.keys(entry.match).forEach(k=> q = q.eq(k, entry.match[k]));
+          const { error } = await q;
+          if(!error) await clearPermanentlyRejectedDelete(table, entry.matchKey);
+        }catch(e){}
+      }
+    }
+  }
   const RLS_VIOLATION_CODE = '42501';
   const FK_VIOLATION_CODE = '23503';
   // Historically the only two codes treated as "permanent" (isolated per-record into
@@ -264,7 +332,7 @@
   // callers always build `rows` from their own in-memory array in save-order, so the last
   // occurrence reflects the most recently saved local state.
   function dedupeRowsById(table, rows){
-    const keyOf = table==='dismissed_duplicates' ? (r=>r.group_key) : (r=>r.id);
+    const keyOf = syncedRowKeyOf(table);
     const byKey = new Map();
     rows.forEach(r=> byKey.set(keyOf(r), r));
     if(byKey.size !== rows.length){
@@ -313,7 +381,7 @@
       // See PERMANENT_FAILURE_CODES' own comment above - ANY error resolved here (not just
       // 42501/23503) means the server responded and rejected this exact payload, so it's isolated
       // per-record rather than thrown for syncOrQueue to blindly re-queue.
-      const keyOf = op.table==='dismissed_duplicates' ? (r=>r.group_key) : (r=>r.id);
+      const keyOf = syncedRowKeyOf(op.table);
       if(rows.length>1){
         // A batch upsert fails as one Postgres statement - isolate exactly which row(s) are
         // rejected by retrying one at a time, letting the rest of the batch succeed instead of
@@ -334,8 +402,16 @@
       const { error } = await q;
       if(!error) return;
       logSyncError(op, error);
-      // Same reasoning as the upsert branch above - a resolved error here is the server's final
-      // word on this exact delete; retrying it unchanged would only ever repeat it.
+      // A resolved error here is the server's word on this exact delete right now - but unlike
+      // an upsert (which usually fails because of something about the ROW itself, e.g. an
+      // ownership mismatch), a delete can fail for a reason that resolves entirely server-side
+      // with no payload change needed at all - e.g. PGRST205 ("table not found in schema cache")
+      // during the window before a new table's migration has been applied. Recording this instead
+      // of just dropping it means retryPermanentlyRejectedDeletesOnce (called on every successful
+      // sync - see app.js) picks it back up automatically once whatever blocked it is fixed,
+      // instead of the delete being silently lost forever after just one attempt (confirmed in
+      // production: a dismissal's auto-clear delete never reached the cloud this way).
+      await recordPermanentlyRejectedDelete(op.table, op.match, error);
       return;
     }
   }
@@ -351,13 +427,18 @@
   // flag once whatever caused it is actually resolved, not a permanent, one-way label. Called
   // from app.js's REJECTABLE_TABLES-driven retry loop, which already knows which local list
   // (debts vs receivables) an id belongs to - direction can't be recovered from the id alone.
+  // localRow is a full local record object for every table except dismissed_duplicates, where
+  // it's just the group_key string (a dismissal's "record" IS its key - see
+  // toDismissedDuplicateRow) - callers already know this per-table shape, matching how
+  // js/app.js's retry loops read from their respective local data structures.
   async function retryPermanentWrite(table, listName, localRow, userId){
     if(!navigator.onLine) return { ok:false, skipped:true };
-    let row, conflictCol;
-    if(table==='accounts'){ row = toAccountRow(localRow, userId); conflictCol = 'user_id,id'; }
-    else if(table==='transactions'){ row = toTransactionRow(localRow, userId); conflictCol = 'id'; }
-    else if(table==='goals'){ row = toGoalRow(localRow, userId); conflictCol = 'id'; }
-    else if(table==='debts'){ row = toDebtRow(localRow, userId, listName==='receivables'); conflictCol = 'id'; }
+    let row, conflictCol, recordKey;
+    if(table==='accounts'){ row = toAccountRow(localRow, userId); conflictCol = 'user_id,id'; recordKey = localRow.id; }
+    else if(table==='transactions'){ row = toTransactionRow(localRow, userId); conflictCol = 'id'; recordKey = localRow.id; }
+    else if(table==='goals'){ row = toGoalRow(localRow, userId); conflictCol = 'id'; recordKey = localRow.id; }
+    else if(table==='debts'){ row = toDebtRow(localRow, userId, listName==='receivables'); conflictCol = 'id'; recordKey = localRow.id; }
+    else if(table==='dismissed_duplicates'){ row = toDismissedDuplicateRow(userId, localRow); conflictCol = 'user_id,group_key'; recordKey = localRow; }
     else return { ok:false };
     try{
       const { error } = await supabaseClient.from(table).upsert([row], { onConflict: conflictCol });
@@ -366,7 +447,7 @@
       // responded and rejected this exact row, regardless of which code it carries, so the marker
       // is refreshed to reflect the latest attempt rather than left stale. A genuine connectivity
       // failure never reaches this line - it throws instead, caught below.
-      await recordPermanentlyRejected(table, [localRow.id], error);
+      await recordPermanentlyRejected(table, [recordKey], error);
       return { ok:false };
     }catch(e){ return { ok:false }; }
   }
@@ -624,5 +705,9 @@
     getPermanentlyRejectedRecords,
     clearPermanentlyRejectedRecord,
     clearAllPermanentlyRejectedRecords,
-    retryPermanentWrite
+    retryPermanentWrite,
+    getPermanentlyRejectedDeletes,
+    clearPermanentlyRejectedDelete,
+    clearAllPermanentlyRejectedDeletes,
+    retryPermanentlyRejectedDeletesOnce
   };
