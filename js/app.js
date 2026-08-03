@@ -158,6 +158,10 @@
   // tells the two apart: whichever of the pair does NOT match the literal default name is the one
   // the user actually customized (renamed, or genuinely created), so it wins. Falls back to the
   // later array entry if neither/both match the default (shouldn't happen in practice).
+  // Local-only heuristic, used when no cloud data is available yet (loadData() runs before any
+  // pull) - whichever name does NOT match defaultAccounts()'s literal hardcoded name for that id
+  // is the one signal that reliably identifies the user's real customization over a re-seeded
+  // default. Falls back to the last array entry if neither/both match (shouldn't happen).
   function pickAccountDedupeWinner(candidates){
     const defaults = defaultAccounts();
     const nonDefault = candidates.filter(a=>{
@@ -168,28 +172,62 @@
     return candidates[candidates.length-1];
   }
   // Repairs a local `accounts` array that ended up with more than one record sharing the same id.
-  // Runs unconditionally on every launch (called from loadData(), before anything else reads
-  // `accounts`) - deliberately not gated on being logged in or on a successful cloud pull, since
-  // the corruption lives entirely in local storage and must self-heal regardless of network state.
-  // Since transactions reference a wallet by NAME, not id (see handleRenameAccount), reassigns any
-  // transaction pointing at a losing record's name over to the winner's name first, exactly like a
-  // rename - so a merge here can never orphan a transaction the way a naive "just delete one" would.
-  function dedupeAccountsById(){
+  // Called from TWO places, deliberately, not just one: inside loadData() (before anything else
+  // reads `accounts`, so a device already stuck in this state self-heals on a genuine fresh page
+  // load, regardless of login state or network) AND again inside attachUserAndSync, immediately
+  // after a cloud pull completes (see its own call site). The second call matters because
+  // attachUserAndSync can also run via startAppForUserImpl's "already running" reauth branch
+  // (e.g. logging in from within an already-open guest/offline session), which never calls
+  // loadData() at all - confirmed in production as the actual gap: a collision that first
+  // appeared on that path skipped this repair entirely, leaving dedupeRowsById's blunt,
+  // winner-agnostic "keep whichever is last in array order" as the only thing standing between it
+  // and Postgres, with no knowledge of which name was the user's real one.
+  //
+  // cloudAccounts, when provided (the second call site only), is the strongest possible signal:
+  // if the cloud already has an authoritative row for a colliding id, that row's NAME is what
+  // every local record for that id gets collapsed onto - a correct cloud value can never lose to
+  // a locally reseeded default this way, regardless of which local candidate the name-only
+  // heuristic below would otherwise have picked. Reassigns any transaction referencing a losing
+  // name over to the winning name first, exactly like a rename (see handleRenameAccount) - so a
+  // merge here can never orphan a transaction the way a naive "just delete one" would.
+  function dedupeAccountsById(cloudAccounts){
     const byId = new Map();
     accounts.forEach(a=>{ if(!byId.has(a.id)) byId.set(a.id, []); byId.get(a.id).push(a); });
     const dupIds = [...byId.keys()].filter(id=> byId.get(id).length>1);
     if(!dupIds.length) return false;
-    const winners = new Map();
+    const cloudById = new Map((cloudAccounts||[]).map(c=>[c.id, c]));
+    const winnerNameById = new Map();
     dupIds.forEach(id=>{
       const group = byId.get(id);
-      const winner = pickAccountDedupeWinner(group);
-      winners.set(id, winner);
+      const cloudRow = cloudById.get(id);
+      const winnerName = cloudRow ? cloudRow.name : pickAccountDedupeWinner(group).name;
+      winnerNameById.set(id, winnerName);
+      const loserNames = [];
+      let reassignedCount = 0;
       group.forEach(loser=>{
-        if(loser===winner) return;
-        transactions.forEach(t=>{ if(t.account===loser.name) t.account = winner.name; });
+        if((loser.name||'').trim().toLowerCase() === winnerName.trim().toLowerCase()) return;
+        loserNames.push(loser.name);
+        transactions.forEach(t=>{ if(t.account===loser.name){ t.account = winnerName; reassignedCount++; } });
+      });
+      // Distinct from sync-dedupe-collision (js/supabase.js) - that one fires at upsert time for
+      // ANY duplicate key on ANY table and only ever knows "N rows collapsed to M", with no idea
+      // which record was semantically correct. This is the one place that actually names the
+      // winner, the loser(s), and how many transactions moved, so a report like this round's
+      // ("the wrong wallet survived, ~16,020 in transactions was orphaned") is diagnosable
+      // directly from View Log next time instead of inferred after the fact.
+      diagLogPage('page:accounts-duplicate-repaired', {
+        id, winnerName, loserNames: [...new Set(loserNames)], transactionsReassigned: reassignedCount,
+        resolvedAgainstCloud: !!cloudRow
       });
     });
-    accounts = accounts.filter(a=> !winners.has(a.id) || a===winners.get(a.id));
+    const seenIds = new Set();
+    accounts = accounts.filter(a=>{
+      if(!winnerNameById.has(a.id)) return true;
+      if(seenIds.has(a.id)) return false;
+      seenIds.add(a.id);
+      a.name = winnerNameById.get(a.id);
+      return true;
+    });
     return true;
   }
   function categoryColor(name){
@@ -491,6 +529,7 @@
     // getting re-matched against whatever the next login's cloud pull re-fetched under the same
     // ids and flagged all over again, even after the server-side cause was long fixed.
     if(window.trackrSync.clearAllPermanentlyRejectedRecords) await window.trackrSync.clearAllPermanentlyRejectedRecords();
+    if(window.trackrSync.clearAllPermanentlyRejectedDeletes) await window.trackrSync.clearAllPermanentlyRejectedDeletes();
   }
 
   function renderTabUI(tabName){
@@ -4068,7 +4107,11 @@
   // retryPermanentlyRejectedOnce) - a marker is never trusted as still-accurate on its own, since
   // the server-side cause it recorded may since have been fixed.
   async function findUnsyncableRecords(){
-    if(currentUser) await retryPermanentlyRejectedOnce();
+    if(currentUser){
+      await retryPermanentlyRejectedOnce();
+      await retryPermanentlyRejectedDismissalsOnce();
+      if(window.trackrSync.retryPermanentlyRejectedDeletesOnce) await window.trackrSync.retryPermanentlyRejectedDeletesOnce();
+    }
     const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
     const found = [];
     Object.keys(REJECTABLE_TABLES).forEach(table=>{
@@ -4124,6 +4167,42 @@
       }catch(e){}
     })();
     try{ await retryPermanentlyRejectedInFlight; } finally { retryPermanentlyRejectedInFlight = null; }
+  }
+  // Companion to retryPermanentlyRejectedOnce above, for dismissed_duplicates specifically - that
+  // table doesn't fit REJECTABLE_TABLES' shape (there's no local array of {id,...} records to look
+  // a dismissal up in; its "record" is just a boolean flag keyed by group_key in
+  // duplicateDismissals). Confirmed missing in production: a "Keep both" made while the table
+  // didn't exist yet (PGRST205) got attempted once, recorded as permanently rejected, and then
+  // NEVER retried, since nothing was ever looking at the 'dismissed_duplicates' key in that store -
+  // the dismissal stayed stranded on that one device even after the migration was applied and the
+  // table became reachable. This runs alongside retryPermanentlyRejectedOnce (same call sites), so
+  // it retries automatically on the next successful sync, not only the next "Keep both" click.
+  let retryPermanentlyRejectedDismissalsInFlight = null;
+  async function retryPermanentlyRejectedDismissalsOnce(){
+    if(!currentUser || !navigator.onLine) return;
+    if(retryPermanentlyRejectedDismissalsInFlight) return retryPermanentlyRejectedDismissalsInFlight;
+    retryPermanentlyRejectedDismissalsInFlight = (async ()=>{
+      try{
+        const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
+        const entries = Array.isArray(store['dismissed_duplicates']) ? store['dismissed_duplicates'] : [];
+        if(!entries.length) return;
+        const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
+        for(const entry of entries){
+          if(!bucket || !bucket[entry.id]){
+            // No longer dismissed locally (pruned since - see pruneDuplicateDismissalsForDeletedTx)
+            // - nothing left to retry, so the marker is just dead weight now.
+            if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('dismissed_duplicates', entry.id);
+            continue;
+          }
+          const result = await window.trackrSync.retryPermanentWrite('dismissed_duplicates', null, entry.id, currentUser.id);
+          if(result && result.ok){
+            diagLogPage('page:permanently-rejected-recovered', { table:'dismissed_duplicates', id: entry.id });
+            if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('dismissed_duplicates', entry.id);
+          }
+        }
+      }catch(e){}
+    })();
+    try{ await retryPermanentlyRejectedDismissalsInFlight; } finally { retryPermanentlyRejectedDismissalsInFlight = null; }
   }
   // Local-only, deliberately - reverted from a previous round's attempt to also issue a remote
   // delete here. That change assumed a record only ever reaches this list for one of two
@@ -4898,6 +4977,16 @@
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
       if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
       if(cloud.accounts!==null){
+        // See dedupeAccountsById's own comment for why this call exists here too, not just in
+        // loadData() - attachUserAndSync can run without a preceding loadData() call (the
+        // "already running" reauth branch of startAppForUserImpl), so this is the only guaranteed
+        // point where a collision gets resolved with the winner-selection and transaction-
+        // reassignment logic before reconcileAccountsOnFirstContact/the replace branch below ever
+        // runs - otherwise dedupeRowsById's blunt, cloud-blind "keep whichever is last" in
+        // js/supabase.js is the only thing left standing between a collision and Postgres.
+        if(dedupeAccountsById(cloud.accounts) && window.trackrSync.purgeQueuedTables){
+          await window.trackrSync.purgeQueuedTables(['accounts']);
+        }
         if(!accountsReconciledOnce[currentUser.id]){
           // See reconcileAccountsOnFirstContact's own comment - this device may have local
           // wallets that were never pushed up, and another device may have already populated the
