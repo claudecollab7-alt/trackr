@@ -832,7 +832,11 @@
     const t = transactions.find(x=>x.id===id); if(!t) return;
     txDetailCurrentId = id;
     const badge = document.getElementById('txdetail-badge');
-    badge.className = 'txdetail-badge '+t.type;
+    // .txdetail-badge's colored-pill CSS is keyed off "credit"/"debit" (see styles.css), not
+    // t.type's own "income"/"expense" values - using t.type directly here left the badge with no
+    // matching class and no background color at all (confirmed via computed style: fully
+    // transparent), silently broken since this overlay was first built.
+    badge.className = 'txdetail-badge '+(t.type==='income' ? 'credit' : 'debit');
     document.getElementById('txdetail-badge-icon').innerHTML = icon(t.type==='income'?'arrowUp':'arrowDown', 12);
     setText('txdetail-badge-label', t.type==='income' ? 'Credit' : 'Debit');
     setText('txdetail-amount', (t.type==='income'?'+':'-')+fmt(t.amount));
@@ -848,6 +852,16 @@
       ['Type', t.type==='income' ? 'Credit' : 'Debit'],
       ['Particulars', t.note ? t.note : '—']
     ];
+    // A transaction with a debtId is one half of a linked debt/receivable payment (see
+    // logDebtPayment/deleteTransaction's own linkedDebt lookup) - previously invisible from this
+    // view entirely, so there was no way to tell a payment entry apart from an ordinary one
+    // without leaving here and cross-checking Debts/Receivables by amount and date.
+    if(t.debtId){
+      let linkedDebt = debts.find(d=>d.id===t.debtId);
+      let linkedLabel = 'Debt';
+      if(!linkedDebt){ linkedDebt = receivables.find(d=>d.id===t.debtId); linkedLabel = 'Receivable'; }
+      rows.push(['Linked '+linkedLabel, linkedDebt ? linkedDebt.name : 'No longer exists']);
+    }
     rows.forEach(([label,value])=>{
       const row = document.createElement('div'); row.className='txdetail-field';
       row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value">${escapeHtml(String(value))}</span>`;
@@ -1353,6 +1367,7 @@
     }
     catSelect.value = t.category;
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     const acctSelect = document.getElementById('entry-account');
     const txAccount = getTxAccount(t);
     if(![...acctSelect.options].some(o=>o.value===txAccount)){
@@ -1375,6 +1390,7 @@
     document.getElementById('entry-type').value = 'income';
     populateEntryCategorySelect('income');
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     resetEntryDateDefault();
   }
   function goToAdd(type){
@@ -1591,20 +1607,155 @@
     list.forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
     if(list.includes(prev)) sel.value = prev;
   }
+  function populateHistoryFilterAccountSelect(){
+    const sel = document.getElementById('history-filter-account'); if(!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '<option value="all">All Wallets</option>';
+    accounts.forEach(a=>{ const opt = document.createElement('option'); opt.value=a.name; opt.textContent=a.name; sel.appendChild(opt); });
+    if(accounts.some(a=>a.name===prev)) sel.value = prev;
+  }
+  // Date-range presets for the History filter panel - "This month"/"This year" etc always run
+  // through today (not the end of the calendar period), matching how every other period-based
+  // view in this app (getRingRangeDates, monthRangeFromDate as used by reports) treats an
+  // in-progress period. Returns null for 'all' (no date filtering at all) and for 'custom' with
+  // neither bound set yet (nothing to filter on until the user picks at least one date).
+  function getHistoryDateRange(preset, customFrom, customTo){
+    const today = new Date(); const todayStr = toLocalDateStr(today);
+    if(preset==='this_month'){
+      return { start: toLocalDateStr(new Date(today.getFullYear(), today.getMonth(), 1)), end: todayStr };
+    }
+    if(preset==='last_month'){
+      const start = new Date(today.getFullYear(), today.getMonth()-1, 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { start: toLocalDateStr(start), end: toLocalDateStr(end) };
+    }
+    if(preset==='last_3_months'){
+      return { start: toLocalDateStr(new Date(today.getFullYear(), today.getMonth()-2, 1)), end: todayStr };
+    }
+    if(preset==='this_year'){
+      return { start: toLocalDateStr(new Date(today.getFullYear(), 0, 1)), end: todayStr };
+    }
+    if(preset==='custom'){
+      if(!customFrom && !customTo) return null;
+      return { start: customFrom || '0001-01-01', end: customTo || '9999-12-31' };
+    }
+    return null; // 'all'
+  }
+  // Free-text search previously only ever matched particulars/category (see the PR description
+  // this shipped against) - typing a date in any form a user would naturally type it, including
+  // the exact examples reported ("19", "19 Jul", "2026-07-19"), returned "No entries match" even
+  // when many entries existed on that date. Checks, in order: the raw stored ISO string (covers
+  // "2026-07-19", "2026-07", and partial-year searches), the same two human-readable renderings
+  // already used everywhere else in this app (formatHuman "19 Jul 2026", formatShort "19 Jul"),
+  // a day-first-swapped reading of formatShort ("Jul 19", the natural word order for a user who
+  // types the month first), and finally a bare 1-2 digit search matched against the day-of-month
+  // alone (covers "19" and "5"/"05" indifferently).
+  function historySearchMatchesDate(t, search){
+    if(t.date.toLowerCase().includes(search)) return true;
+    const human = formatHuman(t.date).toLowerCase();
+    if(human.includes(search)) return true;
+    const short = formatShort(t.date).toLowerCase();
+    if(short.includes(search)) return true;
+    const shortParts = short.split(' ');
+    if(shortParts.length===2 && `${shortParts[1]} ${shortParts[0]}`.includes(search)) return true;
+    if(/^\d{1,2}$/.test(search)){
+      const day = t.date.slice(8,10).replace(/^0/,'');
+      if(day === search.replace(/^0/,'')) return true;
+    }
+    return false;
+  }
+  function historyFilterState(){
+    return {
+      search: (document.getElementById('history-search').value||'').trim().toLowerCase(),
+      type: document.getElementById('history-filter-type').value,
+      category: document.getElementById('history-filter-category').value,
+      account: document.getElementById('history-filter-account').value,
+      dateRangePreset: document.getElementById('history-filter-daterange').value,
+      dateFrom: document.getElementById('history-filter-date-from').value,
+      dateTo: document.getElementById('history-filter-date-to').value,
+      amountMin: document.getElementById('history-filter-amount-min').value,
+      amountMax: document.getElementById('history-filter-amount-max').value,
+      sort: document.getElementById('history-filter-sort').value
+    };
+  }
+  function historyActiveFilterCount(f){
+    let n = 0;
+    if(f.type!=='all') n++;
+    if(f.category!=='all') n++;
+    if(f.account!=='all') n++;
+    if(f.dateRangePreset!=='all') n++;
+    if(f.amountMin) n++;
+    if(f.amountMax) n++;
+    if(f.sort!=='date_desc') n++;
+    return n;
+  }
+  function renderHistoryActiveChips(f, dateRange){
+    const wrap = document.getElementById('history-active-filters');
+    const chips = [];
+    if(f.type!=='all') chips.push(f.type==='income' ? 'Credit only' : 'Debit only');
+    if(f.category!=='all') chips.push(f.category);
+    if(f.account!=='all') chips.push(f.account);
+    if(f.dateRangePreset!=='all'){
+      const presetLabels = { this_month:'This month', last_month:'Last month', last_3_months:'Last 3 months', this_year:'This year', custom: dateRange ? `${formatShort(dateRange.start)} – ${formatShort(dateRange.end)}` : 'Custom range' };
+      chips.push(presetLabels[f.dateRangePreset] || f.dateRangePreset);
+    }
+    if(f.amountMin) chips.push(`Min ${fmt(Number(f.amountMin))}`);
+    if(f.amountMax) chips.push(`Max ${fmt(Number(f.amountMax))}`);
+    if(f.sort!=='date_desc'){
+      const sortLabels = { date_asc:'Oldest first', amount_desc:'Amount: highest first', amount_asc:'Amount: lowest first' };
+      chips.push(sortLabels[f.sort] || f.sort);
+    }
+    if(!chips.length){ wrap.style.display='none'; wrap.innerHTML=''; return; }
+    wrap.style.display='flex';
+    wrap.innerHTML = chips.map(c=> `<span class="filter-chip">${escapeHtml(c)}</span>`).join('')
+      + `<button type="button" class="filter-chip-clear" id="history-clear-filters-btn">Clear all</button>`;
+    document.getElementById('history-clear-filters-btn').addEventListener('click', clearAllHistoryFilters);
+  }
+  function updateHistoryFilterCountBadge(count){
+    const badge = document.getElementById('history-filter-count-badge');
+    if(!badge) return;
+    badge.style.display = count>0 ? 'inline-flex' : 'none';
+    badge.textContent = String(count);
+  }
+  function clearAllHistoryFilters(){
+    document.getElementById('history-filter-type').value = 'all';
+    populateHistoryFilterCategorySelect('all');
+    document.getElementById('history-filter-account').value = 'all';
+    document.getElementById('history-filter-daterange').value = 'all';
+    document.getElementById('history-filter-date-from').value = '';
+    document.getElementById('history-filter-date-to').value = '';
+    document.getElementById('history-custom-date-row').style.display = 'none';
+    document.getElementById('history-filter-amount-min').value = '';
+    document.getElementById('history-filter-amount-max').value = '';
+    document.getElementById('history-filter-sort').value = 'date_desc';
+    document.getElementById('history-search').value = '';
+    renderHistory();
+  }
   function renderHistory(){
-    const search = (document.getElementById('history-search').value||'').trim().toLowerCase();
-    const typeFilter = document.getElementById('history-filter-type').value;
-    const catFilter = document.getElementById('history-filter-category').value;
+    const f = historyFilterState();
+    const dateRange = getHistoryDateRange(f.dateRangePreset, f.dateFrom, f.dateTo);
     let list = [...transactions];
-    if(typeFilter!=='all') list = list.filter(t=>t.type===typeFilter);
-    if(catFilter!=='all') list = list.filter(t=>t.category===catFilter);
-    if(search) list = list.filter(t=> (t.note||'').toLowerCase().includes(search) || t.category.toLowerCase().includes(search));
-    list.sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    if(f.type!=='all') list = list.filter(t=>t.type===f.type);
+    if(f.category!=='all') list = list.filter(t=>t.category===f.category);
+    if(f.account!=='all') list = list.filter(t=>getTxAccount(t)===f.account);
+    if(dateRange) list = list.filter(t=> t.date>=dateRange.start && t.date<=dateRange.end);
+    if(f.amountMin) list = list.filter(t=> t.amount >= Number(f.amountMin));
+    if(f.amountMax) list = list.filter(t=> t.amount <= Number(f.amountMax));
+    if(f.search) list = list.filter(t=> (t.note||'').toLowerCase().includes(f.search) || t.category.toLowerCase().includes(f.search) || historySearchMatchesDate(t, f.search));
+    const sorters = {
+      date_desc: (a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id),
+      date_asc: (a,b)=> a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
+      amount_desc: (a,b)=> b.amount - a.amount || b.date.localeCompare(a.date),
+      amount_asc: (a,b)=> a.amount - b.amount || a.date.localeCompare(b.date)
+    };
+    list.sort(sorters[f.sort] || sorters.date_desc);
+    renderHistoryActiveChips(f, dateRange);
+    updateHistoryFilterCountBadge(historyActiveFilterCount(f));
     const container = document.getElementById('history-list'); container.innerHTML='';
-    if(list.length===0){ container.innerHTML = '<p class="empty-note">No entries match.</p>'; return; }
     const countNote = document.createElement('p'); countNote.className = 'period-hint'; countNote.style.marginBottom = '10px';
     countNote.textContent = `Showing ${list.length} entr${list.length===1?'y':'ies'}.`;
     container.appendChild(countNote);
+    if(list.length===0){ container.appendChild(Object.assign(document.createElement('p'), { className:'empty-note', textContent:'No entries match.' })); return; }
     list.forEach(t=> container.appendChild(buildActivityRow(t, true, true)));
     wireActivityActions(container);
   }
@@ -2651,6 +2802,7 @@
         }
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
+        if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
         populateFilterCategorySelect(document.getElementById('filter-type').value);
         populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
         applyTheme(settings.theme);
@@ -3052,6 +3204,7 @@
     // new name either locally or in Supabase.
     await Promise.all([saveAccounts(), affectedTx ? saveTransactions() : Promise.resolve()]);
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     refreshAll();
   }
   function renderAccountsHome(){
@@ -3077,6 +3230,7 @@
     await saveAccounts();
     input.value='';
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     refreshAll();
   }
   async function deleteAccount(id){
@@ -3087,6 +3241,7 @@
     await saveAccounts();
     if(currentUser) window.trackrSync.syncDeleteAccount(currentUser.id, id);
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     refreshAll();
   }
   // One-time-per-account reconciliation for the accounts table specifically. It's newer than the
@@ -4516,7 +4671,7 @@
           refreshAll();
         } else if(key==='accounts'){
           const a = e.newValue ? JSON.parse(e.newValue) : null;
-          if(Array.isArray(a) && a.length>0){ accounts = a; populateEntryAccountSelect(); }
+          if(Array.isArray(a) && a.length>0){ accounts = a; populateEntryAccountSelect(); if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect(); }
           refreshAll();
         } else if(key==='recurring'){
           recurring = e.newValue ? JSON.parse(e.newValue) : [];
@@ -4888,6 +5043,29 @@
     document.getElementById('history-search').addEventListener('input', renderHistory);
     document.getElementById('history-filter-type').addEventListener('change', (e)=>{ populateHistoryFilterCategorySelect(e.target.value); renderHistory(); });
     document.getElementById('history-filter-category').addEventListener('change', renderHistory);
+    document.getElementById('history-filter-account').addEventListener('change', renderHistory);
+    document.getElementById('history-filter-sort').addEventListener('change', renderHistory);
+    document.getElementById('history-filter-amount-min').addEventListener('input', renderHistory);
+    document.getElementById('history-filter-amount-max').addEventListener('input', renderHistory);
+    document.getElementById('history-filter-date-from').addEventListener('change', renderHistory);
+    document.getElementById('history-filter-date-to').addEventListener('change', renderHistory);
+    document.getElementById('history-filter-daterange').addEventListener('change', (e)=>{
+      document.getElementById('history-custom-date-row').style.display = e.target.value==='custom' ? 'flex' : 'none';
+      renderHistory();
+    });
+    // Collapsed by default on mobile (same 780px breakpoint every other mobile/desktop split in
+    // this app uses) so the filter panel doesn't push the actual list below the fold on a small
+    // screen - desktop has the width to spare and keeps the panel open, matching how the filter
+    // row always behaved here before this round. Either way it's just a starting point: the
+    // toggle button works identically on both, so nothing is ever permanently hidden.
+    const historyFiltersPanel = document.getElementById('history-filters-panel');
+    const historyFiltersToggleBtn = document.getElementById('history-filters-toggle-btn');
+    if(window.matchMedia('(max-width:780px)').matches) historyFiltersPanel.classList.add('collapsed');
+    historyFiltersToggleBtn.setAttribute('aria-expanded', String(!historyFiltersPanel.classList.contains('collapsed')));
+    historyFiltersToggleBtn.addEventListener('click', ()=>{
+      historyFiltersPanel.classList.toggle('collapsed');
+      historyFiltersToggleBtn.setAttribute('aria-expanded', String(!historyFiltersPanel.classList.contains('collapsed')));
+    });
 
     document.getElementById('add-income-cat-form').addEventListener('submit', (e)=>{ e.preventDefault(); addCategory('income', document.getElementById('new-income-cat').value); document.getElementById('new-income-cat').value=''; });
     document.getElementById('add-expense-cat-form').addEventListener('submit', (e)=>{ e.preventDefault(); addCategory('expense', document.getElementById('new-expense-cat').value); document.getElementById('new-expense-cat').value=''; });
@@ -4938,6 +5116,7 @@
       }
       populateEntryCategorySelect(document.getElementById('entry-type').value);
       populateEntryAccountSelect();
+      if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
       populateFilterCategorySelect(document.getElementById('filter-type').value);
       populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
       applyTheme('light');
@@ -5210,6 +5389,7 @@
     applyTheme(settings.theme || 'light');
     populateEntryCategorySelect('income');
     populateEntryAccountSelect();
+    if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
     populateFilterCategorySelect('all');
     populateHistoryFilterCategorySelect('all');
     setDefaultDates();
@@ -5607,18 +5787,73 @@
   if(viewDiagLogBtn) viewDiagLogBtn.addEventListener('click', openDiagLogOverlay);
   document.getElementById('close-diaglog-btn').addEventListener('click', ()=> history.back());
   document.getElementById('diaglog-overlay').addEventListener('click', (e)=>{ if(e.target.id==='diaglog-overlay') history.back(); });
-  if(copyDiagLogBtn){
-    copyDiagLogBtn.addEventListener('click', async () => {
-      const entries = await readDiagLog();
-      const text = formatDiagLog(entries);
-      try{
+  // Copy Log worked on desktop but silently did nothing usable on mobile. navigator.clipboard.
+  // writeText() has several documented mobile-specific failure modes that don't show up on
+  // desktop Chrome: it throws NotAllowedError when the document doesn't have focus at the exact
+  // moment it's called (mobile Chrome enforces this more strictly than desktop), and this log
+  // grows UNBOUNDED for the lifetime of the install (see diagLogPage's own comment - it persists
+  // across every reload and app update, nothing here has ever pruned it), so a long-lived
+  // install's log can be a large payload that some mobile browsers/WebViews are known to choke
+  // on for clipboard writes even where they work fine for a short string. Both are real,
+  // documented mobile-vs-desktop gaps, not something reproducible in a desktop-browser-in-
+  // mobile-viewport test - see the shipping notes for what was and wasn't verified against an
+  // actual device. Rather than chase one exact cause blind, this now defends against both at
+  // once: try the modern Clipboard API first, fall back to the legacy execCommand('copy') path
+  // (a different code path, unaffected by the same Permissions-Policy/focus timing), and if
+  // BOTH fail, the caller always has a completely clipboard-independent Download .txt action
+  // and a manually-selectable log view available - so there's always a way to get the log off
+  // the device, whatever the mobile browser's clipboard support turns out to be.
+  async function copyTextToClipboard(text){
+    try{
+      if(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
         await navigator.clipboard.writeText(text);
-        showAppToast('Diagnostic log copied');
-      }catch(e){
-        await openDiagLogOverlay();
-        showAppToast("Couldn't copy automatically — log is shown below, select and copy manually");
+        return true;
       }
-    });
+    }catch(e){}
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(ok) return true;
+    }catch(e){}
+    return false;
   }
+  function downloadDiagLogAsTxt(text){
+    try{
+      const blob = new Blob([text], { type:'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `trackr-diagnostics-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.txt`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 2000);
+      return true;
+    }catch(e){ return false; }
+  }
+  async function handleCopyDiagLog(){
+    const text = formatDiagLog(await readDiagLog());
+    const ok = await copyTextToClipboard(text);
+    if(ok){ showAppToast('Diagnostic log copied'); return; }
+    await openDiagLogOverlay();
+    showAppToast("Couldn't copy automatically — use Download .txt below, or select the log and copy manually");
+  }
+  if(copyDiagLogBtn) copyDiagLogBtn.addEventListener('click', handleCopyDiagLog);
+  const copyDiagLogInlineBtn = document.getElementById('copy-diag-log-inline-btn');
+  if(copyDiagLogInlineBtn) copyDiagLogInlineBtn.addEventListener('click', async () => {
+    // Already open and rendered - use it directly rather than re-reading IndexedDB, both for
+    // speed and to keep this call as close to the triggering tap as possible.
+    const text = (diagLogResults && diagLogResults.textContent) || formatDiagLog(await readDiagLog());
+    const ok = await copyTextToClipboard(text);
+    showAppToast(ok ? 'Diagnostic log copied' : "Couldn't copy automatically — try Download .txt instead");
+  });
+  const downloadDiagLogBtn = document.getElementById('download-diag-log-btn');
+  if(downloadDiagLogBtn) downloadDiagLogBtn.addEventListener('click', async () => {
+    const text = (diagLogResults && diagLogResults.textContent) || formatDiagLog(await readDiagLog());
+    showAppToast(downloadDiagLogAsTxt(text) ? 'Log downloaded' : "Couldn't start the download — select the log and copy manually");
+  });
   init();
 })();
