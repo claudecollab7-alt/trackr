@@ -265,7 +265,10 @@
       const store = await getPermanentlyRejectedDeletes();
       if(!Array.isArray(store[table])) store[table] = [];
       const matchKey = matchKeyOf(match);
-      const entry = { matchKey, match, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString() };
+      // queuedAt is what makes the retry below safe against id reuse (e.g. defaultAccounts()'s
+      // fixed acc_cash/acc_bank/acc_card ids, reseeded on every logout and by Restore Backup) -
+      // see retryPermanentlyRejectedDeletesOnce for how it's used.
+      const entry = { matchKey, match, code: error && error.code, message: error && error.message, detectedAt: new Date().toISOString(), queuedAt: Date.now() };
       const idx = store[table].findIndex(e=>e.matchKey===matchKey);
       if(idx>-1) store[table][idx] = entry; else store[table].push(entry);
       await window.storage.set(PERMANENT_REJECT_DELETE_KEY, JSON.stringify(store));
@@ -283,15 +286,49 @@
   }
   // Re-attempts every still-outstanding failed delete, on every successful sync (see where this
   // is called from in app.js) - not only the next time the user happens to take some other
-  // action. Retrying the exact same match is always safe here: a delete is idempotent (deleting
-  // an already-gone or never-existent row is just 0 rows affected, no error), so there's no
-  // "does the local record still exist" check to make the way the upsert-retry needs one.
-  async function retryPermanentlyRejectedDeletesOnce(){
+  // action. "Deleting an already-gone row is a harmless no-op" only holds if the id it targets is
+  // never reused - and in this app it is: defaultAccounts() reseeds the fixed ids acc_cash/
+  // acc_bank/acc_card on every logout, and Restore Backup can bring an old id back too. A queued
+  // delete firing blind against a row that was re-created under the same id since would silently
+  // destroy the NEW row, with no user action and no warning. Two independent guards against that,
+  // checked in order from cheapest to most expensive:
+  //  1. existsLocally(table, match), supplied by app.js - if THIS device's own current local
+  //     state already has a live record under this exact key (e.g. the same device re-seeded or
+  //     restored it), the queued delete is stale by definition and discarded outright, no network
+  //     round-trip needed.
+  //  2. A live server-side check - if the row still exists under this key, compare its created_at
+  //     against queuedAt (captured the moment the delete first failed - see
+  //     recordPermanentlyRejectedDelete). Every synced table's created_at is set once, at insert,
+  //     and left untouched by every later upsert of the SAME row (see toAccountRow's own comment)
+  //     - so a created_at newer than queuedAt is only possible if the original row was actually
+  //     deleted (by this queued delete finally landing some other way, or by a different device)
+  //     and a fresh row was inserted under the same id afterward. That's exactly the row this
+  //     queued delete must never be allowed to touch, whether or not this device knows about it
+  //     locally (guard 1 alone can't see a recreation that happened on a DIFFERENT device).
+  // Missing queuedAt (an entry recorded before this guard existed) defaults to "now", which
+  // disables guard 2 for that one entry rather than misfiring against a row that's actually still
+  // the original - falling back to guard 1 plus the same idempotent-retry behavior this had before.
+  async function retryPermanentlyRejectedDeletesOnce(existsLocally){
     if(!navigator.onLine) return;
     const store = await getPermanentlyRejectedDeletes();
     for(const table of Object.keys(store)){
-      for(const entry of (store[table]||[])){
+      for(const entry of (store[table]||[]).slice()){
         try{
+          if(typeof existsLocally==='function' && existsLocally(table, entry.match)){
+            logDeleteRetryDiscarded(table, entry.match, 'local');
+            await clearPermanentlyRejectedDelete(table, entry.matchKey);
+            continue;
+          }
+          const queuedAt = entry.queuedAt || Date.now();
+          let selectQ = supabaseClient.from(table).select('created_at');
+          Object.keys(entry.match).forEach(k=> selectQ = selectQ.eq(k, entry.match[k]));
+          const { data: existingRows } = await selectQ;
+          const currentRow = Array.isArray(existingRows) ? existingRows[0] : null;
+          if(currentRow && currentRow.created_at && new Date(currentRow.created_at).getTime() > queuedAt){
+            logDeleteRetryDiscarded(table, entry.match, 'server');
+            await clearPermanentlyRejectedDelete(table, entry.matchKey);
+            continue;
+          }
           let q = supabaseClient.from(table).delete();
           Object.keys(entry.match).forEach(k=> q = q.eq(k, entry.match[k]));
           const { error } = await q;
@@ -299,6 +336,29 @@
         }catch(e){}
       }
     }
+  }
+  // Same diagnostic store logDedupeCollision writes to - a discarded queued delete is exactly the
+  // kind of near-miss a future report needs to be diagnosable from View Log, not inferred.
+  function logDeleteRetryDiscarded(table, match, detectedVia){
+    console.warn('Discarded a queued delete - target was re-created since it was queued:', table, match, detectedVia);
+    try{
+      const req = indexedDB.open(DIAG_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+          req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        try{
+          const tx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+          tx.objectStore(DIAG_STORE_NAME).add({ ts: Date.now(), source:'sync', event:'sync-delete-retry-discarded', detail: JSON.stringify({ table, match, detectedVia }) });
+          tx.oncomplete = () => db.close();
+          tx.onerror = () => db.close();
+        }catch(e){ try{ db.close(); }catch(e2){} }
+      };
+      req.onerror = () => {};
+    }catch(e){}
   }
   const RLS_VIOLATION_CODE = '42501';
   const FK_VIOLATION_CODE = '23503';

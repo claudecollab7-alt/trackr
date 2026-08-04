@@ -96,6 +96,12 @@
   // transactions renamed along with them) up to Supabase and drop any stale queued accounts op
   // that might still be carrying the pre-repair, duplicate-id snapshot.
   let accountsRepairedThisLoad = false;
+  // Scoped by user id, same reasoning as accountsReconciledOnce above (never reset on logout, so
+  // it naturally starts unset for any user id that hasn't been checked on this device before).
+  // Set by reconcileBudgetsTruncationOnce() the first time a device checks in against the cloud
+  // on a build that has the syncedRowKeyOf fix - see that function's own comment for what it's
+  // recovering from.
+  let budgetsTruncationCheckedOnce = {};
   let debts = [];
   let receivables = [];
   let recurring = [];
@@ -230,6 +236,36 @@
     });
     return true;
   }
+  // One-time-per-device repair for the v37 budgets keyOf bug (see syncedRowKeyOf in
+  // js/supabase.js): any batch upsert of 2+ budget categories made while running v37 silently
+  // collapsed to just the last category server-side, while the LOCAL copy that made that push
+  // stayed fully intact (the bug was only ever in what got sent to Postgres, never in what got
+  // written to disk). Left alone, the very next ordinary pull would take that truncated cloud
+  // set and overwrite this device's still-complete local copy with it via the unconditional
+  // `budgets = cloud.budgets` in attachUserAndSync - turning a cloud-only loss into a permanent,
+  // cross-device one. Runs exactly once per (user, device): compares local against the freshly
+  // pulled cloud budgets, and if local has a category cloud is missing, treats local as the
+  // recovery source, re-pushes the union to the cloud, and folds it into the working budgets
+  // object before the caller's cloud-replaces-local step ever runs. Only ever ADDS categories
+  // back in - a category genuinely deleted on another device (which actively issues its own
+  // cloud delete via syncBudgets, unrelated to this bug) is never resurrected by this, since
+  // deleted-elsewhere categories simply aren't present in this device's local copy either.
+  // Gated to run once per device, not on every sync, since a repeat local-has-extra reading
+  // after this first pass really would just mean "deleted on another device" and should be
+  // honored as a normal pull, not re-litigated as more truncation.
+  async function reconcileBudgetsTruncationOnce(userId, localBudgetsBeforeOverwrite, cloudBudgets){
+    if(budgetsTruncationCheckedOnce[userId]) return cloudBudgets;
+    budgetsTruncationCheckedOnce[userId] = true;
+    try{ await window.storage.set('budgetsTruncationCheckedOnce', JSON.stringify(budgetsTruncationCheckedOnce)); }catch(e){}
+    const local = localBudgetsBeforeOverwrite || {};
+    const missing = Object.keys(local).filter(cat=> !(cat in (cloudBudgets||{})));
+    if(!missing.length) return cloudBudgets;
+    const repaired = { ...(cloudBudgets||{}) };
+    missing.forEach(cat=> repaired[cat] = local[cat]);
+    diagLogPage('page:budgets-truncation-repaired', { recoveredCategories: missing, recoveredCount: missing.length });
+    if(window.trackrSync.syncBudgets) window.trackrSync.syncBudgets(userId, repaired);
+    return repaired;
+  }
   function categoryColor(name){
     const palette = document.body.getAttribute('data-theme')==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
@@ -311,6 +347,8 @@
     // exactly once more - now safe by construction (see that function's id-first rewrite), so this
     // one-time extra pass is a harmless, self-correcting side effect of the upgrade, not a bug.
     if(!accountsReconciledOnce || typeof accountsReconciledOnce !== 'object' || Array.isArray(accountsReconciledOnce)) accountsReconciledOnce = {};
+    try{ const btc = await window.storage.get('budgetsTruncationCheckedOnce'); budgetsTruncationCheckedOnce = btc ? JSON.parse(btc.value) : {}; } catch(e){ budgetsTruncationCheckedOnce = {}; }
+    if(!budgetsTruncationCheckedOnce || typeof budgetsTruncationCheckedOnce !== 'object' || Array.isArray(budgetsTruncationCheckedOnce)) budgetsTruncationCheckedOnce = {};
     // Defensive shape checks — guards against corrupted/legacy storage causing crashes downstream
     if(!Array.isArray(transactions)) transactions = [];
     if(!categories || !Array.isArray(categories.income) || !Array.isArray(categories.expense)) categories = defaultCategories();
@@ -4106,11 +4144,27 @@
   // stale false positive here. Always retries each marked id first (see
   // retryPermanentlyRejectedOnce) - a marker is never trusted as still-accurate on its own, since
   // the server-side cause it recorded may since have been fixed.
+  // Supplied to retryPermanentlyRejectedDeletesOnce (js/supabase.js) as its cheap, no-network
+  // first guard against firing a queued delete against a row that's since been re-created under
+  // the same key - most concretely defaultAccounts()'s fixed acc_cash/acc_bank/acc_card ids,
+  // reseeded on every logout, but written generically for every synced table's actual key shape.
+  function localRecordExistsForDelete(table, match){
+    if(table==='accounts') return accounts.some(a=>a.id===match.id);
+    if(table==='transactions') return transactions.some(t=>t.id===match.id);
+    if(table==='debts') return debts.some(d=>d.id===match.id) || receivables.some(d=>d.id===match.id);
+    if(table==='goals') return goals.some(g=>g.id===match.id);
+    if(table==='budgets') return Object.prototype.hasOwnProperty.call(budgets||{}, match.category);
+    if(table==='dismissed_duplicates'){
+      const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
+      return !!(bucket && bucket[match.group_key]);
+    }
+    return false;
+  }
   async function findUnsyncableRecords(){
     if(currentUser){
       await retryPermanentlyRejectedOnce();
       await retryPermanentlyRejectedDismissalsOnce();
-      if(window.trackrSync.retryPermanentlyRejectedDeletesOnce) await window.trackrSync.retryPermanentlyRejectedDeletesOnce();
+      if(window.trackrSync.retryPermanentlyRejectedDeletesOnce) await window.trackrSync.retryPermanentlyRejectedDeletesOnce(localRecordExistsForDelete);
     }
     const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
     const found = [];
@@ -4975,7 +5029,10 @@
       if(cloud.debts!==null){ debts = cloud.debts; debts.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['debts', debts]); }
       if(cloud.receivables!==null){ receivables = cloud.receivables; receivables.forEach(d=>{ if(!Array.isArray(d.payments)) d.payments = []; }); toPersist.push(['receivables', receivables]); }
       if(cloud.goals!==null){ goals = cloud.goals; goals.forEach(g=>{ if(!Array.isArray(g.contributions)) g.contributions = []; }); toPersist.push(['goals', goals]); }
-      if(cloud.budgets!==null){ budgets = cloud.budgets; toPersist.push(['budgets', budgets]); }
+      if(cloud.budgets!==null){
+        budgets = await reconcileBudgetsTruncationOnce(currentUser.id, budgets, cloud.budgets);
+        toPersist.push(['budgets', budgets]);
+      }
       if(cloud.accounts!==null){
         // See dedupeAccountsById's own comment for why this call exists here too, not just in
         // loadData() - attachUserAndSync can run without a preceding loadData() call (the
