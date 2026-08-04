@@ -415,6 +415,20 @@
   .search-input-wrap .search-input{ width:100%; padding-left:36px; }
   .search-input-wrap .search-icon{ position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--ink-soft); }
 
+  /* History's extended filter panel (date range, amount range, wallet, sort) - collapsible so it
+     doesn't dominate a mobile screen; toggled by JS adding/removing .collapsed, defaulted per
+     breakpoint at render time (see wireHistoryFilters in js/app.js). Desktop has enough width
+     that it stays open by default, same as the filter row always did before this. */
+  .history-filters-panel{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+  .history-filters-panel.collapsed{ display:none; }
+  .history-filters-toggle{ position:relative; }
+  .filter-count-badge{ display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:var(--link); color:#fff; font-size:10.5px; font-weight:700; line-height:1; }
+  .filter-inline-label{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-soft); font-weight:600; flex:1; min-width:140px; }
+  .filter-inline-label input{ flex:1; min-width:0; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:#fff; font-family:'Roboto Mono',monospace; color:var(--ink); }
+  .active-filter-chips{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; }
+  .filter-chip{ display:inline-flex; align-items:center; padding:5px 12px; border-radius:999px; background:var(--bg); border:1px solid var(--line); font-size:12px; font-weight:600; color:var(--ink-soft); }
+  .filter-chip-clear{ font-size:12px; font-weight:700; color:var(--link); background:none; border:none; padding:5px 4px; text-decoration:underline; }
+
   .report-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:10px; }
   .report-header h2{ font-size:16.5px; margin:0; font-weight:800; letter-spacing:-.2px; }
   .report-header .btn-group{ display:flex; gap:8px; flex-wrap:wrap; }
@@ -502,6 +516,7 @@
   body[data-theme="dark"] .period-inputs input, body[data-theme="dark"] .budget-limit-input input,
   body[data-theme="dark"] .log-payment-form input, body[data-theme="dark"] .log-payment-form select, body[data-theme="dark"] .cat-col form input,
   body[data-theme="dark"] .settings-row input, body[data-theme="dark"] .btn-outline,
+  body[data-theme="dark"] .filter-inline-label input,
   body[data-theme="dark"] .contribution-form input{
     background:#1A2336; border-color:var(--line); color:var(--ink);
   }
@@ -573,6 +588,7 @@
   body[data-theme="crimson"] .period-inputs input, body[data-theme="crimson"] .budget-limit-input input,
   body[data-theme="crimson"] .log-payment-form input, body[data-theme="crimson"] .log-payment-form select, body[data-theme="crimson"] .cat-col form input,
   body[data-theme="crimson"] .settings-row input, body[data-theme="crimson"] .btn-outline,
+  body[data-theme="crimson"] .filter-inline-label input,
   body[data-theme="crimson"] .contribution-form input{
     background:#2A252D; border-color:var(--line); color:var(--ink);
   }
