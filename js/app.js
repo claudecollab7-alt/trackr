@@ -246,17 +246,39 @@
   // cross-device one. Runs exactly once per (user, device): compares local against the freshly
   // pulled cloud budgets, and if local has a category cloud is missing, treats local as the
   // recovery source, re-pushes the union to the cloud, and folds it into the working budgets
-  // object before the caller's cloud-replaces-local step ever runs. Only ever ADDS categories
-  // back in - a category genuinely deleted on another device (which actively issues its own
-  // cloud delete via syncBudgets, unrelated to this bug) is never resurrected by this, since
-  // deleted-elsewhere categories simply aren't present in this device's local copy either.
-  // Gated to run once per device, not on every sync, since a repeat local-has-extra reading
-  // after this first pass really would just mean "deleted on another device" and should be
+  // object before the caller's cloud-replaces-local step ever runs.
+  //
+  // BOUNDED against a real gap: comparing local-vs-cloud by data shape alone can't tell "this
+  // category was truncated by the v37 bug" apart from "this device's local copy is just stale,
+  // and the category was genuinely deleted on a different device that hasn't been pulled here
+  // yet." Both look identical (local has it, cloud doesn't) - the earlier claim that "a
+  // deleted-elsewhere category simply isn't present in this device's local copy either" only
+  // holds if THIS device already pulled the deletion before this check runs, which isn't
+  // guaranteed. Gated instead by deviceEverRanV37(): the underlying dedupeRowsById bug this
+  // recovers from did not exist before v37 (confirmed via git history), so a device with no
+  // recorded evidence of ever having run v37 could not have produced this specific truncation,
+  // and recovery is skipped entirely rather than guessed at. This doesn't fully close the gap -
+  // a device that DID run v37 at some point still can't distinguish its own truncation from a
+  // since-arrived, not-yet-pulled deletion from elsewhere - but it eliminates the largest class
+  // of false positives (any device whose whole history is v38+) outright. The evidence is only
+  // as durable as the diagnostic log itself (IndexedDB, can in principle be evicted under
+  // storage pressure like any other origin data) - a device that genuinely ran v37 but lost
+  // that log entry simply misses out on recovery, never risks a wrong one.
+  //
+  // Gated to run once per device, not on every sync: a repeat local-has-extra reading after
+  // this first pass is presumed to mean "deleted on another device, since pulled" and is
   // honored as a normal pull, not re-litigated as more truncation.
+  async function deviceEverRanV37(){
+    try{
+      const entries = await readDiagLog();
+      return entries.some(e=> e.buildVersion==='v37' || e.swVersion==='v37');
+    }catch(e){ return false; }
+  }
   async function reconcileBudgetsTruncationOnce(userId, localBudgetsBeforeOverwrite, cloudBudgets){
     if(budgetsTruncationCheckedOnce[userId]) return cloudBudgets;
     budgetsTruncationCheckedOnce[userId] = true;
     try{ await window.storage.set('budgetsTruncationCheckedOnce', JSON.stringify(budgetsTruncationCheckedOnce)); }catch(e){}
+    if(!(await deviceEverRanV37())) return cloudBudgets;
     const local = localBudgetsBeforeOverwrite || {};
     const missing = Object.keys(local).filter(cat=> !(cat in (cloudBudgets||{})));
     if(!missing.length) return cloudBudgets;
@@ -707,12 +729,23 @@
     const row = document.createElement('div'); row.className='activity-row clickable-row';
     const color = t.type==='income' ? '#16A34A' : categoryColor(t.category);
     const badgeChar = t.type==='income' ? '↑' : categoryInitial(t.category);
-    const sub = `${escapeHtml(t.note || (t.type==='income'?'Credit':'Debit'))}${showDate ? ' · '+formatHuman(t.date) : ''}`;
+    // Note and date are separate flex children (not one combined truncating string) so a long
+    // particulars note can only ever eat into ITS OWN ellipsis, never push the date - a date is
+    // short and load-bearing (confirmed reported as truncating mid-string, e.g. "19 Jul 2...")
+    // and should never be the part that gets cut off.
+    const noteText = t.note || (t.type==='income'?'Credit':'Debit');
+    const sub = showDate
+      ? `<span class="activity-sub-note">${escapeHtml(noteText)}</span><span class="activity-sub-date">${formatHuman(t.date)}</span>`
+      : `<span class="activity-sub-note">${escapeHtml(noteText)}</span>`;
     let actionsHtml = '';
     if(withActions){
       actionsHtml = `<div class="activity-actions"><button class="icon-btn-sm edit-btn" data-id="${t.id}" aria-label="Edit entry">${icon('edit',14)}</button><button class="icon-btn-sm del-btn" data-id="${t.id}" aria-label="Delete entry">${icon('trash',14)}</button></div>`;
     }
-    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div></div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}</div>`;
+    // Trailing chevron - a persistent, always-visible cue that the row itself (not just the
+    // edit/delete buttons, when present) opens something, rather than relying on a user to
+    // discover that by guessing or by an active-state background flash that only ever shows up
+    // mid-tap, after the fact.
+    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div></div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}<span class="activity-chevron" aria-hidden="true">${icon('chevronRight',15)}</span></div>`;
     row.dataset.category = t.category; row.dataset.txType = t.type;
     row.addEventListener('click', (e)=>{
       if(e.target.closest('.activity-actions')) return;
@@ -1692,24 +1725,46 @@
   function renderHistoryActiveChips(f, dateRange){
     const wrap = document.getElementById('history-active-filters');
     const chips = [];
-    if(f.type!=='all') chips.push(f.type==='income' ? 'Credit only' : 'Debit only');
-    if(f.category!=='all') chips.push(f.category);
-    if(f.account!=='all') chips.push(f.account);
+    if(f.type!=='all') chips.push({ key:'type', label: f.type==='income' ? 'Credit only' : 'Debit only' });
+    if(f.category!=='all') chips.push({ key:'category', label: f.category });
+    if(f.account!=='all') chips.push({ key:'account', label: f.account });
     if(f.dateRangePreset!=='all'){
       const presetLabels = { this_month:'This month', last_month:'Last month', last_3_months:'Last 3 months', this_year:'This year', custom: dateRange ? `${formatShort(dateRange.start)} – ${formatShort(dateRange.end)}` : 'Custom range' };
-      chips.push(presetLabels[f.dateRangePreset] || f.dateRangePreset);
+      chips.push({ key:'daterange', label: presetLabels[f.dateRangePreset] || f.dateRangePreset });
     }
-    if(f.amountMin) chips.push(`Min ${fmt(Number(f.amountMin))}`);
-    if(f.amountMax) chips.push(`Max ${fmt(Number(f.amountMax))}`);
+    if(f.amountMin) chips.push({ key:'amountMin', label: `Min ${fmt(Number(f.amountMin))}` });
+    if(f.amountMax) chips.push({ key:'amountMax', label: `Max ${fmt(Number(f.amountMax))}` });
     if(f.sort!=='date_desc'){
       const sortLabels = { date_asc:'Oldest first', amount_desc:'Amount: highest first', amount_asc:'Amount: lowest first' };
-      chips.push(sortLabels[f.sort] || f.sort);
+      chips.push({ key:'sort', label: sortLabels[f.sort] || f.sort });
     }
     if(!chips.length){ wrap.style.display='none'; wrap.innerHTML=''; return; }
     wrap.style.display='flex';
-    wrap.innerHTML = chips.map(c=> `<span class="filter-chip">${escapeHtml(c)}</span>`).join('')
+    // Each chip carries its own X (44x44 tap target via .filter-chip-remove's invisible
+    // ::before hit-area expansion, not a visually enlarged button - see styles.css) so removing
+    // one filter no longer means either "Clear all" (loses every other active filter too) or
+    // hunting down the matching dropdown/input to reset it manually.
+    // icon('x',10) embedded directly (not a data-icon span) - this markup is inserted long after
+    // boot's one-time injectIcons() pass, which nothing here re-triggers.
+    wrap.innerHTML = chips.map(c=> `<span class="filter-chip">${escapeHtml(c.label)}<button type="button" class="filter-chip-remove" data-filter-key="${c.key}" aria-label="Remove ${escapeHtml(c.label)} filter">${icon('x',10)}</button></span>`).join('')
       + `<button type="button" class="filter-chip-clear" id="history-clear-filters-btn">Clear all</button>`;
     document.getElementById('history-clear-filters-btn').addEventListener('click', clearAllHistoryFilters);
+    wrap.querySelectorAll('.filter-chip-remove').forEach(btn=> btn.addEventListener('click', ()=> clearSingleHistoryFilter(btn.dataset.filterKey)));
+  }
+  function clearSingleHistoryFilter(key){
+    if(key==='type') document.getElementById('history-filter-type').value = 'all';
+    else if(key==='category') document.getElementById('history-filter-category').value = 'all';
+    else if(key==='account') document.getElementById('history-filter-account').value = 'all';
+    else if(key==='daterange'){
+      document.getElementById('history-filter-daterange').value = 'all';
+      document.getElementById('history-filter-date-from').value = '';
+      document.getElementById('history-filter-date-to').value = '';
+      document.getElementById('history-custom-date-row').style.display = 'none';
+    }
+    else if(key==='amountMin') document.getElementById('history-filter-amount-min').value = '';
+    else if(key==='amountMax') document.getElementById('history-filter-amount-max').value = '';
+    else if(key==='sort') document.getElementById('history-filter-sort').value = 'date_desc';
+    renderHistory();
   }
   function updateHistoryFilterCountBadge(count){
     const badge = document.getElementById('history-filter-count-badge');
@@ -3413,6 +3468,14 @@
     // "purply" every time, same mechanism as the sunset/mounty/reddy -> crimson migration above.
     if(theme==='sunlight') theme = 'purply';
     document.body.setAttribute('data-theme', theme);
+    // Mirrored onto <html> too, not just <body> - see the html{background} rule in styles.css:
+    // a CSS custom property redefined on body[data-theme=X] only cascades to body's own
+    // descendants, never to html (body's ANCESTOR, which doesn't inherit from what's below it).
+    // Without this, any real horizontal overflow anywhere in the app - a native control
+    // rendering wider than its flex container on a specific mobile browser, the kind of bug
+    // that's recurred multiple times in this project - shows the WRONG (or no) background in the
+    // exposed strip regardless of which fix closes the overflow itself this time.
+    document.documentElement.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
   }
@@ -5625,7 +5688,60 @@
       })
       .join('\n');
   }
+  // Hard cap on the diagnostic log's own entry count, oldest evicted first - this log has never
+  // had one in the time it's existed, and a real production log confirmed it: 1038 entries over
+  // 11 days, growing without bound by design. 2000 is generous even with the per-entry message
+  // cap now in place (capErrorMessage/capMessageStr in js/supabase.js) - at a few hundred bytes
+  // per entry worst-case post-truncation, 2000 entries is a small fraction of what IndexedDB
+  // typically allows an origin (tens of MB minimum on every real browser), so this exists purely
+  // as a backstop against unbounded growth, not because normal use is expected to approach it.
+  // Deliberately NOT applied inside every individual writer (sw.js's diagLog, this file's
+  // diagLogPage, or supabase.js's own logSyncError/logDedupeCollision/logDeleteRetryDiscarded) -
+  // that would mean re-implementing the same count-and-evict logic in three separate files
+  // sharing one IndexedDB store by convention, not by any shared module. Run once per launch
+  // instead, right after the log's first write this session, which is frequent enough for an app
+  // opened regularly and avoids that duplication entirely.
+  const DIAG_LOG_ENTRY_CAP = 2000;
+  function pruneDiagLogIfOversized(){
+    return new Promise((resolve) => {
+      try{
+        const req = indexedDB.open(DIAG_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if(!req.result.objectStoreNames.contains(DIAG_STORE_NAME)){
+            req.result.createObjectStore(DIAG_STORE_NAME, { keyPath:'id', autoIncrement:true });
+          }
+        };
+        req.onsuccess = () => {
+          const db = req.result;
+          try{
+            const countTx = db.transaction(DIAG_STORE_NAME, 'readonly');
+            const countReq = countTx.objectStore(DIAG_STORE_NAME).count();
+            countReq.onsuccess = () => {
+              const total = countReq.result || 0;
+              const excess = total - DIAG_LOG_ENTRY_CAP;
+              if(excess <= 0){ db.close(); resolve(); return; }
+              // ids are autoIncrement, so ascending id order IS oldest-first - a cursor walking
+              // forward from the start and deleting exactly `excess` records evicts the oldest
+              // entries without ever needing to read/sort every entry into memory first.
+              const delTx = db.transaction(DIAG_STORE_NAME, 'readwrite');
+              const cursorReq = delTx.objectStore(DIAG_STORE_NAME).openCursor();
+              let deleted = 0;
+              cursorReq.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if(cursor && deleted < excess){ cursor.delete(); deleted++; cursor.continue(); }
+              };
+              delTx.oncomplete = () => { db.close(); resolve(); };
+              delTx.onerror = () => { db.close(); resolve(); };
+            };
+            countReq.onerror = () => { db.close(); resolve(); };
+          }catch(e){ try{ db.close(); }catch(e2){} resolve(); }
+        };
+        req.onerror = () => resolve();
+      }catch(e){ resolve(); }
+    });
+  }
   diagLogPage('page:script-start');
+  pruneDiagLogIfOversized();
 
   /* ---------- PWA update detection ----------
      Only ever touches the Cache Storage API (via sw.js) - never localStorage or

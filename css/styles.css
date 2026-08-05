@@ -26,6 +26,20 @@
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; tap-highlight-color:transparent; letter-spacing:normal; word-spacing:normal; text-justify:none; text-align-last:auto;}
   html,body{margin:0;padding:0;height:100%; overflow-x:hidden; -webkit-text-size-adjust:100%; text-size-adjust:100%; touch-action:pan-x pan-y;}
+  /* html's own background, mirroring body's --bg per theme (see applyTheme() in js/app.js,
+     which now sets data-theme on <html> too, not just <body>) - a CSS variable redefined on
+     body[data-theme=X] cascades to body's descendants only, never to html, since html is body's
+     ANCESTOR. Without this, any element anywhere in the app that ever renders wider than the
+     viewport - a native control on a specific mobile browser ignoring its flex/grid container,
+     the exact class of bug this project has hit multiple times - exposes html's default
+     background (transparent/white) in the gap next to position:fixed chrome (header, bottom
+     nav), which is sized to the visual viewport and can't reveal what's actually overflowing.
+     This can't prevent that overflow, only ensure it reads as a same-colour non-event instead of
+     a stark white strip, on whichever theme happens to be active when it happens. */
+  html{ background:var(--bg); }
+  html[data-theme="dark"]{ background:#0B1220; }
+  html[data-theme="crimson"]{ background:#1E1E27; }
+  html[data-theme="purply"]{ background:#FAF5FF; }
   button, a, .node, [onclick]{ touch-action:manipulation; }
   body{
     font-family:'Inter',system-ui,sans-serif;
@@ -260,12 +274,22 @@
   .activity-left > div{ min-width:0; flex:1 1 auto; overflow:hidden; }
   .cat-badge{ width:36px; height:36px; border-radius:50%; color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
   .activity-name{ font-size:13.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .activity-sub{ font-size:11.5px; color:var(--ink-soft); margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  /* Note and date are separate flex children, not one truncating string (see buildActivityRow
+     in js/app.js) - only .activity-sub-note shrinks/ellipsizes; the date has flex-shrink:0 and
+     white-space:nowrap so it can never be the part a long note truncates into. */
+  .activity-sub{ display:flex; align-items:baseline; font-size:11.5px; color:var(--ink-soft); margin-top:1px; max-width:100%; min-width:0; }
+  .activity-sub-note{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .activity-sub-date{ flex-shrink:0; white-space:nowrap; }
+  .activity-sub-note:not(:last-child)::after{ content:'·'; margin:0 5px; }
   .activity-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .activity-amt{ font-weight:700; font-size:13.5px; }
   .activity-amt.income{ color:var(--credit); }
   .activity-amt.expense{ color:var(--debit); }
   .activity-actions{ display:flex; gap:4px; }
+  /* Persistent, always-visible cue that the row itself opens something - not just a hover/active
+     background flash that only shows up mid-tap, after the user has already committed to it. */
+  .activity-chevron{ display:flex; align-items:center; color:var(--ink-soft); opacity:.55; flex-shrink:0; }
+  .activity-chevron svg{ width:15px; height:15px; }
 
   .cat-grid-2x2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   /* min-width:0 overrides the grid default (min-width:auto), which otherwise sizes each
@@ -423,10 +447,30 @@
   .history-filters-panel.collapsed{ display:none; }
   .history-filters-toggle{ position:relative; }
   .filter-count-badge{ display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:var(--link); color:#fff; font-size:10.5px; font-weight:700; line-height:1; }
-  .filter-inline-label{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-soft); font-weight:600; flex:1; min-width:140px; }
-  .filter-inline-label input{ flex:1; min-width:0; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:#fff; font-family:'Roboto Mono',monospace; color:var(--ink); }
+  .filter-inline-label{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-soft); font-weight:600; flex:1 1 140px; min-width:0; max-width:100%; }
+  .filter-inline-label input{ flex:1; min-width:0; max-width:100%; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:#fff; font-family:'Roboto Mono',monospace; color:var(--ink); }
+  /* Below the panel's own mobile/desktop split (see wireHistoryFilters in js/app.js) - each
+     inline label (Min/Max amount, From/To date) becomes the sole occupant of its row instead of
+     sharing one with a sibling. flex:1 1 140px + min-width:0 on the label and min-width:0 on its
+     input are already textbook-correct for letting a number input shrink below its native
+     content width, but a number input's spin-button control is real estate some mobile browser
+     engines add on top of the flex-computed box rather than inside it - two labels still fighting
+     for one narrow row is exactly the layout that turns "slightly wider than expected" into
+     "wider than the viewport." One per row removes the fight entirely, independent of whichever
+     engine-specific rendering quirk is actually adding the extra width on a given device. */
+  @media (max-width:780px){
+    .filter-inline-label{ flex:1 1 100%; }
+  }
   .active-filter-chips{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; }
-  .filter-chip{ display:inline-flex; align-items:center; padding:5px 12px; border-radius:999px; background:var(--bg); border:1px solid var(--line); font-size:12px; font-weight:600; color:var(--ink-soft); }
+  .filter-chip{ display:inline-flex; align-items:center; gap:5px; padding:5px 6px 5px 12px; border-radius:999px; background:var(--bg); border:1px solid var(--line); font-size:12px; font-weight:600; color:var(--ink-soft); }
+  /* A 44x44 tap target (WCAG's minimum) on an icon this small would visually bloat the whole
+     chip if built from real padding - the ::before pseudo-element instead expands only the
+     CLICKABLE area (inset:-14px around a 16px box = 44x44) while the chip itself stays compact.
+     position:relative on the button anchors that pseudo-element to the button, not the chip. */
+  .filter-chip-remove{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; padding:0; border:none; border-radius:50%; background:none; color:var(--ink-soft); flex-shrink:0; }
+  .filter-chip-remove::before{ content:''; position:absolute; inset:-14px; }
+  .filter-chip-remove:hover{ background:rgba(0,0,0,.08); color:var(--ink); }
+  .filter-chip-remove svg{ width:10px; height:10px; }
   .filter-chip-clear{ font-size:12px; font-weight:700; color:var(--link); background:none; border:none; padding:5px 4px; text-decoration:underline; }
 
   .report-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:10px; }

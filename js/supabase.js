@@ -166,7 +166,32 @@
     if(table==='budgets') return r=>r.category;
     return r=>r.id;
   }
+  // Every error object this file captures eventually lands in one of two places: the IndexedDB
+  // diagnostic log (via logSyncError/diagLogPage), or one of the localStorage-backed guard-rail
+  // stores (permanentlyRejectedRecords/permanentlyRejectedDeletes) that Data Integrity Check and
+  // the retry loops depend on. Neither ever capped error.message's length - confirmed in
+  // production as a real problem, not a theoretical one: six real diagnostic-log entries each
+  // carried Trackr's own ~28KB index.html document as their "message" (see the SW fetch-handler
+  // fix above for why that happened), accounting for 91.5% of an 11-day log's total size on
+  // their own. Applied at the SOURCE, once, right where every error first gets captured -
+  // everything downstream (the diag log, both rejection stores) inherits the cap automatically,
+  // rather than needing the same limit re-applied at every place that later reads or displays
+  // the message.
+  const ERROR_MESSAGE_CAP = 500;
+  function capErrorMessage(error){
+    if(!error || typeof error.message !== 'string' || error.message.length <= ERROR_MESSAGE_CAP) return error;
+    return { ...error, message: error.message.slice(0, ERROR_MESSAGE_CAP) + ' [truncated]' };
+  }
+  // Same cap, for the pull path's catch blocks below, which build a plain message STRING
+  // directly (e.message || String(e)) rather than the {code,message,...} shape the rest of this
+  // file passes around - kept as its own tiny helper rather than forcing that shape just to
+  // reuse capErrorMessage.
+  function capMessageStr(str){
+    if(typeof str !== 'string' || str.length <= ERROR_MESSAGE_CAP) return str;
+    return str.slice(0, ERROR_MESSAGE_CAP) + ' [truncated]';
+  }
   function logSyncError(op, error){
+    error = capErrorMessage(error);
     const ids = op.kind==='upsert'
       ? op.rows.map(syncedRowKeyOf(op.table)).filter(Boolean)
       : Object.values(op.match||{});
@@ -211,6 +236,7 @@
   }
   async function recordPermanentlyRejected(table, ids, error){
     if(!ids.length) return;
+    error = capErrorMessage(error);
     try{
       const store = await getPermanentlyRejectedRecords();
       if(!Array.isArray(store[table])) store[table] = [];
@@ -261,6 +287,7 @@
     }catch(e){ return {}; }
   }
   async function recordPermanentlyRejectedDelete(table, match, error){
+    error = capErrorMessage(error);
     try{
       const store = await getPermanentlyRejectedDeletes();
       if(!Array.isArray(store[table])) store[table] = [];
@@ -379,6 +406,25 @@
   // because 42501/23503 need their own copy in reasonFor() (js/app.js) to explain what kind of
   // rejection it is, not because other codes are treated any differently below.
   const PERMANENT_FAILURE_CODES = new Set([RLS_VIOLATION_CODE, FK_VIOLATION_CODE]);
+  // PGRST303 ("JWT issued at future") - Postgrest rejecting a request because the access token's
+  // iat looks like it's ahead of the server's own clock. Confirmed in production across five
+  // tables and multiple builds, on a device with a network-synced, correct clock (not a device
+  // misconfiguration) - this is transient clock/token skew, resolved by minting a fresh token,
+  // NOT a genuine, unfixable rejection of this payload the way 42501/23503 are. Treating it as
+  // "permanent" (the fate every other resolved error gets below) would falsely flag a perfectly
+  // healthy record as unsyncable over what's really just a stale token. One session refresh, then
+  // one retry of the exact same request, before falling through to normal handling either way.
+  const JWT_CLOCK_SKEW_CODE = 'PGRST303';
+  // Shared across every concurrent caller (pullCloudData fires up to 6 table pulls at once, any
+  // number of which could hit PGRST303 from the same stale token simultaneously) so a burst of
+  // skew-triggered failures triggers exactly one refreshSession() call, not one per caller.
+  let sessionRefreshInFlight = null;
+  function refreshSessionOnce(){
+    if(!sessionRefreshInFlight){
+      sessionRefreshInFlight = supabaseClient.auth.refreshSession().catch(()=>{}).finally(()=>{ sessionRefreshInFlight = null; });
+    }
+    return sessionRefreshInFlight;
+  }
   // Last-resort safety net, for every synced table, immediately before any upsert ever reaches
   // Postgres: a duplicate key within a single batch makes the whole upsert fail with a cardinality
   // violation (21000) - and since that's a real response (not a thrown exception), the op used to
@@ -435,7 +481,11 @@
       // already used for exactly this reason - so the conflict target here must match.
       const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : op.table==='dismissed_duplicates' ? 'user_id,group_key' : 'id';
       const rows = dedupeRowsById(op.table, op.rows);
-      const { error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol });
+      let { error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol });
+      if(error && error.code===JWT_CLOCK_SKEW_CODE){
+        await refreshSessionOnce();
+        ({ error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol }));
+      }
       if(!error) return;
       logSyncError({ ...op, rows }, error);
       // See PERMANENT_FAILURE_CODES' own comment above - ANY error resolved here (not just
@@ -457,9 +507,16 @@
       await recordPermanentlyRejected(op.table, [keyOf(rows[0])], error);
       return; // Not thrown - the caller would otherwise queue this for a pointless retry.
     } else if(op.kind==='delete'){
-      let q = supabaseClient.from(op.table).delete();
-      Object.keys(op.match).forEach(k=>{ q = q.eq(k, op.match[k]); });
-      const { error } = await q;
+      const buildDeleteQuery = () => {
+        let q = supabaseClient.from(op.table).delete();
+        Object.keys(op.match).forEach(k=>{ q = q.eq(k, op.match[k]); });
+        return q;
+      };
+      let { error } = await buildDeleteQuery();
+      if(error && error.code===JWT_CLOCK_SKEW_CODE){
+        await refreshSessionOnce();
+        ({ error } = await buildDeleteQuery());
+      }
       if(!error) return;
       logSyncError(op, error);
       // A resolved error here is the server's word on this exact delete right now - but unlike
@@ -619,8 +676,14 @@
   /* ---------- Pull cloud data (source of truth when online) ---------- */
   async function pullTable(table, userId){
     const { data, error } = await supabaseClient.from(table).select('*').eq('user_id', userId);
-    if(error) throw error;
-    return data || [];
+    if(!error) return data || [];
+    if(error.code===JWT_CLOCK_SKEW_CODE){
+      await refreshSessionOnce();
+      const retry = await supabaseClient.from(table).select('*').eq('user_id', userId);
+      if(!retry.error) return retry.data || [];
+      throw retry.error;
+    }
+    throw error;
   }
   async function pullCloudData(userId){
     const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null, dismissedDuplicates:null, dismissedDuplicatesError:null };
@@ -638,13 +701,13 @@
     // their own regardless of whether accounts exists yet.
     const accountsPromise = pullTable('accounts', userId)
       .then(rows => { result.accounts = rows.map(fromAccountRow); })
-      .catch(e => { result.accountsError = { table:'accounts', code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine }; });
+      .catch(e => { result.accountsError = { table:'accounts', code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine }; });
     // Same isolation as accounts above, and for the same reason - dismissed_duplicates is newer
     // still and may not exist in every Supabase project yet, so it must never be able to poison
     // the four core tables' Promise.all below.
     const dismissedDuplicatesPromise = pullTable('dismissed_duplicates', userId)
       .then(rows => { result.dismissedDuplicates = rows.map(r=>r.group_key); })
-      .catch(e => { result.dismissedDuplicatesError = { table:'dismissed_duplicates', code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine }; });
+      .catch(e => { result.dismissedDuplicatesError = { table:'dismissed_duplicates', code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine }; });
     try{
       const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
         tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
@@ -675,7 +738,7 @@
       // guarantee the request actually reached anything, but distinguishes the common airplane-
       // mode/no-radio case from an actual server-side rejection (RLS, a timeout, a real network
       // error while apparently online), which is the ambiguity this is meant to resolve.
-      result.error = { table: e.__table || null, code: e.code || null, message: e.message || String(e), name: e.name || null, online: navigator.onLine };
+      result.error = { table: e.__table || null, code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine };
     }
     await accountsPromise;
     await dismissedDuplicatesPromise;

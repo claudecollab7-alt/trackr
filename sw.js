@@ -3,7 +3,7 @@
 // CACHE_NAME never changing between deploys is why updates used to go
 // unnoticed forever (the activate handler's old-cache cleanup had nothing to
 // clean, since the "old" and "new" cache name were identical).
-const SW_VERSION = 'v40';
+const SW_VERSION = 'v41';
 const CACHE_NAME = 'trackr-' + SW_VERSION;
 const ASSETS = ['./', './index.html', './css/styles.css', './js/app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
@@ -99,6 +99,21 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  // Cross-origin requests (Supabase's REST API, the CDN-hosted supabase-js bundle) must never
+  // reach the logic below - it exists purely to serve THIS APP'S OWN shell/assets, and its
+  // network-failure branch unconditionally falls back to cached index.html or the synthetic
+  // offline page. Before this check, that fallback applied to every GET regardless of origin -
+  // confirmed in production: six real diagnostic-log entries captured a cross-origin Supabase
+  // API call, made while genuinely offline, receiving Trackr's own index.html (~28KB each) back
+  // as its response body. supabase-js/postgrest-js has no way to parse that as JSON, so the
+  // entire HTML document became the surfaced error message - inflating the diagnostic log by
+  // ~168KB across those six events alone, and turning a plain, cleanly-classifiable network
+  // failure into a resolved-but-garbled response shape instead. Letting a cross-origin request
+  // fall through untouched here means it fails exactly the way a normal fetch() would when
+  // offline - a rejected promise, a real network error - which is what every offline-handling
+  // path in js/supabase.js (syncOrQueue, pullCloudData's own catch) already expects and handles
+  // correctly today; this SW was the only place still doing the wrong thing.
+  if (!event.request.url.startsWith(self.location.origin)) return;
   const isNavigation = event.request.mode === 'navigate';
   if (isNavigation) diagLog('fetch:navigate-start', event.request.url);
   event.respondWith(
