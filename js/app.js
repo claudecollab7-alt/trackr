@@ -308,6 +308,16 @@
     const [y,m,d] = dateStr.split('-').map(Number);
     return new Date(y, m-1, d).toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
   }
+  // Mobile History rows only ever have room for one of {full type/particulars, full date} at
+  // once (confirmed on a real 360px device) - rather than keep fighting for space, the date drops
+  // its year when the transaction is already unambiguous without one (this calendar year), and
+  // keeps it otherwise so an old entry doesn't read as if it happened this year. formatHuman is
+  // already exactly "day short-month year", so an older entry's short form IS formatHuman - no
+  // separate abbreviation needed for that branch.
+  function formatRowDateShort(dateStr){
+    const y = Number(dateStr.slice(0,4));
+    return y === new Date().getFullYear() ? formatShort(dateStr) : formatHuman(dateStr);
+  }
   function monthLabelFromDate(dateStr){
     const [y,m] = dateStr.split('-').map(Number);
     return new Date(y, m-1, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
@@ -734,8 +744,10 @@
     // short and load-bearing (confirmed reported as truncating mid-string, e.g. "19 Jul 2...")
     // and should never be the part that gets cut off.
     const noteText = t.note || (t.type==='income'?'Credit':'Debit');
+    // Two dates, CSS picks one (see .activity-sub-date-short/-full) - mobile's real 360px width
+    // only has room for a shortened date next to the note; desktop always shows the full one.
     const sub = showDate
-      ? `<span class="activity-sub-note">${escapeHtml(noteText)}</span><span class="activity-sub-date">${formatHuman(t.date)}</span>`
+      ? `<span class="activity-sub-note">${escapeHtml(noteText)}</span><span class="activity-sub-date activity-sub-date-short">${formatRowDateShort(t.date)}</span><span class="activity-sub-date activity-sub-date-full">${formatHuman(t.date)}</span>`
       : `<span class="activity-sub-note">${escapeHtml(noteText)}</span>`;
     let actionsHtml = '';
     if(withActions){
@@ -1087,7 +1099,16 @@
   function positionAboveBottomNav(el, margin){
     const nav = document.querySelector('.bottom-nav');
     const navVisible = nav && getComputedStyle(nav).display !== 'none';
-    const bottomOffset = navVisible ? (window.innerHeight - nav.getBoundingClientRect().top + margin) : margin;
+    // window.innerHeight is the layout viewport, which on iOS Safari can be taller than what's
+    // actually on screen while the address bar is showing (the same gap min-height:100vh used to
+    // fall into - see the html,body/body rules in styles.css). visualViewport.height tracks the
+    // ACTUALLY-visible area live as the toolbar shows/hides/the keyboard opens, so anchoring
+    // against it (falling back to innerHeight where visualViewport isn't available) keeps this
+    // glued to the real screen edge instead of a sometimes-larger layout viewport's edge.
+    const viewportBottom = window.visualViewport
+      ? window.visualViewport.height + window.visualViewport.offsetTop
+      : window.innerHeight;
+    const bottomOffset = navVisible ? (viewportBottom - nav.getBoundingClientRect().top + margin) : margin;
     el.style.bottom = Math.round(bottomOffset) + 'px';
   }
   // Bottom-anchoring alone isn't quite enough either, at one specific edge: if the page is
@@ -5780,6 +5801,39 @@
     if(el) animateOut(el);
     setBottomSpaceReservation('updateBanner', 0);
   }
+
+  // Nothing in this file recomputed on resize/orientationchange/visualViewport-resize before this -
+  // confirmed by grep, and confirmed as the cause of two separate real-device reports: an Android
+  // alert-slider toggle changing display-cutout insets without the layout ever re-running (content
+  // clipped at the right edge until navigating away and back forced a fresh render), and a
+  // bottom-docked toast/banner positioned against a stale window.innerHeight while iOS Safari's
+  // toolbar was mid-transition. Only re-measures and repositions whatever's currently on screen -
+  // never calls into sync/Supabase/storage, so this can fire as often as the browser likes without
+  // side effects beyond a layout recalculation.
+  function reflowBottomDockedUI(){
+    const toastEl = document.getElementById('app-toast');
+    if(toastEl && toastEl.classList.contains('show')){
+      positionAboveBottomNav(toastEl, 14);
+      setBottomSpaceReservation('toast', toastEl.getBoundingClientRect().height + 14);
+    }
+    const bannerEl = document.getElementById('sw-update-banner');
+    if(bannerEl && bannerEl.classList.contains('open')){
+      positionAboveBottomNav(bannerEl, 14);
+      setBottomSpaceReservation('updateBanner', bannerEl.getBoundingClientRect().height + 14);
+    }
+  }
+  // Debounced rather than run on every event: a toolbar collapse/expand or an inset recompute
+  // fires several resize/visualViewport events in quick succession as it animates, and this only
+  // needs to land once the dust settles, not on every intermediate frame. 150ms is short enough to
+  // feel immediate once the gesture ends, long enough to coalesce a whole burst into one pass.
+  let viewportReflowTimer = null;
+  function scheduleViewportReflow(){
+    clearTimeout(viewportReflowTimer);
+    viewportReflowTimer = setTimeout(reflowBottomDockedUI, 150);
+  }
+  window.addEventListener('resize', scheduleViewportReflow);
+  window.addEventListener('orientationchange', scheduleViewportReflow);
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', scheduleViewportReflow);
 
   if ('serviceWorker' in navigator) {
     document.getElementById('sw-update-dismiss').addEventListener('click', hideUpdateBanner);
