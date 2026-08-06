@@ -40,8 +40,21 @@
      the env(safe-area-inset-*)/100vw fix elsewhere in this file for this specific report's
      actual root cause) - but between "recoverable via a scrollbar" and "silently unreachable,"
      unreachable is worse, and this is the backstop for whatever this class of bug turns out to
-     be next time, not just this one instance of it. */
-  html,body{margin:0;padding:0;height:100%; overflow-x:auto; -webkit-text-size-adjust:100%; text-size-adjust:100%; touch-action:pan-x pan-y;}
+     be next time, not just this one instance of it.
+     overflow-y:hidden is added explicitly alongside it, not left unset. Per the CSS Overflow
+     spec, an axis left at its initial 'visible' value computes to 'auto' the moment the OTHER
+     axis is anything but visible/clip - true for overflow-x:hidden before this file's history
+     and still true for overflow-x:auto now, so html/body have had an IMPLICIT overflow-y:auto
+     (a real, independently-scrollable second scroll container on the vertical axis, not just a
+     clipping rule) for as long as overflow-x has been non-visible here, regardless of which
+     round set it. That's one confirmed half of a real two-nested-scroll-container bug reported
+     on iOS Safari (the other half is body's min-height:100vh below): whenever body's box is
+     taller than the actually-visible viewport, that slack was independently touch-scrollable
+     right here at the root, dragging the whole app shell - .topbar included - within the real
+     screen instead of just being inert overflow. Only .views (see below) should ever be a real
+     scroll container; this makes that explicit and load-bearing instead of an accidental side
+     effect of the x-axis rule. */
+  html,body{margin:0;padding:0;height:100%; overflow-x:auto; overflow-y:hidden; -webkit-text-size-adjust:100%; text-size-adjust:100%; touch-action:pan-x pan-y;}
   /* html's own background, mirroring body's --bg per theme (see applyTheme() in js/app.js,
      which now sets data-theme on <html> too, not just <body>) - a CSS variable redefined on
      body[data-theme=X] cascades to body's descendants only, never to html, since html is body's
@@ -62,7 +75,17 @@
     color:var(--ink);
     background:var(--bg);
     display:flex;
+    /* 100vh is a well-documented iOS Safari trap: it resolves to the LARGEST possible viewport -
+       chrome (address bar/toolbar) fully collapsed - not the currently-visible one. Since the
+       toolbar is showing more often than not, body's box ends up genuinely taller than what's on
+       screen, and that slack was independently scrollable (see overflow-y:hidden above) - the
+       confirmed other half of the real two-nested-scroll-container bug reported on iOS. 100dvh
+       (dynamic viewport height) tracks the ACTUAL current visible area live as the toolbar
+       shows/hides, so it's declared second and wins in any browser that supports it; the 100vh
+       line above it is the fallback for anything that doesn't (an unsupported value in a
+       declaration is ignored outright, so the earlier one stands - no @supports needed). */
     min-height:100vh;
+    min-height:100dvh;
     -webkit-font-smoothing:antialiased;
   }
   button{font-family:inherit; cursor:pointer;}
@@ -156,7 +179,13 @@
   .bottom-nav .tab-btn.fab .tab-label{ display:none; }
 
   main{ flex:1; display:flex; flex-direction:column; overflow:hidden; }
-  .topbar{ position:sticky; top:0; z-index:30; margin:0 -30px; padding:18px 30px; display:flex; justify-content:space-between; align-items:center; background:rgba(241,244,249,.7); backdrop-filter:blur(18px) saturate(160%); -webkit-backdrop-filter:blur(18px) saturate(160%); border-bottom:1px solid rgba(15,23,42,.06); }
+  /* padding-top (not the sticky `top` offset) carries the inset, matching the pattern already
+     used correctly on #pinlock-overlay: this element's own box still starts at true y:0 of
+     .views' scrollport, so its blurred background still extends full-bleed under the status bar/
+     Dynamic Island in standalone - only the CONTENT inside is pushed down to clear it. env()
+     resolves to 0 in a plain Safari tab (Safari's own chrome, not the page, occupies that space
+     there) and on Android, so this is a no-op everywhere except an iOS standalone install. */
+  .topbar{ position:sticky; top:0; z-index:30; margin:0 -30px; padding:calc(18px + env(safe-area-inset-top)) 30px 18px; display:flex; justify-content:space-between; align-items:center; background:rgba(241,244,249,.7); backdrop-filter:blur(18px) saturate(160%); -webkit-backdrop-filter:blur(18px) saturate(160%); border-bottom:1px solid rgba(15,23,42,.06); }
   .topbar-left{ display:flex; align-items:center; gap:10px; }
   .topbar h1{ font-size:19px; margin:0; font-weight:800; letter-spacing:-.2px; }
   .topbar-right{ display:flex; align-items:center; gap:10px; }
@@ -168,7 +197,12 @@
      bottom padding - reserving room for a bottom-docked toast/banner - without needing to know or
      hardcode this responsive base value itself; it just reads the variable and adds to it, then
      clears back to '' (falling back to this rule) once nothing needs the room any more. */
-  .views{ flex:1; overflow-y:auto; overflow-x:hidden; padding:0 30px 50px; position:relative; --views-base-pb:50px; transition:padding-bottom var(--anim-duration) var(--anim-ease); }
+  /* -webkit-overflow-scrolling:touch gives this, the one true scroll container, native momentum
+     scrolling on iOS. overscroll-behavior-y:contain stops a scroll gesture that reaches .views'
+     own top/bottom from "chaining" into whatever's behind it - defense in depth alongside the
+     html,body overflow-y:hidden fix above, so even if some future bug makes an ancestor tall
+     enough to want to scroll again, a gesture inside .views can't drag it. */
+  .views{ flex:1; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; overscroll-behavior-y:contain; padding:0 30px 50px; position:relative; --views-base-pb:50px; transition:padding-bottom var(--anim-duration) var(--anim-ease); }
   .view{ display:none; max-width:1100px; position:relative; padding-top:18px; }
   .view.active{ display:block; animation: viewFadeIn var(--anim-duration) var(--anim-ease); }
   @keyframes viewFadeIn{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:translateY(0); } }
@@ -308,6 +342,17 @@
   .activity-sub{ display:flex; flex-wrap:wrap; align-items:baseline; column-gap:5px; font-size:11.5px; color:var(--ink-soft); margin-top:1px; max-width:100%; min-width:0; }
   .activity-sub-note{ flex:1 1 90px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .activity-sub-date{ flex-shrink:0; white-space:nowrap; }
+  /* Two dates are rendered per row (see buildActivityRow in app.js), only one ever visible -
+     mobile shows day+short-month, omitting the year when it's the current year (freeing ~5
+     characters for the note next to it, since a real 360px device is short on room); desktop
+     always shows the full day+month+year regardless of year, since space isn't the constraint
+     there. -full stays last in source order so the :not(:last-child) separator rule above still
+     fires correctly regardless of which sibling is the display:none one. */
+  .activity-sub-date-full{ display:none; }
+  @media (min-width:781px){
+    .activity-sub-date-short{ display:none; }
+    .activity-sub-date-full{ display:inline; }
+  }
   .activity-sub-note:not(:last-child)::after{ content:'·'; margin-left:5px; }
   .activity-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .activity-amt{ font-weight:700; font-size:13.5px; }
@@ -771,7 +816,11 @@
   .theme-toggle.on .theme-toggle-thumb{ transform:translateX(20px); }
 
   /* ---------- Search overlay ---------- */
-  .search-overlay{ position:fixed; inset:0; background:rgba(15,23,42,.45); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); z-index:300; display:none; align-items:flex-start; justify-content:center; padding:64px 16px 20px; opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
+  /* Shared by every modal dialog on this class (search, schedule, category/tx/debt/goal detail,
+     diagnostics, notifications) - all fixed inset:0, so all touch the physical top edge. The 64px
+     clearance was a flat guess that happened to just clear a Dynamic Island's ~59px inset on one
+     specific device; env() makes it correct on any device instead of coincidentally close on one. */
+  .search-overlay{ position:fixed; inset:0; background:rgba(15,23,42,.45); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); z-index:300; display:none; align-items:flex-start; justify-content:center; padding:calc(64px + env(safe-area-inset-top)) 16px 20px; opacity:0; transition:opacity var(--anim-duration) var(--anim-ease); }
   /* Lets View Log (normally z-index 300, same as every other .search-overlay) render above the
      login/signup gate (z-index 4000) when opened via the long-press-the-logo shortcut on that
      screen - the one path a signed-out user has to their own diagnostic log, since the rest of
@@ -941,7 +990,11 @@
     .bottom-nav{ display:flex; }
     main{ padding-bottom:0; }
     .views{ padding:0 16px 90px; --views-base-pb:90px; }
-    .topbar{ margin:0 -16px; padding:16px 16px; }
+    /* Must keep the env(safe-area-inset-top) term from the base .topbar rule above - this media
+       query used to overwrite it outright with a flat 16px 16px, silently discarding the inset
+       on every phone-width screen (<=780px is every phone, not just some), which is exactly where
+       the standalone-iOS status-bar collision this fixes actually happens. */
+    .topbar{ margin:0 -16px; padding:calc(16px + env(safe-area-inset-top)) 16px 16px; }
     .grid-2x2{ grid-template-columns:1fr; }
     .cat-columns{ flex-direction:column; }
     .report-summary{ grid-template-columns:1fr; }
