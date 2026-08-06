@@ -25,7 +25,23 @@
     --anim-ease:cubic-bezier(.16,1,.3,1);
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; tap-highlight-color:transparent; letter-spacing:normal; word-spacing:normal; text-justify:none; text-align-last:auto;}
-  html,body{margin:0;padding:0;height:100%; overflow-x:hidden; -webkit-text-size-adjust:100%; text-size-adjust:100%; touch-action:pan-x pan-y;}
+  /* overflow-x was hidden here, not auto - deliberately changed. Every previously-fixed
+     stray-horizontal-scrollbar bug in this app's history was fixed by adding overflow-x:hidden
+     to the SPECIFIC container that was overflowing (see .views, #home-activity-list/
+     #home-breakdown-list, .table-scroll, .search-overlay-body - each already scoped there, each
+     confirmed still present), not by relying on this root-level rule - so none of those are
+     re-exposed by this change; this only ever engages for overflow that escapes every one of
+     those local containers, which is exactly the failure mode being guarded against here.
+     A real production report (a hardware alert-slider toggle triggering a display-cutout/inset
+     recompute on a specific Android device) showed genuine CONTENT CLIPPING at the right edge -
+     a toolbar icon, button text, and a link cut off mid-glyph, not just an empty strip. hidden
+     discards whatever overflows past the edge outright; auto instead leaves it reachable by
+     scrolling. A scrollbar appearing at all is still a real bug worth fixing at its source (see
+     the env(safe-area-inset-*)/100vw fix elsewhere in this file for this specific report's
+     actual root cause) - but between "recoverable via a scrollbar" and "silently unreachable,"
+     unreachable is worse, and this is the backstop for whatever this class of bug turns out to
+     be next time, not just this one instance of it. */
+  html,body{margin:0;padding:0;height:100%; overflow-x:auto; -webkit-text-size-adjust:100%; text-size-adjust:100%; touch-action:pan-x pan-y;}
   /* html's own background, mirroring body's --bg per theme (see applyTheme() in js/app.js,
      which now sets data-theme on <html> too, not just <body>) - a CSS variable redefined on
      body[data-theme=X] cascades to body's descendants only, never to html, since html is body's
@@ -275,12 +291,24 @@
   .cat-badge{ width:36px; height:36px; border-radius:50%; color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
   .activity-name{ font-size:13.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* Note and date are separate flex children, not one truncating string (see buildActivityRow
-     in js/app.js) - only .activity-sub-note shrinks/ellipsizes; the date has flex-shrink:0 and
-     white-space:nowrap so it can never be the part a long note truncates into. */
-  .activity-sub{ display:flex; align-items:baseline; font-size:11.5px; color:var(--ink-soft); margin-top:1px; max-width:100%; min-width:0; }
-  .activity-sub-note{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+     in js/app.js) - the date has flex-shrink:0 and white-space:nowrap so it can never be the
+     part a long note truncates into.
+     CORRECTION to the original version of this fix: .activity-sub-note had no flex-basis of its
+     own (defaulting to auto = its full, unwrapped text width), so on a real device narrower than
+     this was tested at (360px, not the 390px this was verified against), the note's available
+     space could shrink to a few stray pixels - not a readable ellipsis, an actually-broken
+     render (a lone "·" separator clipped mid-glyph into what looked like a stray "["). Giving the
+     note an explicit flex-basis is still not enough on its own - flex-shrink alone has no floor,
+     it will crush a box to zero-and-below-readable given a narrow enough container. flex-wrap on
+     the container is what actually fixes it: once the note's basis + the date's own width can no
+     longer both fit, the date wraps to its own second line instead of both continuing to
+     compress past readability - so at 360px the note gets a full line to ellipsis a long string
+     within (materially wider than being squeezed alongside a full-width date), and the date
+     ALWAYS renders in full, on whichever line it ends up on. */
+  .activity-sub{ display:flex; flex-wrap:wrap; align-items:baseline; column-gap:5px; font-size:11.5px; color:var(--ink-soft); margin-top:1px; max-width:100%; min-width:0; }
+  .activity-sub-note{ flex:1 1 90px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .activity-sub-date{ flex-shrink:0; white-space:nowrap; }
-  .activity-sub-note:not(:last-child)::after{ content:'·'; margin:0 5px; }
+  .activity-sub-note:not(:last-child)::after{ content:'·'; margin-left:5px; }
   .activity-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .activity-amt{ font-weight:700; font-size:13.5px; }
   .activity-amt.income{ color:var(--credit); }
@@ -945,8 +973,22 @@
        reset — you're back in.") was leaving visibly empty space, since every toast used to claim
        the same width regardless of how little text it actually had. width:max-content sizes it to
        its content, up to max-width as a cap so a genuinely long message still wraps sensibly
-       instead of stretching edge-to-edge or overflowing the viewport. */
-    transition:transform var(--anim-duration) var(--anim-ease); width:max-content; max-width:min(420px, calc(100vw - 32px));
+       instead of stretching edge-to-edge or overflowing the viewport.
+       max-width previously read calc(100vw - 32px) - plain 100vw, with no inset awareness at all,
+       on an element whose OWN vertical position one line up is already inset-aware
+       (env(safe-area-inset-bottom)). With viewport-fit=cover, 100vw is defined to stay pinned to
+       the full physical width regardless of any cutout/inset - it will not itself desync under a
+       transient inset change. But this element's bottom offset DOES move with insets, and if a
+       cutout-driven reflow ever changes how much of that 100vw is actually usable on either side
+       (a curved-edge display, a landscape safe area, or the OS briefly resizing the WebView's own
+       content area for a heads-up system overlay - unconfirmed without a real device or display
+       cutout, which nothing in this repo's test tooling can emulate), a width computed with no
+       inset offset at all is left with no way to account for it, while this element's own
+       position already does. Subtracting BOTH left/right insets from the width calculation ties
+       it to the exact same inset values the position already depends on, so the two can only ever
+       move together - not a guess at what the real desync mechanism is, just removing the one
+       asymmetry that's visible in the CSS regardless of what turns out to be causing it. */
+    transition:transform var(--anim-duration) var(--anim-ease); width:max-content; max-width:min(420px, calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right) - 32px));
   }
   @media (prefers-reduced-motion: reduce){ #app-toast{ transition:none; } }
   #app-toast.show{ transform:translateX(-50%) translateY(0); }
