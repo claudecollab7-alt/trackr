@@ -735,20 +735,38 @@
     });
   }
 
-  function buildActivityRow(t, withActions, showDate){
-    const row = document.createElement('div'); row.className='activity-row clickable-row';
+  // historyMode is scoped ONLY to the main History list call site (renderHistoryList) - every
+  // other caller (Home's Recent Activity, Add Entry's Today list, category detail, global
+  // search) omits it and gets exactly the same markup/behavior as before this round, unaffected.
+  function buildActivityRow(t, withActions, showDate, historyMode){
+    const row = document.createElement('div'); row.className='activity-row clickable-row' + (historyMode ? ' history-row' : '');
     const color = t.type==='income' ? '#16A34A' : categoryColor(t.category);
     const badgeChar = t.type==='income' ? '↑' : categoryInitial(t.category);
+    const typeLabel = t.type==='income' ? 'Credit' : 'Debit';
     // Note and date are separate flex children (not one combined truncating string) so a long
     // particulars note can only ever eat into ITS OWN ellipsis, never push the date - a date is
     // short and load-bearing (confirmed reported as truncating mid-string, e.g. "19 Jul 2...")
     // and should never be the part that gets cut off.
-    const noteText = t.note || (t.type==='income'?'Credit':'Debit');
+    const noteText = t.note || typeLabel;
     // Two dates, CSS picks one (see .activity-sub-date-short/-full) - mobile's real 360px width
     // only has room for a shortened date next to the note; desktop always shows the full one.
     const sub = showDate
       ? `<span class="activity-sub-note">${escapeHtml(noteText)}</span><span class="activity-sub-date activity-sub-date-short">${formatRowDateShort(t.date)}</span><span class="activity-sub-date activity-sub-date-full">${formatHuman(t.date)}</span>`
       : `<span class="activity-sub-note">${escapeHtml(noteText)}</span>`;
+    // Rendered ALONGSIDE `sub` above, not instead of it - CSS toggles which is visible per
+    // breakpoint (see .history-row rules in styles.css), so History's desktop row - not reported
+    // as having any problem - keeps the exact markup/behavior every other row already uses.
+    // Real device evidence: History's per-row edit/delete icons crush the category name into
+    // truncating where Home's equivalent row (no icons) doesn't, on the same device/data. Tapping
+    // a row already opens the detail overlay, which has its own Edit/Delete - the icons here were
+    // redundant on mobile, where the room they eat into is scarcest. Three always-stacked lines
+    // (category on its own from .activity-name above, then type+particulars, then date) replace
+    // the old flex-wrap single line so nothing is fighting another element for shared horizontal
+    // space; each line gets ellipsis-safe overflow handling of its own if it's ever genuinely
+    // too long, but real category names now have the full row width to themselves.
+    const historySubMobile = historyMode
+      ? `<div class="history-sub-mobile"><div class="history-sub-note">${escapeHtml(t.note ? `${typeLabel} · ${t.note}` : typeLabel)}</div><div class="history-sub-date">${formatRowDateShort(t.date)}</div></div>`
+      : '';
     let actionsHtml = '';
     if(withActions){
       actionsHtml = `<div class="activity-actions"><button class="icon-btn-sm edit-btn" data-id="${t.id}" aria-label="Edit entry">${icon('edit',14)}</button><button class="icon-btn-sm del-btn" data-id="${t.id}" aria-label="Delete entry">${icon('trash',14)}</button></div>`;
@@ -757,7 +775,7 @@
     // edit/delete buttons, when present) opens something, rather than relying on a user to
     // discover that by guessing or by an active-state background flash that only ever shows up
     // mid-tap, after the fact.
-    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div></div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}<span class="activity-chevron" aria-hidden="true">${icon('chevronRight',15)}</span></div>`;
+    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div>${historySubMobile}</div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}<span class="activity-chevron" aria-hidden="true">${icon('chevronRight',15)}</span></div>`;
     row.dataset.category = t.category; row.dataset.txType = t.type;
     row.addEventListener('click', (e)=>{
       if(e.target.closest('.activity-actions')) return;
@@ -1120,6 +1138,9 @@
   // reaching it (however the user got there) always leaves the dock zone clear. Keyed per-source
   // so the toast and the update banner don't clobber each other's reservation.
   const bottomSpaceReservations = {};
+  // Bookkeeping only, read by gatherLayoutDiagnostics() - does not change what this function
+  // does or what padding gets applied, just records the last call for the diagnostics dump.
+  let lastBottomSpaceReservationCall = null;
   function setBottomSpaceReservation(key, px){
     if(px > 0) bottomSpaceReservations[key] = px; else delete bottomSpaceReservations[key];
     const views = document.querySelector('.views');
@@ -1131,6 +1152,7 @@
     } else {
       views.style.paddingBottom = '';
     }
+    lastBottomSpaceReservationCall = { key, px, max, at: new Date().toISOString() };
   }
   // Distinguishes a genuine connectivity/server failure from a transient JWT clock-skew rejection
   // ("JWT issued at future" et al - Supabase/PostgREST rejecting a token because the device's
@@ -1832,7 +1854,7 @@
     countNote.textContent = `Showing ${list.length} entr${list.length===1?'y':'ies'}.`;
     container.appendChild(countNote);
     if(list.length===0){ container.appendChild(Object.assign(document.createElement('p'), { className:'empty-note', textContent:'No entries match.' })); return; }
-    list.forEach(t=> container.appendChild(buildActivityRow(t, true, true)));
+    list.forEach(t=> container.appendChild(buildActivityRow(t, true, true, true)));
     wireActivityActions(container);
   }
 
@@ -6002,12 +6024,12 @@
     }catch(e){}
     return false;
   }
-  function downloadDiagLogAsTxt(text){
+  function downloadDiagLogAsTxt(text, filenamePrefix){
     try{
       const blob = new Blob([text], { type:'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `trackr-diagnostics-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.txt`;
+      a.href = url; a.download = `${filenamePrefix || 'trackr-diagnostics'}-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.txt`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(()=> URL.revokeObjectURL(url), 2000);
       return true;
@@ -6034,5 +6056,160 @@
     const text = (diagLogResults && diagLogResults.textContent) || formatDiagLog(await readDiagLog());
     showAppToast(downloadDiagLogAsTxt(text) ? 'Log downloaded' : "Couldn't start the download — select the log and copy manually");
   });
+
+  // Read-only, purely additive: gathers a snapshot of viewport/layout state at the moment the
+  // button is pressed and hands it to the SAME download mechanism as the install diagnostics log
+  // above (downloadDiagLogAsTxt). Nothing here changes layout, styles, or positioning - the only
+  // DOM write is a single temporary, non-rendering probe element (position:fixed, visibility:
+  // hidden, off-screen, zero interaction), appended, measured, and removed synchronously within
+  // one function call before anything else runs. Exists because three straight rounds of fixing
+  // the iOS bottom-nav gap from inference/reasoning (containing-block theories, viewport-height
+  // theories) all failed on the real device - this collects the actual numbers instead of another
+  // guess.
+  function readEnvVar(name, sentinel){
+    // env()'s fallback argument only engages when the named variable is UNDEFINED on this
+    // platform (a device/browser with no notion of it at all, e.g. desktop, or an Android device
+    // outside a display cutout context) - not when it's defined and legitimately zero. Reading it
+    // back with a distinctive sentinel value that would never occur naturally lets the two cases
+    // be told apart: if the computed padding comes back AS the sentinel, the variable was never
+    // defined at all; any other value (including a real "0px") is the platform's actual answer.
+    const jsProp = 'padding' + name.charAt(0).toUpperCase() + name.slice(1); // name is 'top'|'right'|'bottom'|'left'
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed; visibility:hidden; pointer-events:none; left:-9999px; top:-9999px; width:0; height:0; margin:0; padding:0;';
+    probe.style.setProperty(`padding-${name}`, `env(safe-area-inset-${name}, ${sentinel}px)`);
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe)[jsProp];
+    document.body.removeChild(probe);
+    const isFallback = resolved === `${sentinel}px`;
+    return { resolved, isFallback };
+  }
+  async function gatherLayoutDiagnostics(){
+    const lines = [];
+    const push = (label, value) => lines.push(`${label}: ${value}`);
+    const section = (title) => { lines.push(''); lines.push(`--- ${title} ---`); };
+    const rect = (sel) => {
+      const el = typeof sel === 'string' ? document.querySelector(sel) : sel;
+      if(!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, height: r.height };
+    };
+    const cs = (el, prop) => el ? getComputedStyle(el)[prop] : null;
+
+    lines.push(`Trackr Layout Diagnostics — ${new Date().toISOString()}`);
+
+    section('ENVIRONMENT');
+    push('navigator.standalone', typeof navigator.standalone !== 'undefined' ? navigator.standalone : '(undefined - not iOS Safari)');
+    push('matchMedia(display-mode: standalone).matches', window.matchMedia('(display-mode: standalone)').matches);
+    push('devicePixelRatio', window.devicePixelRatio);
+    push('userAgent', navigator.userAgent);
+    push('SW_VERSION (running)', await getRunningSwVersion() || '(none - no active controller)');
+
+    section('VIEWPORT');
+    push('window.innerWidth / innerHeight', `${window.innerWidth} / ${window.innerHeight}`);
+    push('window.outerWidth / outerHeight', `${window.outerWidth} / ${window.outerHeight}`);
+    push('screen.width / height', `${screen.width} / ${screen.height}`);
+    push('screen.availWidth / availHeight', `${screen.availWidth} / ${screen.availHeight}`);
+    push('documentElement.clientWidth / clientHeight', `${document.documentElement.clientWidth} / ${document.documentElement.clientHeight}`);
+    if(window.visualViewport){
+      const vv = window.visualViewport;
+      push('visualViewport.width / height', `${vv.width} / ${vv.height}`);
+      push('visualViewport.offsetLeft / offsetTop', `${vv.offsetLeft} / ${vv.offsetTop}`);
+      push('visualViewport.pageLeft / pageTop', `${vv.pageLeft} / ${vv.pageTop}`);
+      push('visualViewport.scale', vv.scale);
+    } else {
+      push('visualViewport', '(unavailable)');
+    }
+
+    section('SAFE AREA INSETS (measured via a temporary, non-rendering probe element, then removed)');
+    for(const side of ['top','right','bottom','left']){
+      const withSentinel = readEnvVar(side, 999999);
+      push(`env(safe-area-inset-${side})`, withSentinel.isFallback ? 'UNDEFINED on this platform (fallback engaged)' : withSentinel.resolved);
+      const withZeroFallback = readEnvVar(side, 0);
+      push(`env(safe-area-inset-${side}, 0px)`, withZeroFallback.resolved);
+    }
+
+    section('GEOMETRY (getBoundingClientRect, in viewport coordinates)');
+    const activeViewForContext = document.querySelector('.view.active');
+    push('Active view when captured', activeViewForContext ? (activeViewForContext.id || '(no id)') : '(none active)');
+    const geomTargets = [
+      ['document.documentElement', document.documentElement],
+      ['document.body', document.body],
+      ['main', document.querySelector('main')],
+      ['.views', document.querySelector('.views')],
+      ['.bottom-nav', document.querySelector('.bottom-nav')],
+    ];
+    const viewsEl = document.querySelector('.views');
+    const lastChildOfViews = viewsEl ? viewsEl.lastElementChild : null;
+    const lastChildOfViewsLabel = `.views last child (<${lastChildOfViews ? lastChildOfViews.tagName.toLowerCase() : '?'}${lastChildOfViews && lastChildOfViews.id ? '#'+lastChildOfViews.id : ''}${lastChildOfViews && lastChildOfViews.className ? '.'+String(lastChildOfViews.className).replace(/\s+/g,'.') : ''}>)`;
+    geomTargets.push([lastChildOfViewsLabel, lastChildOfViews]);
+    // .views' children are the .view panels (Home/Insights/.../More), most display:none - its
+    // LITERAL last DOM child (above, as specifically requested) is whichever panel is defined
+    // last in index.html, not necessarily the one on screen right now. A plain "last element
+    // child of the active .view" turned out unreliable too (More's own last child is a hidden
+    // sub-menu panel, giving a nonsensical 0x0 rect) - the one thing that's both meaningful and
+    // consistent across every view is the last actual transaction/list row rendered on screen,
+    // if the active view has any, so that's what this reports instead.
+    const activeView = document.querySelector('.view.active');
+    const activeRows = activeView ? activeView.querySelectorAll('.activity-row') : [];
+    const lastVisibleInActiveView = activeRows.length ? activeRows[activeRows.length-1] : null;
+    const lastVisibleLabel = `[bonus, not explicitly requested] last .activity-row in the active .view (<${activeView ? activeView.id||activeView.tagName.toLowerCase() : '?'}>, ${activeRows.length} row(s) found)`;
+    geomTargets.push([lastVisibleLabel, lastVisibleInActiveView]);
+    const geoms = {};
+    for(const [label, el] of geomTargets){
+      const r = rect(el);
+      geoms[label] = r;
+      push(label, r ? `top=${r.top.toFixed(2)} bottom=${r.bottom.toFixed(2)} height=${r.height.toFixed(2)}` : '(not found)');
+    }
+
+    section('COMPUTED STYLES');
+    const htmlEl = document.documentElement, bodyEl = document.body, mainEl = document.querySelector('main'), navEl = document.querySelector('.bottom-nav');
+    push('html.height', cs(htmlEl,'height')); push('html.minHeight', cs(htmlEl,'minHeight'));
+    push('html.overflow', cs(htmlEl,'overflow')); push('html.overflowX', cs(htmlEl,'overflowX')); push('html.overflowY', cs(htmlEl,'overflowY'));
+    push('body.height', cs(bodyEl,'height')); push('body.minHeight', cs(bodyEl,'minHeight'));
+    push('body.display', cs(bodyEl,'display')); push('body.flexDirection', cs(bodyEl,'flexDirection'));
+    push('body.overflow', cs(bodyEl,'overflow')); push('body.overflowX', cs(bodyEl,'overflowX')); push('body.overflowY', cs(bodyEl,'overflowY'));
+    push('body.paddingBottom', cs(bodyEl,'paddingBottom')); push('body.marginBottom', cs(bodyEl,'marginBottom'));
+    push('main.height', cs(mainEl,'height')); push('main.minHeight', cs(mainEl,'minHeight')); push('main.flex', cs(mainEl,'flex'));
+    push('main.paddingBottom', cs(mainEl,'paddingBottom')); push('main.marginBottom', cs(mainEl,'marginBottom'));
+    push('.views.height', cs(viewsEl,'height')); push('.views.maxHeight', cs(viewsEl,'maxHeight')); push('.views.overflowY', cs(viewsEl,'overflowY'));
+    push('.views.paddingBottom', cs(viewsEl,'paddingBottom')); push('.views.marginBottom', cs(viewsEl,'marginBottom'));
+    push('.bottom-nav.position', cs(navEl,'position')); push('.bottom-nav.bottom', cs(navEl,'bottom')); push('.bottom-nav.height', cs(navEl,'height'));
+    push('.bottom-nav.paddingBottom', cs(navEl,'paddingBottom')); push('.bottom-nav.marginBottom', cs(navEl,'marginBottom')); push('.bottom-nav.transform', cs(navEl,'transform'));
+
+    section('BOTTOM SPACE RESERVATION (setBottomSpaceReservation, js/app.js)');
+    push('Target element', '.views (sets its inline style.paddingBottom)');
+    push('Current bottomSpaceReservations object', JSON.stringify(bottomSpaceReservations));
+    push('Last call', lastBottomSpaceReservationCall ? JSON.stringify(lastBottomSpaceReservationCall) : '(never called this session)');
+    push('.views current inline paddingBottom', viewsEl ? (viewsEl.style.paddingBottom || '(empty - not currently reserving space)') : '(not found)');
+    push('Note', 'Since v45, .bottom-nav is in normal flex flow (not position:fixed), so it no longer needs .views to reserve clearance for it — this reservation is now used only by #app-toast/#sw-update-banner while they are visibly docked, not for the nav itself. Not changed this round per the read-only constraint — reported as-is.');
+
+    section('DERIVED');
+    const navGeom = geoms['.bottom-nav'];
+    const lastChildGeom = geoms[lastChildOfViewsLabel];
+    const lastVisibleGeom = geoms[lastVisibleLabel];
+    if(navGeom){
+      push('GAP B = screen.height - (.bottom-nav bottom)', `${screen.height} - ${navGeom.bottom.toFixed(2)} = ${(screen.height - navGeom.bottom).toFixed(2)}`);
+    } else {
+      push('GAP B', '(.bottom-nav not found or not visible)');
+    }
+    if(navGeom && lastChildGeom){
+      push('GAP A = (.bottom-nav top) - (last child of .views, bottom) [literal, as requested]', `${navGeom.top.toFixed(2)} - ${lastChildGeom.bottom.toFixed(2)} = ${(navGeom.top - lastChildGeom.bottom).toFixed(2)}`);
+    } else {
+      push('GAP A (literal)', '(.bottom-nav or last child of .views not found)');
+    }
+    if(navGeom && lastVisibleGeom){
+      push('GAP A\' = (.bottom-nav top) - (last child of ACTIVE .view, bottom) [bonus, likely closer to "the last content card" on screen]', `${navGeom.top.toFixed(2)} - ${lastVisibleGeom.bottom.toFixed(2)} = ${(navGeom.top - lastVisibleGeom.bottom).toFixed(2)}`);
+    } else {
+      push("GAP A'", '(.bottom-nav or last child of active .view not found)');
+    }
+
+    return lines.join('\n');
+  }
+  const layoutDiagBtn = document.getElementById('layout-diag-btn');
+  if(layoutDiagBtn) layoutDiagBtn.addEventListener('click', async () => {
+    const text = await gatherLayoutDiagnostics();
+    showAppToast(downloadDiagLogAsTxt(text, 'trackr-layout-diagnostics') ? 'Layout diagnostics downloaded' : "Couldn't start the download");
+  });
+
   init();
 })();

@@ -368,6 +368,33 @@
     .activity-sub-date-full{ display:inline; }
   }
   .activity-sub-note:not(:last-child)::after{ content:'·'; margin-left:5px; }
+  /* History-only mobile row rebuild (see buildActivityRow's historyMode param in js/app.js).
+     Real device evidence: History's per-row edit/delete icons crushed the category name into
+     truncating where Home's equivalent row (no icons) didn't, same device, same data - tapping a
+     row already opens the detail overlay with its own Edit/Delete, and the chevron already
+     signals the row is tappable, so the icons were redundant weight exactly where room is
+     scarcest. .history-sub-mobile is rendered ALONGSIDE .activity-sub, not instead of it - only
+     one is ever visible per breakpoint (below), so desktop's History row - not reported as having
+     any problem - keeps the exact markup/behavior every other activity row already uses, and
+     every other view using buildActivityRow (Home, Add Entry's Today list, category detail,
+     global search) never gets a .history-row class at all and is untouched by any of this. */
+  .history-sub-mobile{ display:none; }
+  @media (max-width:780px){
+    .history-row .activity-sub{ display:none; }
+    .history-row .history-sub-mobile{ display:block; margin-top:1px; }
+    .history-row .history-sub-note{ font-size:11.5px; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .history-row .history-sub-date{ font-size:11.5px; color:var(--ink-soft); margin-top:1px; white-space:nowrap; }
+    .history-row .activity-actions{ display:none; }
+    /* Even with the icons gone, this app's own longest real category names ("Loan Repayment
+       Received", "Investment Returns") still don't fit the available width in one line at 360px -
+       confirmed directly: Home's OWN row (identical badge/amount proportions, the reference this
+       redesign matches) truncates the exact same string today. Rather than truncate (losing
+       characters) or shrink the badge/amount column (touching shared, non-History-scoped sizing),
+       let the category wrap to a second line instead - guarantees every real category renders in
+       full with no partial glyph, at the cost of a taller row only for the names actually long
+       enough to need it. */
+    .history-row .activity-name{ white-space:normal; overflow:visible; text-overflow:clip; line-height:1.25; }
+  }
   .activity-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .activity-amt{ font-weight:700; font-size:13.5px; }
   .activity-amt.income{ color:var(--credit); }
