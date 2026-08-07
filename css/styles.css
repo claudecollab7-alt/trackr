@@ -172,7 +172,21 @@
   .spine .tab-btn.active{ background:var(--binder); color:#FFFFFF; box-shadow:var(--shadow-sm); }
   .spine .tab-label{ flex:1; }
 
-  .bottom-nav{ display:none; position:fixed; bottom:0; left:0; right:0; background:rgba(255,255,255,.72); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border-top:1px solid rgba(15,23,42,.08); justify-content:space-around; align-items:center; padding:8px 6px calc(6px + env(safe-area-inset-bottom)); z-index:50; box-shadow:var(--shadow-nav); }
+  /* NOT position:fixed - real-device evidence (iOS 16 Pro Max standalone) showed a fixed nav
+     floating ~90pt above the true screen bottom, while .views' own bottom-reaching behavior
+     (ordinary scroll, no position:fixed involved) was independently confirmed CORRECT on the same
+     device - isolating the problem to position:fixed's viewport anchoring specifically, not a
+     general "document shorter than the screen" bug (which would have broken .views too). No
+     JS measure-and-nudge workaround could fix this either: it compares the nav's rendered rect
+     against window.visualViewport, but if visualViewport itself is the (possibly-WebKit-
+     miscomputed) height nav is ALREADY being positioned against, the two agree and no gap is ever
+     measured, even though a real gap exists against the physical screen - confirmed directly, the
+     workaround applied zero correction on the real device. Making bottom-nav an ordinary in-flow
+     flex child instead (last child of body, which is flex-direction:column at this breakpoint,
+     with every other body child between it and main being position:fixed and so out of flow -
+     see below) sidesteps position:fixed's viewport-anchoring rules entirely: its position is now
+     ordinary block/flex layout math, the same mechanism already proven correct for .views. */
+  .bottom-nav{ display:none; background:rgba(255,255,255,.72); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border-top:1px solid rgba(15,23,42,.08); justify-content:space-around; align-items:center; padding:8px 6px calc(6px + env(safe-area-inset-bottom)); flex-shrink:0; z-index:50; box-shadow:var(--shadow-nav); }
   .bottom-nav .tab-btn{ background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--ink-soft); font-size:10.5px; font-weight:600; padding:4px 6px; flex:1; }
   .bottom-nav .tab-btn.active{ color:var(--binder); }
   .bottom-nav .tab-btn.fab{ background:var(--binder); color:#FFFFFF; width:54px; height:54px; border-radius:50%; margin-top:-30px; justify-content:center; box-shadow:var(--shadow-fab); flex:0 0 auto; border:4px solid var(--bg); }
@@ -989,7 +1003,12 @@
     .spine{ display:none; }
     .bottom-nav{ display:flex; }
     main{ padding-bottom:0; }
-    .views{ padding:0 16px 90px; --views-base-pb:90px; }
+    /* The extra 40px this used to carry (90px vs desktop's 50px) existed purely to keep content
+       clear of the OLD position:fixed nav, which overlaid the page instead of taking its own
+       layout space. Now that .bottom-nav is an ordinary in-flow flex sibling of main (see above -
+       not position:fixed), it already occupies real space that .views' own flex-shrink naturally
+       accounts for; reserving extra bottom padding on top of that would just be dead space. */
+    .views{ padding:0 16px 50px; --views-base-pb:50px; }
     /* Must keep the env(safe-area-inset-top) term from the base .topbar rule above - this media
        query used to overwrite it outright with a flat 16px 16px, silently discarding the inset
        on every phone-width screen (<=780px is every phone, not just some), which is exactly where

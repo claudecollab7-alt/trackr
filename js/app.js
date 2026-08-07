@@ -821,13 +821,6 @@
     if(!el || el.style.display==='none') return;
     el.style.opacity = '0';
     setTimeout(()=>{ el.style.display = 'none'; }, OVERLAY_ANIM_MS);
-    // The one choke point every startup path (fresh login, restored session, offline) passes
-    // through before the real app shell - bottom-nav included - is first visible, so this is
-    // where the reported "nav floats above the true bottom from first paint" bug needs its
-    // initial correction, not just on a later resize. Double rAF: one frame for the display/
-    // opacity change above to actually paint, a second so the nav's own layout (now visible,
-    // not display:none) has settled before measuring it.
-    requestAnimationFrame(()=> requestAnimationFrame(()=> pinBottomNav()));
   }
   // Re-plays the shared viewFadeIn animation on an element whose CONTENT just changed in place
   // (no separate view/overlay to open/close around it) - used for the PIN-lock screen's
@@ -5809,45 +5802,24 @@
     setBottomSpaceReservation('updateBanner', 0);
   }
 
-  // Real-device report (iOS standalone, v43): .bottom-nav floated ~90pt above the true bottom of
-  // the screen, exposed background underneath it - present from first paint, not something that
-  // only appeared after an interaction. .bottom-nav's own CSS rule (position:fixed; bottom:0;
-  // plus its env(safe-area-inset-bottom) padding) was byte-for-byte unchanged from v42, where this
-  // did not happen - nothing in this file's diff touches that rule, ruling out a straightforward
-  // "wrong number" bug. That points at a containing-block/viewport-anchoring difference for
-  // position:fixed itself under v43's OTHER changes (html,body now explicitly overflow-y:hidden,
-  // body sized with 100dvh) rather than anything wrong with the rule's own values - a class of
-  // WebKit inconsistency around fixed positioning and a non-default-overflow ancestor that
-  // Chromium (this sandbox's only available engine) does not reproduce, so it can't be directly
-  // confirmed here. Rather than guess at the exact mechanism, this measures wherever the browser
-  // ACTUALLY rendered the nav and corrects the gap directly - self-correcting regardless of cause,
-  // and a no-op (transform stays empty) whenever nav is already at the true edge, which is the
-  // case on Android/desktop today and should also become the case on iOS if the underlying
-  // WebKit behavior is ever different than what was reported.
-  function pinBottomNav(){
-    const nav = document.querySelector('.bottom-nav');
-    if(!nav || getComputedStyle(nav).display === 'none' || !window.visualViewport){
-      if(nav) nav.style.transform = '';
-      return;
-    }
-    const trueBottom = window.visualViewport.height + window.visualViewport.offsetTop;
-    const gap = trueBottom - nav.getBoundingClientRect().bottom;
-    // Only correct a POSITIVE gap (nav sitting above where it should be, leaving exposed
-    // background below it - the exact reported symptom). A ~0 or negative gap means nav is
-    // already at or past the true edge; leave it alone rather than fight normal, correct
-    // position:fixed behavior over a sub-pixel rounding difference.
-    nav.style.transform = gap > 1 ? `translateY(${Math.round(gap)}px)` : '';
-  }
+  // A prior JS measure-and-nudge approach here (pinBottomNav, comparing .bottom-nav's rendered
+  // rect against window.visualViewport) was removed - real-device evidence showed it applied ZERO
+  // correction despite the nav still floating ~90pt above the true screen bottom. That's not a
+  // tuning problem: if the WebKit quirk responsible makes visualViewport itself report the same
+  // (wrong) height nav is already being positioned against, the two measurements agree and no gap
+  // is ever detected, even though a real gap exists against the physical screen. The actual fix
+  // is in css/styles.css - .bottom-nav is no longer position:fixed at all, so it's not subject to
+  // position:fixed's viewport-anchoring behavior (whatever it's doing on this device) in the first
+  // place; it's an ordinary in-flow flex child of body now, positioned by ordinary layout math -
+  // the same mechanism already proven correct for .views' own bottom-reaching behavior.
+  //
   // Nothing in this file recomputed on resize/orientationchange/visualViewport-resize before this -
-  // confirmed by grep, and confirmed as the cause of two separate real-device reports: an Android
-  // alert-slider toggle changing display-cutout insets without the layout ever re-running (content
-  // clipped at the right edge until navigating away and back forced a fresh render), and a
-  // bottom-docked toast/banner positioned against a stale window.innerHeight while iOS Safari's
-  // toolbar was mid-transition. Only re-measures and repositions whatever's currently on screen -
-  // never calls into sync/Supabase/storage, so this can fire as often as the browser likes without
-  // side effects beyond a layout recalculation.
+  // confirmed by grep, and confirmed as the cause of a separate real-device report: a bottom-docked
+  // toast/banner positioned against a stale window.innerHeight while iOS Safari's toolbar was
+  // mid-transition. Only re-measures and repositions whatever's currently on screen - never calls
+  // into sync/Supabase/storage, so this can fire as often as the browser likes without side effects
+  // beyond a layout recalculation.
   function reflowBottomDockedUI(){
-    pinBottomNav();
     const toastEl = document.getElementById('app-toast');
     if(toastEl && toastEl.classList.contains('show')){
       positionAboveBottomNav(toastEl, 14);
