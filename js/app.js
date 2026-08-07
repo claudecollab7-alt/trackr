@@ -2945,9 +2945,18 @@
     function addSection(label){
       const h = document.createElement('div'); h.className='activity-group-label'; h.textContent=label; container.appendChild(h);
     }
-    function addRow(title, meta, onClick, dismissKey){
+    // title: the category/debt/reminder name, demoted to a small label (was previously the
+    // biggest text in the card, competing with the number that actually matters).
+    // keyFigure: the one number/status worth noticing at a glance - "Over by ₹1,100.00", "2
+    // installments overdue", "Due today" - now visually primary, matching the big-number/small-
+    // label relationship .txdetail-amount/.txdetail-category already use in the transaction
+    // detail overlay, rather than a single run-on sentence.
+    // meta: secondary supporting context, shown only when there's something worth adding beyond
+    // the key figure itself (e.g. the raw spent/limit numbers behind "Over by...").
+    function addRow(title, keyFigure, isAlert, meta, onClick, dismissKey){
       const row = document.createElement('div'); row.className='reminder-card clickable-row';
-      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(title)}</div><div class="reminder-meta">${meta}</div></div></div>`;
+      const metaHtml = meta ? `<div class="reminder-meta">${escapeHtml(meta)}</div>` : '';
+      row.innerHTML = `<div class="reminder-card-top"><div><div class="reminder-name">${escapeHtml(title)}</div><div class="reminder-key-figure${isAlert?' alert':''}">${escapeHtml(keyFigure)}</div>${metaHtml}</div></div>`;
       row.addEventListener('click', onClick);
       if(dismissKey){
         const dismissBtn = document.createElement('button');
@@ -2964,19 +2973,19 @@
     }
     if(overBudget.length){
       addSection('Over Budget');
-      overBudget.forEach(b=> addRow(b.category, `${fmt(b.spent)} of ${fmt(b.limit)} — over by ${fmt(b.spent-b.limit)}`, ()=> goToAlertTarget(null,'budgets'), b.key));
+      overBudget.forEach(b=> addRow(b.category, `Over by ${fmt(b.spent-b.limit)}`, true, `${fmt(b.spent)} spent of ${fmt(b.limit)} limit`, ()=> goToAlertTarget(null,'budgets'), b.key));
     }
     if(overdueDebts.length){
       addSection('Overdue Debts');
-      overdueDebts.forEach(d=> addRow(d.name, `${debtOverdueCount(d)} installment${debtOverdueCount(d)===1?'':'s'} overdue`, ()=> goToAlertTarget(null,'debts')));
+      overdueDebts.forEach(d=> addRow(d.name, `${debtOverdueCount(d)} installment${debtOverdueCount(d)===1?'':'s'} overdue`, true, '', ()=> goToAlertTarget(null,'debts')));
     }
     if(dueReminders.length){
       addSection('Reminders');
-      dueReminders.forEach(({r,status})=> addRow(r.title, `${reminderStatusLabel(status)}${r.amount?' · '+fmt(r.amount):''}`, ()=> goToAlertTarget(null,'reminders')));
+      dueReminders.forEach(({r,status})=> addRow(r.title, reminderStatusLabel(status), false, r.amount?fmt(r.amount):'', ()=> goToAlertTarget(null,'reminders')));
     }
     if(dueRecurring.length){
       addSection('Due for Logging');
-      dueRecurring.forEach(({r,status})=> addRow(r.category, `${reminderStatusLabel(status)} · ${fmt(r.amount)}`, ()=> goToAlertTarget('insights',null)));
+      dueRecurring.forEach(({r,status})=> addRow(r.category, reminderStatusLabel(status), false, fmt(r.amount), ()=> goToAlertTarget('insights',null)));
     }
   }
   async function dismissBudgetAlert(key){
