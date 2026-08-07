@@ -1008,9 +1008,20 @@
   /* ---------- Reminders ---------- */
   .reminder-card{ background:var(--bg); border-radius:16px; padding:14px 16px; margin-bottom:12px; }
   .reminder-card-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
-  .reminder-name{ font-weight:700; font-size:14px; }
-  .reminder-meta{ font-size:11.5px; color:var(--ink-soft); font-weight:600; margin-top:2px; }
-  .alert-dismiss-btn{ background:none; border:none; color:var(--ink-soft); font-size:18px; line-height:1; padding:2px 4px; flex-shrink:0; cursor:pointer; }
+  .reminder-name{ font-weight:600; font-size:12.5px; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* The key figure (the number that actually matters - how far over budget, how many overdue,
+     when something's due) used to be buried mid-sentence in .reminder-meta ("Rs1,200.00 of
+     Rs100.00 — over by Rs1,100.00"), the same "everything on one run-on line" problem already
+     fixed elsewhere in this app (see History's row redesign). Mirrors the size/weight
+     relationship .txdetail-amount/.txdetail-category already use in the transaction detail
+     overlay - one big, unmissable primary figure, with the category/title now demoted to a small
+     label above it instead of competing for attention as the biggest text in the card. */
+  .reminder-key-figure{ font-size:18px; font-weight:800; margin-top:2px; }
+  .reminder-key-figure.alert{ color:var(--debit); }
+  .reminder-meta{ font-size:11.5px; color:var(--ink-soft); font-weight:600; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Explicit 44x44 tap target (WCAG's minimum), not left to the glyph's own small rendered box -
+     the previous version was maybe 22x19px in practice (18px font + 2px/4px padding). */
+  .alert-dismiss-btn{ background:none; border:none; color:var(--ink-soft); font-size:18px; line-height:1; width:44px; height:44px; display:flex; align-items:center; justify-content:center; flex-shrink:0; cursor:pointer; margin:-10px -10px 0 0; }
   .alert-dismiss-btn:hover{ color:var(--ink); }
   .reminder-status{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; flex-shrink:0; }
   .reminder-status.overdue{ background:rgba(220,38,38,.12); color:var(--debit); }
@@ -1030,12 +1041,16 @@
     .spine{ display:none; }
     .bottom-nav{ display:flex; }
     main{ padding-bottom:0; }
-    /* The extra 40px this used to carry (90px vs desktop's 50px) existed purely to keep content
-       clear of the OLD position:fixed nav, which overlaid the page instead of taking its own
-       layout space. Now that .bottom-nav is an ordinary in-flow flex sibling of main (see above -
-       not position:fixed), it already occupies real space that .views' own flex-shrink naturally
-       accounts for; reserving extra bottom padding on top of that would just be dead space. */
-    .views{ padding:0 16px 50px; --views-base-pb:50px; }
+    /* CORRECTION: the previous round reduced this from 90px to 50px (matching desktop's own
+       base value) reasoning that the old fixed-nav clearance was no longer needed - true, but
+       desktop's 50px was never nav-related in the first place (desktop has no bottom-nav at all,
+       display:none there - it was always just that card's own breathing room). Copying it to
+       mobile left a real, measured 50px of dead air between the last row and the nav on a real
+       device (confirmed via the Layout Diagnostics tool: GAP A = .views bottom minus last-child
+       bottom = ~50px on both iOS and Android). Reduced to match the same 16px already used for
+       this breakpoint's left/right padding - real, deliberate breathing room, not a nav-clearance
+       leftover with nothing left to clear. */
+    .views{ padding:0 16px 16px; --views-base-pb:16px; }
     /* Must keep the env(safe-area-inset-top) term from the base .topbar rule above - this media
        query used to overwrite it outright with a flat 16px 16px, silently discarding the inset
        on every phone-width screen (<=780px is every phone, not just some), which is exactly where
