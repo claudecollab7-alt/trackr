@@ -137,6 +137,16 @@
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
   const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
+  // Webline (Phase 2, A4): the base CAT_PALETTE's bright pink/lime/hot-orange swatches read as
+  // loudest-thing-on-screen against Webline's navy console and looked like a different app on a
+  // real device. Every value here is drawn from the blue/cyan/amber/green/red families the
+  // Webline palette itself uses (not invented separately) and independently checked for white
+  // text on top - .cat-badge hardcodes color:#fff - at >=4.28:1 (most well above), so the
+  // category-initial letter stays legible on every swatch, not just some of them. Presentation
+  // only: this is a rendering-time lookup keyed by category name (see categoryColor() below),
+  // never the category's own stored colour value - unaffected on every other theme, same as the
+  // Crimson palette above already proves the pattern for.
+  const CAT_PALETTE_WEBLINE = ['#0F4C81','#1E5A94','#2C6FB5','#177A94','#1A7A7A','#8A5A10','#A8650F','#3D8A2F','#2F7A22','#C23B3B','#B33333','#3D4FA8'];
 
   function defaultCategories(){
     return {
@@ -289,7 +299,8 @@
     return repaired;
   }
   function categoryColor(name){
-    const palette = document.body.getAttribute('data-theme')==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
+    const themeNow3 = document.body.getAttribute('data-theme');
+    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : (themeNow3==='webline' ? CAT_PALETTE_WEBLINE : CAT_PALETTE);
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
     const idx = allCats.indexOf(name);
     if(idx !== -1) return palette[idx % palette.length];
@@ -1399,7 +1410,14 @@
     const today = toLocalDateStr(new Date());
     const list = transactions.filter(t=>t.date===today).sort((a,b)=> b.id.localeCompare(a.id));
     if(list.length===0){ container.innerHTML = '<p class="empty-note">No entries for today yet.</p>'; return; }
-    list.forEach(t=> container.appendChild(buildActivityRow(t, true, false)));
+    // historyMode=true (4th arg): reuses the exact treatment already proven on the ACTIVITY LOG/
+    // History list (PR #61) - hides the per-row edit/delete icons on mobile only (tapping the row
+    // already opens the detail overlay, which has both) and switches to the stacked
+    // .history-sub-mobile markup, instead of the flex-wrap layout that was crushing the category
+    // name down to 1-2 characters here. Cross-theme fix (the underlying .history-row CSS rules
+    // aren't theme-scoped) - Today's Entries had simply never been given this treatment when
+    // History itself was fixed.
+    list.forEach(t=> container.appendChild(buildActivityRow(t, true, false, true)));
     wireActivityActions(container);
   }
 
@@ -2916,7 +2934,7 @@
         populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
         applyTheme(settings.theme);
         balancesRevealed = false; isAppLocked = false;
-        syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
+        syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI(); syncWeblineReduceAnimToggleUI();
         resetHideBalancesTimer(); resetAppLockTimer();
         refreshAll();
         renderCategoriesView();
@@ -3536,6 +3554,11 @@
   let weblineModulePromise = null;
   const WEBLINE_CSS_LINK_ID = 'webline-css-link';
   function activateWebline(){
+    // Re-synced here (not just at init) so the very first Webline activation of a session - which
+    // can happen before init()'s own settings-driven UI sync has run, if the stored theme is
+    // already "webline" on load - always has document.body.dataset.weblineReduceAnim set before
+    // js/webline.js's mount() reads it, rather than racing it.
+    syncWeblineReduceAnimToggleUI();
     if(!document.getElementById(WEBLINE_CSS_LINK_ID)){
       const link = document.createElement('link');
       link.id = WEBLINE_CSS_LINK_ID;
@@ -3648,6 +3671,20 @@
     const on = settings.showNetWorth!==false;
     toggle.classList.toggle('on', on);
     toggle.setAttribute('aria-checked', on);
+  }
+  // Webline's "Reduce Animations" toggle (Phase 2, B3c) - persisted like every other setting
+  // here, since js/webline.js itself must never touch storage (the theme layer may only read
+  // state and add DOM - see the hard rule at the top of css/webline.css). The setting is
+  // mirrored onto document.body's own dataset below, which is what webline.js actually reads -
+  // a plain DOM attribute read, not a closure/storage access, keeps that boundary real rather
+  // than just documented.
+  function syncWeblineReduceAnimToggleUI(){
+    const toggle = document.getElementById('webline-reduce-anim-toggle');
+    if(!toggle) return;
+    const on = settings.weblineReduceAnimations===true;
+    toggle.classList.toggle('on', on);
+    toggle.setAttribute('aria-checked', on);
+    document.body.dataset.weblineReduceAnim = on ? '1' : '0';
   }
   function syncHideBalancesUI(){
     const toggle = document.getElementById('hide-balances-toggle');
@@ -5103,6 +5140,13 @@
       await saveSettings();
     });
 
+    document.getElementById('webline-reduce-anim-toggle').addEventListener('click', async ()=>{
+      settings.weblineReduceAnimations = settings.weblineReduceAnimations===true ? false : true;
+      playSfx('toggle');
+      syncWeblineReduceAnimToggleUI();
+      await saveSettings();
+    });
+
     document.getElementById('sfx-toggle').addEventListener('click', async ()=>{
       settings.sfxEnabled = settings.sfxEnabled===false ? true : false;
       syncSfxToggleUI();
@@ -5314,7 +5358,7 @@
       balancesRevealed = false; isAppLocked = false;
       if(hideBalancesTimer){ clearTimeout(hideBalancesTimer); hideBalancesTimer = null; }
       if(appLockTimer){ clearTimeout(appLockTimer); appLockTimer = null; }
-      syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
+      syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI(); syncWeblineReduceAnimToggleUI();
       refreshAll();
       renderCategoriesView();
     });
@@ -5591,6 +5635,7 @@
     syncAppLockUI();
     syncNetWorthToggleUI();
     syncSfxToggleUI();
+    syncWeblineReduceAnimToggleUI();
     updateNotifPermissionStatus();
     applyDesktopLayout();
     desktopMql.addEventListener('change', applyDesktopLayout);
