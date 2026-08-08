@@ -767,6 +767,16 @@
   body[data-theme="crimson"] .btn-debit{ color:var(--bg); }
   body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
+  /* Hidden here (a normal stylesheet rule, not the inline style the element used to carry) so
+     webline.css's own body[data-theme="webline"] #webline-reduce-anim-row{display:flex} override
+     - a more specific selector, but still just a stylesheet rule - can actually win by CSS
+     specificity. An inline style="display:none" would have needed !important to be overridden at
+     all, since inline styles always beat any external-stylesheet selector regardless of
+     specificity - confirmed the hard way, this element was undetectable/unclickable in a
+     real end-to-end test until the display:none moved out of its own style attribute. Meaningless
+     for Light/Dark/Crimson (no animation to reduce), which is why it starts hidden at all. */
+  #webline-reduce-anim-row{ display:none; }
+
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }
   .theme-toggle.on{ background:var(--binder); }

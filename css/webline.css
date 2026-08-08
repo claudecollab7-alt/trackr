@@ -87,8 +87,45 @@ body[data-theme="webline"]{
   --shadow-nav:0 -4px 20px rgba(0,0,0,.4);
 }
 
-/* ---------- Typography split ----------
-   Deliberately backwards from what's tempting: the WHOLE body defaults to
+/* ---------- Type scale (Phase 2, A1) ----------
+   Phase 1 reused the OTHER themes' Inter-tuned px values unchanged on top
+   of two very different faces, which on a real 354px device produced
+   exactly the scatter this scale exists to fix: field labels rendering
+   near page-title size, while donut captions/toggle labels/tab labels
+   read too small to comfortably read.
+
+   Calibrated by MEASURING rendered cap-height, not by assuming - a
+   Playwright probe rendered 'M' in Inter, Webline Pixel and Webline Mono
+   across a size sweep (8-34px) and read back actualBoundingBoxAscent/
+   Descent from canvas text metrics for each. A least-squares ratio fit
+   (capHeight = ratio * px, forced through the origin) gave:
+     Inter ratio  ~0.695   Pixel ratio ~0.887   Mono ratio ~0.572
+   -> to make a face's rendered cap-height match what Inter would show at
+   a given nominal size N: pixel_px = N * (0.695/0.887) = N * 0.784,
+   mono_px = N * (0.695/0.572) = N * 1.215. The brief's own starting-point
+   guess (pixel ~0.6-0.7x, mono ~1.15-1.3x) undershot the pixel face by a
+   real margin once actually measured - Press Start 2P's glyphs sit closer
+   to Inter's own cap-height ratio than assumed, so it needs less shrinking
+   than guessed. Mono's measured ratio (1.215x) landed inside the guessed
+   range.
+   6 steps, each carrying both faces' calibrated px so a given step reads
+   as the same apparent size regardless of which face renders it. --wl-xs
+   is pinned to Inter-equivalent 12px, the requirement (f) floor - nothing
+   in this scale represents anything smaller than that. --wl-hero-mono is
+   a one-off outside the 6-step scale for the two hero numbers (Home's net
+   balance, the spending ring's center amount), which were already a
+   deliberate outlier size before Webline existed. */
+body[data-theme="webline"]{
+  --wl-xs-pixel:9.5px;   --wl-xs-mono:14.5px;   /* card-label, hints, ring caption/toggle-adjacent micro text, form field labels */
+  --wl-sm-pixel:10px;    --wl-sm-mono:16px;     /* buttons, menu rows, tab bar, ring-period toggles, secondary row text */
+  --wl-base-pixel:11px;  --wl-base-mono:17px;   /* body prose, particulars, hint paragraphs */
+  --wl-md-pixel:12.5px;  --wl-md-mono:19.5px;   /* h3, amounts, form inputs */
+  --wl-lg-pixel:14px;    --wl-lg-mono:22px;     /* h2 / section headings, brand wordmark */
+  --wl-xl-pixel:15.5px;  --wl-xl-mono:24.5px;   /* h1 / page title */
+  --wl-hero-mono:36px;                          /* net balance, ring center amount */
+}
+
+/* Deliberately backwards from what's tempting: the WHOLE body defaults to
    the readable mono face, and the pixel display face is opted IN only for
    the specific chrome elements section 4 named (titles, headings, buttons,
    panel chrome, field labels, More menu rows). Press Start 2P is roughly
@@ -101,7 +138,10 @@ body[data-theme="webline"]{
    into the narrow font, never the wide one. */
 body[data-theme="webline"]{
   font-family:'Webline Mono','VT323',monospace;
+  font-size:var(--wl-base-mono);
 }
+
+/* ---------- Pixel face: chrome only ---------- */
 body[data-theme="webline"] h1,
 body[data-theme="webline"] h2,
 body[data-theme="webline"] h3,
@@ -112,43 +152,121 @@ body[data-theme="webline"] .link-btn,
 body[data-theme="webline"] .segmented button,
 body[data-theme="webline"] .more-row,
 body[data-theme="webline"] .brand-name,
+/* Short field labels ("Date"/"Category"/"Amount"/currency-symbol label) -
+   .save-recurring-row's own label is excluded below: that one is a full
+   descriptive sentence, not a short field label, and belongs in prose/mono
+   per A1e, not pixel - see the exclusion rule right after this block. */
 body[data-theme="webline"] label,
-body[data-theme="webline"] .filter-inline-label{
+body[data-theme="webline"] .filter-inline-label,
+/* Every overlay's own title (Transaction Details, a category/debt/goal
+   name, Notifications, Install Diagnostics...) is a <strong> inside
+   .search-overlay-header, not an h1-h3 - confirmed by reading each of the
+   8 overlays' markup, all of which share this one header pattern. */
+body[data-theme="webline"] .search-overlay-header strong{
   font-family:'Webline Pixel','Press Start 2P',monospace;
 }
-/* Pixel-font elements need a size/line-height correction wherever the base
-   rule didn't already set an explicit font-size - Press Start 2P's glyphs
-   are drawn on a much wider/taller em box than Inter's, so reusing the same
-   numeric font-size the other three themes use renders noticeably larger
-   than intended. Sized down and given more line-height room, not moved,
-   resized or repositioned - no top/left/width/height/margin here. */
-body[data-theme="webline"] h1{ font-size:15px; line-height:1.5; letter-spacing:0; }
-body[data-theme="webline"] h2{ font-size:13px; line-height:1.6; letter-spacing:0; }
-body[data-theme="webline"] h3{ font-size:11.5px; line-height:1.6; letter-spacing:0; }
+body[data-theme="webline"] h1{ font-size:var(--wl-xl-pixel); line-height:1.5; letter-spacing:0; }
+body[data-theme="webline"] h2{ font-size:var(--wl-lg-pixel); line-height:1.6; letter-spacing:0; }
+body[data-theme="webline"] h3{ font-size:var(--wl-md-pixel); line-height:1.6; letter-spacing:0; }
 body[data-theme="webline"] .card-label,
-body[data-theme="webline"] .danger-zone-label{ font-size:10px; letter-spacing:.5px; }
+body[data-theme="webline"] .danger-zone-label{ font-size:var(--wl-xs-pixel); letter-spacing:.5px; }
 body[data-theme="webline"] .btn-pill,
-body[data-theme="webline"] .segmented button{ font-size:10px; line-height:1.7; }
-body[data-theme="webline"] .link-btn{ font-size:9.5px; line-height:1.7; }
-body[data-theme="webline"] .more-row{ font-size:10.5px; }
-body[data-theme="webline"] label{ font-size:11px; line-height:1.8; }
+body[data-theme="webline"] .segmented button{ font-size:var(--wl-sm-pixel); line-height:1.7; }
+body[data-theme="webline"] .link-btn{ font-size:var(--wl-xs-pixel); line-height:1.7; }
+body[data-theme="webline"] .more-row{ font-size:var(--wl-sm-pixel); }
+body[data-theme="webline"] .brand-name{ font-size:var(--wl-lg-pixel); }
+/* Field labels: clearly subordinate to h1 (A1d) - --wl-xs-pixel (9.5px) vs
+   h1's --wl-xl-pixel (15.5px) is the largest gap in the whole scale,
+   deliberately, since these compete directly for attention on Add Entry. */
+body[data-theme="webline"] label,
+body[data-theme="webline"] .filter-inline-label{ font-size:var(--wl-xs-pixel); line-height:1.8; }
+body[data-theme="webline"] .search-overlay-header strong{ font-size:var(--wl-lg-pixel); font-weight:400; }
+body[data-theme="webline"] .search-overlay-header{ border-bottom:2px solid var(--binder); padding-bottom:12px; margin-bottom:4px; }
 
-/* Readable-mono content needs its own size nudge in the other direction -
-   VT323 is drawn narrower/shorter per character than Inter at the same
-   numeric size, so reused as-is it reads noticeably smaller/thinner than
-   every other theme's body text. Bumped up, not relaid-out. */
-body[data-theme="webline"] .balance-amount{ font-size:34px; }
+/* The Quick Add checkbox label is a full sentence ("Save as a Quick Add
+   for next time...") caught by the generic `label` rule above - real
+   prose, not a field label, so it's routed back to mono/base per A1e
+   instead of wrapping across 3 lines of oversized pixel text. */
+body[data-theme="webline"] .save-recurring-row label{
+  font-family:'Webline Mono','VT323',monospace;
+  font-size:var(--wl-base-mono); line-height:1.4; font-weight:400;
+}
+
+/* ---------- Mono face: everything else, explicit sizes for anything that
+   isn't already correct at the inherited --wl-base-mono default ---------- */
+body[data-theme="webline"] .balance-amount,
+body[data-theme="webline"] .ring-center-amount{ font-size:var(--wl-hero-mono); }
 body[data-theme="webline"] .mono-num,
-body[data-theme="webline"] .activity-amt,
+body[data-theme="webline"] .activity-amt{ font-size:var(--wl-md-mono); }
 body[data-theme="webline"] .activity-sub,
 body[data-theme="webline"] .activity-sub-note,
 body[data-theme="webline"] .activity-sub-date,
 body[data-theme="webline"] .history-sub-mobile,
+body[data-theme="webline"] .tab-label,
+/* Week/Month/Year, 7 Days/6 Months, and I Owe/Owed-style toggle labels -
+   unstyled in Phase 1, so they fell through to Inter's 11.5px number
+   rendered in the mono face, which reads distinctly smaller than Inter
+   itself does at that size (mono's measured ratio is well under Inter's). */
+body[data-theme="webline"] .ring-period-btn,
+body[data-theme="webline"] .breakdown-row{ font-size:var(--wl-sm-mono); }
 body[data-theme="webline"] .period-hint,
 body[data-theme="webline"] .empty-note,
 body[data-theme="webline"] .progress-row,
-body[data-theme="webline"] .progress-spent,
-body[data-theme="webline"] .tab-label{ font-size:1.12em; }
+body[data-theme="webline"] .progress-spent{ font-size:var(--wl-base-mono); }
+/* "Spent this Month" / "Tap a slice to see its transactions" - both were
+   unstyled in Phase 1 (11px Inter, unreadably small once rendered mono). */
+body[data-theme="webline"] .ring-center-label,
+body[data-theme="webline"] .ring-tap-hint{ font-size:var(--wl-xs-mono); }
+
+/* Form inputs: kept at --wl-md-mono (19.5px) deliberately - iOS Safari
+   auto-zooms the viewport on focusing any text input whose COMPUTED
+   font-size is under 16px, which is exactly why the base app's own
+   .ledger-form input rule already hardcodes 16px. --wl-md-mono clears
+   that floor with margin in every direction this scale could move it. */
+body[data-theme="webline"] .ledger-form input,
+body[data-theme="webline"] .filter-row select, body[data-theme="webline"] .search-input,
+body[data-theme="webline"] .period-inputs input, body[data-theme="webline"] .budget-limit-input input,
+body[data-theme="webline"] .log-payment-form input, body[data-theme="webline"] .cat-col form input,
+body[data-theme="webline"] .settings-row input, body[data-theme="webline"] .contribution-form input,
+body[data-theme="webline"] .filter-inline-label input{
+  font-size:var(--wl-md-mono);
+}
+/* Selects specifically get one step down (--wl-sm-mono, 16px - still
+   clears the iOS zoom floor exactly, with zero margin to spare) rather
+   than reusing input's --wl-md-mono. A typed-in <input> value is short by
+   construction (an amount, a date, a couple of words of particulars); a
+   <select> has to fit whatever the LONGEST real category/account name
+   is - "Loan Repayment Received" was the case that forced this project's
+   own History-row redesign in an earlier round - and at 19.5px VT323 that
+   clipped mid-word ("Food & Groce...") inside the select box, confirmed
+   on a real screenshot before this was split out. */
+body[data-theme="webline"] .ledger-form select,
+body[data-theme="webline"] .log-payment-form select{
+  font-size:var(--wl-sm-mono);
+}
+/* .btn-outline is both a button (pixel, sized above) AND was in the
+   generic input/select background-color selector list from Phase 1 -
+   explicitly re-asserted here so the input-sizing rule above can never
+   accidentally win the cascade against it via source-order. */
+body[data-theme="webline"] .btn-outline{ font-family:'Webline Pixel','Press Start 2P',monospace; font-size:var(--wl-sm-pixel); }
+/* Placeholders don't always inherit an input's own font-size/color in every
+   engine - stated explicitly rather than assumed, so "e.g. Grocery run"
+   renders at the same size as real typed text, not the browser's own
+   placeholder default. */
+body[data-theme="webline"] input::placeholder,
+body[data-theme="webline"] textarea::placeholder{
+  color:var(--ink-soft); font-family:inherit; font-size:inherit; opacity:1;
+}
+
+/* Add Credit / Add Debit (.type-btn): pixel face on desktop where there's
+   room, mono face under the mobile breakpoint - these two specific labels
+   measured as the tightest fit of any pixel-face button in the app at
+   354px, closer to wrapping than every other .btn-pill. Same breakpoint
+   the rest of this app already uses for its one mobile/desktop split. */
+body[data-theme="webline"] .type-btn{ font-family:'Webline Pixel','Press Start 2P',monospace; font-size:var(--wl-sm-pixel); font-weight:700; }
+@media (max-width:780px){
+  body[data-theme="webline"] .type-btn{ font-family:'Webline Mono','VT323',monospace; font-size:var(--wl-sm-mono); }
+}
 
 /* ---------- Chrome: topbar / nav / cards (colour + border only - the
    .topbar/.bottom-nav geometry itself is untouched, see the file banner) */
@@ -295,3 +413,302 @@ body[data-theme="webline"] .report-header h2{
    through the same .card/.btn-pill/input selectors already covered above,
    since the auth screens are built from the same shared components as the
    rest of the app rather than their own bespoke markup. */
+
+/* ==========================================================================
+   Phase 2, Part A — real-device fixes
+   ========================================================================== */
+
+/* ---------- A3: pixel chrome was only half-applied ----------
+   Same technique as .card (border-radius:0 + a stepped clip-path + a hard
+   offset shadow instead of a blurred one) extended to every surface that
+   was still soft-cornered: debt/receivable cards and their stat boxes, all
+   the shared overlay/modal chrome (every overlay in this app - transaction
+   detail, payment schedule, notifications, search, category/debt/goal
+   detail - is built from the same .search-overlay/.search-overlay-inner
+   pair, confirmed by reading each overlay's own markup, so ONE rule here
+   covers all of them), segmented-style toggles beyond the theme picker
+   itself, and every progress/budget/debt/goal bar's track+fill. Geometry
+   (width/height/position/display/overflow) untouched throughout - only
+   border-radius/border/box-shadow/clip-path/background. */
+body[data-theme="webline"] .debt-card,
+body[data-theme="webline"] .goal-card,
+body[data-theme="webline"] .reminder-card,
+body[data-theme="webline"] .budget-row,
+body[data-theme="webline"] .cat-grid-cell,
+body[data-theme="webline"] .debt-overview-stat,
+body[data-theme="webline"] .debt-overview-row,
+body[data-theme="webline"] .summary-box,
+body[data-theme="webline"] .insight-note,
+body[data-theme="webline"] .log-payment-form,
+body[data-theme="webline"] .contribution-form,
+body[data-theme="webline"] .more-icon-badge,
+body[data-theme="webline"] .search-overlay-inner,
+body[data-theme="webline"] #schedule-overlay .schedule-row,
+body[data-theme="webline"] .recurring-chip,
+body[data-theme="webline"] .filter-chip,
+body[data-theme="webline"] .txdetail-badge,
+body[data-theme="webline"] .schedule-status,
+body[data-theme="webline"] .reminder-status,
+body[data-theme="webline"] .integrity-dup-card,
+body[data-theme="webline"] .danger-zone,
+body[data-theme="webline"] .type-toggle,
+body[data-theme="webline"] .type-btn,
+body[data-theme="webline"] .ring-period-toggle,
+body[data-theme="webline"] .ring-period-btn,
+body[data-theme="webline"] .filter-inline-label input{
+  border-radius:0;
+}
+body[data-theme="webline"] .debt-card,
+body[data-theme="webline"] .goal-card,
+body[data-theme="webline"] .reminder-card,
+body[data-theme="webline"] .budget-row,
+body[data-theme="webline"] .cat-grid-cell,
+body[data-theme="webline"] .debt-overview-stat,
+body[data-theme="webline"] .summary-box,
+body[data-theme="webline"] .search-overlay-inner{
+  border:2px solid var(--line);
+  clip-path: polygon(
+    0 6px, 6px 6px, 6px 0,
+    calc(100% - 6px) 0, calc(100% - 6px) 6px, 100% 6px,
+    100% calc(100% - 6px), calc(100% - 6px) calc(100% - 6px), calc(100% - 6px) 100%,
+    6px 100%, 6px calc(100% - 6px), 0 calc(100% - 6px)
+  );
+}
+body[data-theme="webline"] .search-overlay-inner{ border-color:var(--binder); background:var(--card); }
+body[data-theme="webline"] .debt-card,
+body[data-theme="webline"] .goal-card,
+body[data-theme="webline"] .reminder-card,
+body[data-theme="webline"] .budget-row,
+body[data-theme="webline"] .cat-grid-cell,
+body[data-theme="webline"] .debt-overview-stat,
+body[data-theme="webline"] .debt-overview-row,
+body[data-theme="webline"] .summary-box,
+body[data-theme="webline"] .insight-note,
+body[data-theme="webline"] .log-payment-form,
+body[data-theme="webline"] .contribution-form,
+body[data-theme="webline"] #schedule-overlay .schedule-row{
+  background:var(--card);
+}
+body[data-theme="webline"] .ring-period-toggle,
+body[data-theme="webline"] .type-toggle{ background:#16181C; border:2px solid var(--line); }
+body[data-theme="webline"] .ring-period-btn.active{ background:var(--binder); color:#FFFFFF; }
+body[data-theme="webline"] .type-btn.active{ background:var(--binder); box-shadow:none; }
+body[data-theme="webline"] .recurring-chip,
+body[data-theme="webline"] .filter-chip{ border:1.5px solid var(--line); background:#16181C; }
+/* Every progress/budget/debt/goal/debt-overview bar - tracks AND fills, not
+   just the tracks Phase 1 already covered. */
+body[data-theme="webline"] .progress-track, body[data-theme="webline"] .breakdown-track,
+body[data-theme="webline"] .budget-bar-track, body[data-theme="webline"] .debt-bar-track,
+body[data-theme="webline"] .goal-bar-track, body[data-theme="webline"] .debt-overview-track{
+  background:#16181C; border-radius:0; border:1px solid var(--line);
+}
+body[data-theme="webline"] .progress-fill, body[data-theme="webline"] .breakdown-fill,
+body[data-theme="webline"] .budget-bar-fill, body[data-theme="webline"] .debt-bar-fill,
+body[data-theme="webline"] .goal-bar-fill, body[data-theme="webline"] .debt-overview-fill{
+  border-radius:0;
+}
+
+/* ---------- A4: category/wallet avatar colour + shape ----------
+   Colour remap itself lives in js/app.js's categoryColor() - CAT_PALETTE_
+   WEBLINE, selected the exact same way CAT_PALETTE_CRIMSON already was for
+   Crimson - a presentation-only lookup keyed by category name, never a
+   stored value, unaffected on every other theme. This block only handles
+   the SHAPE half of A4: circular badges (.cat-badge, and the recurring-chip
+   badge that reuses the same category-colour-as-background pattern) get a
+   smaller stepped clip-path than .card's (badges are ~36px, a 6-8px notch
+   would eat a visible fraction of the circle) plus border-radius:0. */
+body[data-theme="webline"] .cat-badge,
+body[data-theme="webline"] .recurring-chip .chip-badge{
+  border-radius:0;
+  clip-path: polygon(
+    0 3px, 3px 3px, 3px 0,
+    calc(100% - 3px) 0, calc(100% - 3px) 3px, 100% 3px,
+    100% calc(100% - 3px), calc(100% - 3px) calc(100% - 3px), calc(100% - 3px) 100%,
+    3px 100%, 3px calc(100% - 3px), 0 calc(100% - 3px)
+  );
+}
+
+/* ---------- A6a: WEB WATCH legend contrast ----------
+   .breakdown-track's recessed #16181C channel sat too close in luminance
+   to --card (#12283F) to read as a groove on its own, especially for a
+   category with only a sliver of spend (a thin/near-zero-width fill next
+   to an indistinct track). A visible border gives the track a defined
+   edge regardless of how much or little of it the fill covers. */
+body[data-theme="webline"] .breakdown-track{ border:1px solid var(--binder-light); }
+body[data-theme="webline"] .breakdown-row .dot{ border-radius:0; }
+
+/* ---------- A6b: pixel wordmark + spider, replacing the gradient logo ----------
+   The existing rounded-gradient .brand-mark (spine sidebar + auth screen,
+   same element/image in both places) clashes with the console aesthetic
+   everywhere else. The bitmap <img> is hidden (display:none - a purely
+   decorative element, not part of the protected html/body/main/.views/
+   .bottom-nav/.topbar layout chain) and replaced with a compact pixel-art
+   spider silhouette drawn as an inline SVG data URI - original artwork,
+   not a licensed character, static (no animation/thread-drop motion here;
+   that belongs to the full C1-C3 mascot elsewhere in this file, this is
+   only the small logo-mark version). CSS-only (background-image on a
+   pseudo-element) rather than JS-injected DOM: it lives and dies with this
+   stylesheet's own load/unload, so it needs no teardown bookkeeping of its
+   own. The "TRACKR" wordmark text itself is handled by js/webline.js's
+   existing label-mapping layer (Trackr -> TRACKR), not duplicated here. */
+body[data-theme="webline"] .brand-mark{
+  background:var(--card); border:2px solid var(--binder); border-radius:0;
+  box-shadow:none; position:relative;
+}
+body[data-theme="webline"] .brand-mark img{ display:none; }
+body[data-theme="webline"] .brand-mark::after{
+  content:"";
+  position:absolute; inset:0;
+  background-repeat:no-repeat; background-position:center; background-size:70% 70%;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect x='7' y='0' width='2' height='4' fill='%234FA3E0'/%3E%3Crect x='3' y='9' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='1' y='7' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='2' y='5' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='11' y='9' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='13' y='7' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='12' y='5' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='4' y='11' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='10' y='11' width='2' height='2' fill='%232C6FB5'/%3E%3Crect x='5' y='5' width='6' height='6' fill='%23EE6B6B'/%3E%3Crect x='4' y='6' width='1' height='4' fill='%23EE6B6B'/%3E%3Crect x='11' y='6' width='1' height='4' fill='%23EE6B6B'/%3E%3Crect x='6' y='7' width='1' height='1' fill='%23C9EEFF'/%3E%3Crect x='9' y='7' width='1' height='1' fill='%23C9EEFF'/%3E%3C/svg%3E");
+}
+
+/* ---------- A7: native form controls ---------- */
+/* Selects: the native OS dropdown arrow is replaced with a small pixel
+   chevron drawn the same way as the spider mark above (inline SVG, no
+   extra asset), via appearance:none - the ONE property here that changes
+   how a form control paints its own chrome, not this app's own box model/
+   layout (a <select>'s own internal arrow icon isn't part of the
+   protected geometry list; the element's width/height/position are
+   untouched). Padding-right is widened so real text/values never run
+   under the new icon. */
+body[data-theme="webline"] select{
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' shape-rendering='crispEdges'%3E%3Crect x='0' y='0' width='2' height='2' fill='%237FB8D6'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%237FB8D6'/%3E%3Crect x='4' y='4' width='2' height='2' fill='%237FB8D6'/%3E%3Crect x='6' y='2' width='2' height='2' fill='%237FB8D6'/%3E%3Crect x='8' y='0' width='2' height='2' fill='%237FB8D6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center; background-size:9px 5px;
+  padding-right:22px; padding-left:9px;
+}
+/* Checkbox: a real 16x16 native checkbox is kept (not replaced by a fake
+   div-based one, which would need its own click/keyboard/focus handling
+   duplicating what the browser already does for free) but repainted -
+   appearance:none clears the OS control's own rendering, the pixel square
+   is drawn with border+background, and the checked state draws a small
+   pixel checkmark the same inline-SVG way as everything else in this
+   section. accent-color (the un-styled fallback) is left set too, so a
+   browser that ignores appearance:none for checkboxes entirely still
+   shows a themed - if not pixel-square - control rather than the
+   default OS blue. */
+body[data-theme="webline"] input[type="checkbox"]{
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  width:18px; height:18px; min-width:18px;
+  background:#16181C; border:2px solid var(--line);
+  accent-color:var(--binder);
+  position:relative; cursor:pointer; flex-shrink:0;
+}
+body[data-theme="webline"] input[type="checkbox"]:checked{
+  background:var(--binder); border-color:var(--binder-light);
+}
+body[data-theme="webline"] input[type="checkbox"]:checked::after{
+  content:"";
+  position:absolute; inset:0;
+  background-repeat:no-repeat; background-position:center; background-size:12px 12px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Crect x='1' y='4' width='1' height='1' fill='white'/%3E%3Crect x='2' y='5' width='1' height='1' fill='white'/%3E%3Crect x='3' y='6' width='1' height='1' fill='white'/%3E%3Crect x='4' y='5' width='1' height='1' fill='white'/%3E%3Crect x='5' y='4' width='1' height='1' fill='white'/%3E%3Crect x='6' y='3' width='1' height='1' fill='white'/%3E%3Crect x='6' y='2' width='1' height='1' fill='white'/%3E%3C/svg%3E");
+}
+/* Date input: no appearance:none here on purpose - WebKit/Blink's date
+   input is a composite control (text segments + a calendar-icon button
+   baked into its own shadow DOM), and appearance:none on it has a real
+   history of disabling the picker affordance entirely on some engines,
+   which would break "tap it, the OS date picker opens" - the one thing
+   this control absolutely cannot lose. What's styled instead is only what
+   the outer input already exposes safely everywhere else (background/
+   border/color, from the shared input rule earlier in this file) plus the
+   calendar icon's own colour via ::-webkit-calendar-picker-indicator's
+   filter, which recolours the icon without touching its hit target or
+   click behaviour. No non-WebKit equivalent exists, so Firefox/other
+   engines simply keep the browser's own icon colour - a harmless,
+   contained fallback, not a broken control. */
+body[data-theme="webline"] input[type="date"]::-webkit-calendar-picker-indicator{
+  filter:invert(72%) sepia(11%) saturate(1200%) hue-rotate(165deg) brightness(1.1);
+}
+
+/* B3c: the "Reduce Animations" settings row is display:none in the base
+   markup (meaningless for Light/Dark/Crimson, which have no animation to
+   reduce) - revealed only here, matching .settings-row's own display:flex
+   so it lays out identically to every other toggle row on this page. */
+body[data-theme="webline"] #webline-reduce-anim-row{ display:flex; }
+
+/* ==========================================================================
+   Phase 2, Part B — atmosphere
+   ========================================================================== */
+
+/* ---------- B1c: pixel grid backdrop ----------
+   Pure CSS, no DOM/JS needed - a second background-image layered under
+   the existing solid --bg color on body itself (body's own background,
+   not an overlay element, since this needs to sit BEHIND content, not
+   above it - the opposite requirement from the scanline/vignette overlay
+   below). A 1px repeating grid at very low opacity so it reads as texture
+   on empty backdrop, not as a pattern competing with real content. */
+body[data-theme="webline"]{
+  background-image:
+    linear-gradient(rgba(79,163,224,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79,163,224,.05) 1px, transparent 1px);
+  background-size:24px 24px;
+  background-position:0 0;
+}
+
+/* ---------- B1a/b: CRT scanline/vignette overlay ----------
+   Injected by js/webline.js's mount() (a single fixed-position div, see
+   WEBLINE_CRT_ID) - pointer-events:none throughout, so it can never
+   intercept a tap regardless of z-index; removed wholesale by unmount().
+   z-index:250 sits above ordinary page content/nav chrome (.topbar:30,
+   .bottom-nav:50) but below every real dialog (.search-overlay:300,
+   #auth-overlay:4000) - the CRT effect covers the "screen", not the
+   things drawn "on top of" it, matching the brief's "above content,
+   below all interactive elements".
+   Scanlines: a repeating-linear-gradient, animated via background-position
+   (CSS @keyframes, not JS/rAF - nothing here needs per-frame JS control,
+   satisfying B3d's "prefer CSS animation" directly). Opacity kept low
+   (.05) specifically so re-sampling contrast WITH this active (required,
+   B1d) still clears the same ratios Phase 1 measured without it - verified
+   in the PR report, not assumed.
+   Vignette: a radial-gradient darkening only the far corners.
+   Chromatic edge: a very faint red/cyan offset glow at the extreme edges
+   only (inset box-shadow in two complementary hues) - a suggestion of
+   fringing, not a real per-channel offset (canvas/SVG filter chromatic
+   aberration would be far heavier for a purely decorative effect). */
+.webline-crt-overlay{
+  position:fixed; inset:0; z-index:250; pointer-events:none;
+  background-image:repeating-linear-gradient(
+    to bottom,
+    rgba(0,0,0,0) 0px,
+    rgba(0,0,0,0) 2px,
+    rgba(159,219,245,.05) 3px,
+    rgba(0,0,0,0) 4px
+  );
+  background-size:100% 4px;
+  animation:webline-scanline-drift 9s linear infinite;
+}
+.webline-crt-overlay::before{
+  content:"";
+  position:absolute; inset:0;
+  background:radial-gradient(ellipse at center, rgba(0,0,0,0) 60%, rgba(0,0,0,.28) 100%);
+}
+.webline-crt-overlay::after{
+  content:"";
+  position:absolute; inset:0;
+  box-shadow:
+    inset 3px 0 6px rgba(238,107,107,.06),
+    inset -3px 0 6px rgba(159,219,245,.06);
+}
+@keyframes webline-scanline-drift{
+  from{ background-position:0 0; }
+  to{ background-position:0 400px; }
+}
+/* B3a/b: paused (not removed) via a class toggle - see js/webline.js's
+   visibilitychange handler and its prefers-reduced-motion/in-theme-toggle
+   check at mount time. Pausing the CSS animation costs nothing (no JS loop
+   to cancel/resume, no state to reconcile) - the class is the only handle
+   needed, already covered by the overlay element's own presence in the
+   tracked-handle registry. */
+.webline-crt-overlay.webline-anim-paused{ animation-play-state:paused; }
+@media (prefers-reduced-motion: reduce){
+  .webline-crt-overlay{ animation:none; }
+}
+
+/* ---------- B2: particle canvas ----------
+   z-index:240 - just under the CRT overlay's 250, so scanlines render
+   over the particles for one cohesive "on the screen" layer rather than
+   two competing effects. pointer-events:none here too. */
+.webline-particle-canvas{
+  position:fixed; inset:0; z-index:240; pointer-events:none;
+}
