@@ -387,6 +387,17 @@
     if(!settings || typeof settings !== 'object') settings = { currency:'₹' };
     if(!settings.currency) settings.currency = '₹';
     if(!settings.theme) settings.theme = 'light';
+    // Purply was retired and replaced by Webline in the same picker slot. applyTheme() also
+    // redirects a live "purply" value to "light" in memory (belt-and-braces for any call site that
+    // still hands it a stale value, e.g. restoring an old backup file), but that redirect alone
+    // never touches what's on disk - every future load would silently re-derive "light" from
+    // "purply" forever without this ever being visible as a real, inspectable settings value. Runs
+    // right here, synchronously, before applyTheme() is ever called for the first time this load
+    // (see startAppForUser()/init() below) - as early as this app's architecture ever applies a
+    // theme, i.e. before the very first Webline/Purply-relevant paint, not merely "eventually".
+    // saveSettings() is local-storage-only (no cloud sync - theme is explicitly per-device), so
+    // this is safe to persist unconditionally, signed in or not.
+    if(settings.theme==='purply'){ settings.theme = 'light'; await saveSettings(); }
     // Dismissal state for notification items the user has already reviewed - device-local, same
     // as every other entry in settings (theme, hideBalances, etc.), not synced to the cloud.
     // That's a deliberate call, not an oversight: these are purely "have I already looked at this
@@ -667,7 +678,7 @@
 
     let svg = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">`;
     const themeNow = document.body.getAttribute('data-theme');
-    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='crimson' ? '#17151B' : '#E2E8F0');
+    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='crimson' ? '#17151B' : (themeNow==='webline' ? '#16181C' : '#E2E8F0'));
     svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${trackColor}" stroke-width="${strokeW}"/>`;
     let cursor = 0; const labels = []; let hitAreas = '';
     segments.forEach((seg,i)=>{
@@ -1260,11 +1271,11 @@
       const themeNow2 = document.body.getAttribute('data-theme');
       const isDark = themeNow2==='dark';
       const isCrimson = themeNow2==='crimson';
-      const isPurply = themeNow2==='purply';
-      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isPurply ? '#EDE9FE' : '#E2E8F0'));
-      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isPurply ? '#5B5570' : '#64748B'));
-      const creditColor = isCrimson ? '#3DDC84' : (isPurply ? '#0F7A3D' : '#16A34A');
-      const debitColor = isCrimson ? '#FF7A59' : (isPurply ? '#BE123C' : '#DC2626');
+      const isWebline = themeNow2==='webline';
+      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isWebline ? '#234A73' : '#E2E8F0'));
+      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isWebline ? '#7FB8D6' : '#64748B'));
+      const creditColor = isCrimson ? '#3DDC84' : (isWebline ? '#6FCF57' : '#16A34A');
+      const debitColor = isCrimson ? '#FF7A59' : (isWebline ? '#EE6B6B' : '#DC2626');
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -3513,12 +3524,70 @@
     renderDesktopExtras();
   }
 
+  // ---------- Webline lazy-load ----------
+  // css/webline.css and js/webline.js are never referenced from index.html at all - they're
+  // fetched only here, only at the moment the theme actually becomes "webline", so Light/Dark/
+  // Crimson never download either file. weblineModule caches the dynamic import() result across
+  // repeated activations in the same page session (so switching Webline -> Dark -> Webline only
+  // ever fetches js/webline.js once, not once per switch); the <link> element is fully removed
+  // and re-created every time instead, since that's cheap and keeps "is Webline's CSS currently
+  // applied" a simple, always-correct DOM query rather than extra state to track.
+  let weblineModule = null;
+  let weblineModulePromise = null;
+  const WEBLINE_CSS_LINK_ID = 'webline-css-link';
+  function activateWebline(){
+    if(!document.getElementById(WEBLINE_CSS_LINK_ID)){
+      const link = document.createElement('link');
+      link.id = WEBLINE_CSS_LINK_ID;
+      link.rel = 'stylesheet';
+      link.href = 'css/webline.css';
+      // If the stylesheet 404s or the request otherwise fails, this is the only place that would
+      // ever know - left unhandled, body[data-theme="webline"] would stay set with none of its
+      // variable overrides in effect. That's not a broken/blank screen though: every rule this
+      // theme needs lives entirely in this one file, so with it missing the app just renders
+      // using :root's own Light-theme variable defaults (the same ones that already apply before
+      // this file ever loads) - a working, fully readable Light-looking screen, just without
+      // Webline's pixel chrome. Logged so it's visible in the diagnostic log rather than silently
+      // swallowed, but deliberately NOT auto-reverting the user's theme choice - a transient
+      // network hiccup on one load shouldn't permanently overwrite a persisted preference; the
+      // next successful load tries again on its own.
+      link.addEventListener('error', () => {
+        console.error('[webline] css/webline.css failed to load - falling back to Light defaults for any rule not covered by it');
+        try{ if(typeof diagLogPage==='function') diagLogPage('webline:css-load-failed'); }catch(e){}
+      });
+      document.head.appendChild(link);
+    }
+    if(!weblineModulePromise){
+      weblineModulePromise = import('./js/webline.js').then((mod) => { weblineModule = mod; return mod; }).catch((err) => {
+        console.error('[webline] js/webline.js failed to load - theme stays CSS-only, no mount() side effects', err);
+        try{ if(typeof diagLogPage==='function') diagLogPage('webline:js-load-failed', err && err.message); }catch(e){}
+        weblineModulePromise = null; // allow a retry on the next activation attempt
+        return null;
+      });
+    }
+    weblineModulePromise.then((mod) => { if(mod && mod.mount) mod.mount(); });
+  }
+  function deactivateWebline(){
+    if(weblineModule && weblineModule.unmount) weblineModule.unmount();
+    const link = document.getElementById(WEBLINE_CSS_LINK_ID);
+    if(link) link.remove();
+  }
+
   function applyTheme(theme){
     if(theme==='sunset' || theme==='mounty' || theme==='reddy') theme = 'crimson';
     // Sun Light was removed entirely and replaced by Purply, which occupies the same light-theme
     // picker slot - a device with "sunlight" already saved (from before this round) redirects to
     // "purply" every time, same mechanism as the sunset/mounty/reddy -> crimson migration above.
     if(theme==='sunlight') theme = 'purply';
+    // Purply itself was later retired and replaced by Webline in the same picker slot - a device
+    // with "purply" already saved redirects to "light" (purply was a light theme, the closest
+    // match of the three survivors), same one-time-redirect mechanism as both migrations above.
+    // This alone only fixes the in-memory value for THIS call; see loadData() for the persisted,
+    // before-first-paint half of this migration, which is what stops a purply device from ever
+    // re-derailing through this same redirect on every subsequent load.
+    if(theme==='purply') theme = 'light';
+    const previousTheme = document.body.getAttribute('data-theme');
+    if(previousTheme==='webline' && theme!=='webline') deactivateWebline();
     document.body.setAttribute('data-theme', theme);
     // Mirrored onto <html> too, not just <body> - see the html{background} rule in styles.css:
     // a CSS custom property redefined on body[data-theme=X] only cascades to body's own
@@ -3530,6 +3599,7 @@
     document.documentElement.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
+    if(theme==='webline') activateWebline();
   }
 
   /* ---------- Privacy: Hide Balances ---------- */

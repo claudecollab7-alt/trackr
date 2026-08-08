@@ -68,7 +68,7 @@
   html{ background:var(--bg); }
   html[data-theme="dark"]{ background:#0B1220; }
   html[data-theme="crimson"]{ background:#1E1E27; }
-  html[data-theme="purply"]{ background:#FAF5FF; }
+  html[data-theme="webline"]{ background:#0A1428; }
   button, a, .node, [onclick]{ touch-action:manipulation; }
   body{
     font-family:'Inter',system-ui,sans-serif;
@@ -766,90 +766,6 @@
   body[data-theme="crimson"] .type-btn.debit.active{ color:var(--debit); }
   body[data-theme="crimson"] .btn-debit{ color:var(--bg); }
   body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
-
-  /* ---------- Purply theme ----------
-     Replaces Sun Light entirely (removed, not recolored - see js/app.js's applyTheme() for the
-     one-time "sunlight" -> "purply" migration). Palette pulled from ui-ux-pro-max's own color
-     database (colors.csv, "Meditation & Mindfulness" entry, cross-checked against its
-     near-identical "Mental Health App" sibling entry) rather than eyeballed - both are tagged
-     "calming lavender + wellness" and both list this exact primary/background/foreground triple.
-     The database entries pair the lavender with a wellness-green secondary accent; dropped here
-     on purpose per this round's brief - the actual visual target is a tight purple/lavender/
-     white/near-black family with no second hue competing with the accent, not a two-accent
-     wellness-app layout.
-     - --binder is the database's exact Primary (#7C3AED). Checked white-on-it directly (5.70:1,
-       clears AA) rather than assumed the way the brief asked - unlike Sun Light's yellow, this
-       accent is dark/saturated enough that the app's existing hardcoded-white-text-on-accent
-       rules (.btn-black, .spine .tab-btn.active, the FAB, etc.) need no override at all here.
-       #7C3AED even clears AA as small standalone TEXT on both --bg and --card (5.31:1/5.70:1) -
-       something Sun Light's yellow could never do - which is what unlocks the next point.
-     - --link is set to the exact same #7C3AED rather than a separate blue: because the primary
-       passes as text in its own right here, reusing it for "View All"/nav links extends the
-       accent through every card's link instead of introducing an unrelated hue. .card-label
-       (every section header app-wide) uses a deeper violet, #6D28D9 (6.62:1/7.10:1 on bg/card) -
-       one shade past the primary rather than the same value, so headers read as "part of the
-       family" without competing with the CTA/link color for attention. This is the same
-       highest-leverage move Sun Light used for its own headers, reapplied here.
-     - --binder-light is the database's own Secondary (#C4B5FD) - reserved the same as every
-       other theme (not yet wired to a component), consistent with the token contract.
-     - --ink is the database's Foreground (#0F172A) - 16.6:1/17.9:1 on bg/card, about as high as
-       this app's contrast checks ever get.
-     - --ink-soft is a fresh purple-tinted gray (#5B5570, 6.57:1/7.05:1 on bg/card) rather than
-       reusing Light's plain slate (#64748B) or the database's own Muted Foreground (also
-       #64748B, which actually fails AA against this bg at 4.43:1 - checked, not assumed) or
-       Sun Light's warm olive. A muted color with a violet undertone reads as "this theme's own"
-       rather than a generic gray dropped into a purple page.
-     - --line is the database's own Border (#EDE9FE) - a pale lavender, distinctly warmer-toned
-       than Light/Dark/Crimson's neutral divider colors.
-     - --card is pure white (the database's own Card value, and distinct enough from --bg's
-       lavender-white to still read as "raised" - 17.9:1 ink contrast, the highest of any theme).
-     - --credit/--debit are both fresh, verified against #FAF5FF/#FFFFFF specifically, not
-       carried over from any other theme's values (Sun Light's rust-red was checked here too and
-       technically would have passed, but the brief asked for this theme's own derivation, not a
-       reuse) - #0F7A3D (forest green, 5.05:1/5.42:1) and #BE123C (rose-crimson, 5.86:1/6.29:1),
-       chosen to sit clearly outside the purple/violet hue range so neither could ever read as
-       "part of" the accent family the way a warm rust-red safely can in Sun Light's own warm
-       palette.
-     - --gold (existing semantic "80%+ budget used" warning) is a fresh amber (#B45309,
-       4.68:1/5.02:1) distinct from every other hue in this palette.
-     - --goal (savings-goal indicator) can't reuse purple here the way Light/Dark/Crimson each
-       do (#9333EA/#C084FC/#B98BFF) - on a theme whose PRIMARY accent already is purple, a purple
-       goal color would be indistinguishable from an ordinary highlight. Given a fresh sky-blue
-       instead (#0369A1, 5.53:1/5.93:1), the one hue this palette doesn't already use elsewhere.
-     - Shadows reuse Light's own recipe outright, same reasoning as Sun Light's - light-surface
-       shadow physics doesn't change per theme, and color temperature is imperceptible at this
-       opacity.
-     - Headings (h1/h2) use the app's existing Inter, same font-family/weight as Light/Dark/
-       Crimson - an earlier version of this theme switched these to Playfair Display, but that
-       was reverted to keep heading typography consistent app-wide across every theme.
-     - No background photo/decoration, matte and flat, same reasoning as Crimson/Sun Light. */
-  body[data-theme="purply"]{
-    --bg:#FAF5FF;
-    --card:#FFFFFF;
-    --ink:#0F172A;
-    --ink-soft:#5B5570;
-    --line:#EDE9FE;
-    --credit:#0F7A3D;
-    --debit:#BE123C;
-    --gold:#B45309;
-    --link:#7C3AED;
-    --goal:#0369A1;
-    --binder:#7C3AED;
-    --binder-light:#C4B5FD;
-    --shadow:0 1px 2px rgba(15,23,42,.05), 0 8px 20px rgba(15,23,42,.08);
-    --shadow-sm:0 1px 2px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.08);
-    --shadow-glass:0 1px 2px rgba(15,23,42,.05), 0 12px 28px rgba(15,23,42,.10);
-    --shadow-fab:0 8px 20px rgba(15,23,42,.32);
-    --shadow-nav:0 -4px 20px rgba(15,23,42,.06);
-  }
-  /* .topbar/.bottom-nav hardcode Light's own literal rgba tone rather than deriving from
-     var(--bg) (that's why every other theme overrides these two as well) - tinted here toward
-     this theme's own lavender-white instead of inheriting Light's cooler tone by accident.
-     .spine/.icon-circle/.card-glass all use translucent pure white already, which equals this
-     theme's own --card exactly (same as Light), so those need no override. */
-  body[data-theme="purply"] .topbar{ background:rgba(250,245,255,.75); border-bottom-color:rgba(124,58,237,.08); }
-  body[data-theme="purply"] .bottom-nav{ background:rgba(250,245,255,.78); border-top-color:rgba(124,58,237,.08); }
-  body[data-theme="purply"] .card-label{ color:#6D28D9; }
 
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }

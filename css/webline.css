@@ -1,0 +1,297 @@
+/* ==========================================================================
+   Webline theme — Phase 1 (structure, fonts, colour, chrome only)
+   ==========================================================================
+   Loaded/parsed only while data-theme="webline" is active - see js/app.js's
+   applyTheme()/activateWebline(), which injects a <link> to this file on
+   activation and removes it on deactivation. Light/Dark/Crimson never fetch
+   this file at all.
+
+   Hard rule this file must never violate: styling and chrome only. No rule
+   in here may change box model, positioning, display type, or overflow on
+   html/body/main/.views/.bottom-nav/.topbar/.history-row - that layout chain
+   was stabilised across four platform targets on real hardware this
+   project's last several rounds and must not move again. Every selector
+   below only ever sets color/background/border/box-shadow/clip-path/
+   font-family/font-size-adjustments - never left/top/width/height/position/
+   display/overflow on those elements. */
+
+/* ---------- Self-hosted pixel fonts (subset: Latin printable range + the
+   handful of extra glyphs actually used in this app's UI - see the rupee
+   sign, middot, en/em dash, curly apostrophe, bullet, ellipsis, up-arrow and
+   checkmark badges/labels sprinkled through js/app.js/index.html). Custom
+   family names (not "Press Start 2P"/"VT323") so a same-named font already
+   installed on the device can never get picked up instead of this exact
+   subset. font-display:swap - text uses the fallback face immediately and
+   swaps in place once the subset finishes downloading, so nothing is ever
+   invisible while loading. */
+@font-face{
+  font-family:'Webline Pixel';
+  src:url('../fonts/press-start-2p-subset.woff2') format('woff2');
+  font-weight:400; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:'Webline Mono';
+  src:url('../fonts/vt323-subset.woff2') format('woff2');
+  font-weight:400; font-style:normal; font-display:swap;
+}
+
+/* ---------- Palette ----------
+   Mapped onto the SAME --bg/--card/--ink/--ink-soft/--line/--credit/--debit/
+   --gold/--link/--goal/--binder/--binder-light convention every other theme
+   (Light/Dark/Crimson) already uses - no parallel variable system.
+   Source values (from the reference screenshots) and where each landed:
+     Page backdrop        #0A1428  -> --bg
+     Console interior      #12283F -> --card
+     Body text cyan         #9FDBF5 -> --ink
+     Panel frame outer     #2C6FB5  -> --binder
+     Frame bevel light     #4FA3E0  -> --binder-light
+     Accent / amber         #F0A030 -> --gold and --link (reused for both,
+       same precedent as Purply reusing its one accent for both tokens)
+     Positive / credit      #6FCF57 -> --credit
+     Negative / debit        adjusted from #E04B4B to #EE6B6B - the sampled
+       reference value only cleared 3.77:1 on --card (below the 4.5:1 body-
+       text floor), so it was nudged lighter along the same hue until it
+       cleared 4.5:1 on BOTH --bg and --card (6.08:1 / 4.96:1) while still
+       reading as the same coral-red family, not a different colour.
+     Log panel near-black  #16181C  -> used directly (not a token) for the
+       recessed input/track background, see below.
+   --line and --ink-soft aren't given explicit source values, so both were
+   derived and checked the same way every other theme's own un-sourced
+   tokens were: --ink-soft #7FB8D6 (8.51:1 on --bg, 6.94:1 on --card, a
+   dimmer step down from --ink while still clearing body-text contrast with
+   real margin); --line #234A73, a mid blue-gray divider step between --card
+   and --binder - not held to a contrast minimum, matching this app's own
+   existing precedent (Light's own --line is barely distinguishable from
+   its --bg/--card too - dividers here have never been contrast-checked
+   text/UI-boundary elements, just a subtle seam). --goal reuses "Highlight
+   cyan" #C9EEFF (15:1 / 12.25:1) since the given palette has no purple to
+   carry over the other three themes' goal-indicator hue, and cyan-on-cyan
+   still reads as clearly distinct from the dimmer --ink at a glance. */
+body[data-theme="webline"]{
+  --bg:#0A1428;
+  --card:#12283F;
+  --ink:#9FDBF5;
+  --ink-soft:#7FB8D6;
+  --line:#234A73;
+  --credit:#6FCF57;
+  --debit:#EE6B6B;
+  --gold:#F0A030;
+  --link:#F0A030;
+  --goal:#C9EEFF;
+  --binder:#2C6FB5;
+  --binder-light:#4FA3E0;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.4);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.5);
+  --shadow-glass:0 1px 2px rgba(0,0,0,.4), 0 12px 28px rgba(0,0,0,.45);
+  --shadow-fab:0 8px 22px rgba(0,0,0,.6);
+  --shadow-nav:0 -4px 20px rgba(0,0,0,.4);
+}
+
+/* ---------- Typography split ----------
+   Deliberately backwards from what's tempting: the WHOLE body defaults to
+   the readable mono face, and the pixel display face is opted IN only for
+   the specific chrome elements section 4 named (titles, headings, buttons,
+   panel chrome, field labels, More menu rows). Press Start 2P is roughly
+   2x the width of VT323 per character - applying it anywhere near amounts,
+   dates, particulars, category names, History/Recent Activity rows, or the
+   tab bar would reopen the exact truncation bugs this project just spent a
+   week fixing on real hardware. Defaulting mono-first and opting pixel IN
+   for a narrow, explicit list (rather than defaulting pixel and opting mono
+   OUT everywhere else) means anything I forgot to list below fails safe
+   into the narrow font, never the wide one. */
+body[data-theme="webline"]{
+  font-family:'Webline Mono','VT323',monospace;
+}
+body[data-theme="webline"] h1,
+body[data-theme="webline"] h2,
+body[data-theme="webline"] h3,
+body[data-theme="webline"] .card-label,
+body[data-theme="webline"] .danger-zone-label,
+body[data-theme="webline"] .btn-pill,
+body[data-theme="webline"] .link-btn,
+body[data-theme="webline"] .segmented button,
+body[data-theme="webline"] .more-row,
+body[data-theme="webline"] .brand-name,
+body[data-theme="webline"] label,
+body[data-theme="webline"] .filter-inline-label{
+  font-family:'Webline Pixel','Press Start 2P',monospace;
+}
+/* Pixel-font elements need a size/line-height correction wherever the base
+   rule didn't already set an explicit font-size - Press Start 2P's glyphs
+   are drawn on a much wider/taller em box than Inter's, so reusing the same
+   numeric font-size the other three themes use renders noticeably larger
+   than intended. Sized down and given more line-height room, not moved,
+   resized or repositioned - no top/left/width/height/margin here. */
+body[data-theme="webline"] h1{ font-size:15px; line-height:1.5; letter-spacing:0; }
+body[data-theme="webline"] h2{ font-size:13px; line-height:1.6; letter-spacing:0; }
+body[data-theme="webline"] h3{ font-size:11.5px; line-height:1.6; letter-spacing:0; }
+body[data-theme="webline"] .card-label,
+body[data-theme="webline"] .danger-zone-label{ font-size:10px; letter-spacing:.5px; }
+body[data-theme="webline"] .btn-pill,
+body[data-theme="webline"] .segmented button{ font-size:10px; line-height:1.7; }
+body[data-theme="webline"] .link-btn{ font-size:9.5px; line-height:1.7; }
+body[data-theme="webline"] .more-row{ font-size:10.5px; }
+body[data-theme="webline"] label{ font-size:11px; line-height:1.8; }
+
+/* Readable-mono content needs its own size nudge in the other direction -
+   VT323 is drawn narrower/shorter per character than Inter at the same
+   numeric size, so reused as-is it reads noticeably smaller/thinner than
+   every other theme's body text. Bumped up, not relaid-out. */
+body[data-theme="webline"] .balance-amount{ font-size:34px; }
+body[data-theme="webline"] .mono-num,
+body[data-theme="webline"] .activity-amt,
+body[data-theme="webline"] .activity-sub,
+body[data-theme="webline"] .activity-sub-note,
+body[data-theme="webline"] .activity-sub-date,
+body[data-theme="webline"] .history-sub-mobile,
+body[data-theme="webline"] .period-hint,
+body[data-theme="webline"] .empty-note,
+body[data-theme="webline"] .progress-row,
+body[data-theme="webline"] .progress-spent,
+body[data-theme="webline"] .tab-label{ font-size:1.12em; }
+
+/* ---------- Chrome: topbar / nav / cards (colour + border only - the
+   .topbar/.bottom-nav geometry itself is untouched, see the file banner) */
+body[data-theme="webline"] .spine{ background:rgba(10,20,40,.9); border-right:2px solid var(--binder); }
+body[data-theme="webline"] .bottom-nav{ background:rgba(10,20,40,.92); border-top:2px solid var(--binder); }
+body[data-theme="webline"] .topbar{ background:rgba(10,20,40,.88); border-bottom:2px solid var(--binder); }
+body[data-theme="webline"] .icon-circle{ background:var(--card); border:2px solid var(--binder); border-radius:0; box-shadow:none; }
+body[data-theme="webline"] .card-glass{
+  background:var(--card); backdrop-filter:none; -webkit-backdrop-filter:none;
+  border:2px solid var(--binder);
+}
+body[data-theme="webline"] .stamp-overlay .stamp{ background:var(--card); border:2px solid var(--binder); }
+body[data-theme="webline"] .data-table tr:hover{ background:rgba(159,219,245,.08); }
+body[data-theme="webline"] .spine .tab-btn.active,
+body[data-theme="webline"] .bottom-nav .tab-btn.active{ color:var(--ink); }
+body[data-theme="webline"] .bottom-nav .tab-btn.fab{ border-color:var(--card); }
+
+body[data-theme="webline"] .ledger-form input, body[data-theme="webline"] .ledger-form select,
+body[data-theme="webline"] .filter-row select, body[data-theme="webline"] .search-input,
+body[data-theme="webline"] .period-inputs input, body[data-theme="webline"] .budget-limit-input input,
+body[data-theme="webline"] .log-payment-form input, body[data-theme="webline"] .log-payment-form select, body[data-theme="webline"] .cat-col form input,
+body[data-theme="webline"] .settings-row input, body[data-theme="webline"] .btn-outline,
+body[data-theme="webline"] .filter-inline-label input,
+body[data-theme="webline"] .contribution-form input{
+  background:#16181C; border:2px solid var(--line); color:var(--ink); border-radius:0;
+}
+body[data-theme="webline"] .more-row, body[data-theme="webline"] .summary-box, body[data-theme="webline"] .insight-note,
+body[data-theme="webline"] .log-payment-form, body[data-theme="webline"] .contribution-form{
+  background:var(--card);
+}
+body[data-theme="webline"] .progress-track, body[data-theme="webline"] .breakdown-track,
+body[data-theme="webline"] .budget-bar-track, body[data-theme="webline"] .debt-bar-track,
+body[data-theme="webline"] .goal-bar-track{ background:#16181C; border-radius:0; }
+body[data-theme="webline"] .progress-fill{ border-radius:0; }
+body[data-theme="webline"] .ring-period-btn.active,
+body[data-theme="webline"] .type-btn.active,
+body[data-theme="webline"] .segmented button.active{
+  background:var(--binder); color:#FFFFFF; box-shadow:none; border-radius:0;
+}
+body[data-theme="webline"] .type-btn.credit.active{ color:var(--credit); }
+body[data-theme="webline"] .type-btn.debit.active{ color:var(--debit); }
+body[data-theme="webline"] .btn-debit{ color:var(--bg); }
+body[data-theme="webline"] .btn-danger{ color:var(--bg); }
+
+/* ---------- Pixel chrome ----------
+   Stepped/notched corners via clip-path (not border-image - no extra image
+   asset needed, and clip-path is a pure paint-time clip that can't move a
+   box's own layout geometry the way changing its box model could). Applied
+   alongside border-radius:0 so nothing rounded survives underneath the
+   clip. A hard, unblurred offset box-shadow stands in for a drop shadow
+   (blur reads as soft/photographic, flat offset reads as pixel/retro). */
+body[data-theme="webline"] .card{
+  border-radius:0;
+  border:2px solid var(--binder);
+  box-shadow:
+    inset 1px 1px 0 var(--binder-light),
+    inset -1px -1px 0 rgba(0,0,0,.5),
+    4px 4px 0 rgba(0,0,0,.35);
+  clip-path: polygon(
+    0 8px, 8px 8px, 8px 0,
+    calc(100% - 8px) 0, calc(100% - 8px) 8px, 100% 8px,
+    100% calc(100% - 8px), calc(100% - 8px) calc(100% - 8px), calc(100% - 8px) 100%,
+    8px 100%, 8px calc(100% - 8px), 0 calc(100% - 8px)
+  );
+}
+body[data-theme="webline"] .btn-pill{
+  border-radius:0;
+  border:2px solid var(--binder);
+  background:var(--card);
+  color:var(--ink);
+  box-shadow:
+    inset 2px 2px 0 var(--binder-light),
+    inset -2px -2px 0 rgba(0,0,0,.5);
+}
+body[data-theme="webline"] .btn-pill:hover{ filter:none; background:var(--card); }
+body[data-theme="webline"] .btn-pill:active{
+  box-shadow:
+    inset -2px -2px 0 var(--binder-light),
+    inset 2px 2px 0 rgba(0,0,0,.5);
+}
+body[data-theme="webline"] .btn-black{
+  background:var(--binder); color:#FFFFFF;
+  box-shadow:
+    inset 2px 2px 0 var(--binder-light),
+    inset -2px -2px 0 rgba(0,0,0,.5);
+}
+body[data-theme="webline"] .btn-black:active{
+  box-shadow:
+    inset -2px -2px 0 var(--binder-light),
+    inset 2px 2px 0 rgba(0,0,0,.5);
+}
+/* "Button fill amber" from the reference palette - reserved for .btn-outline
+   specifically (the app's neutral secondary button, used all over Settings/
+   More), so at least one pixel button reads warm/amber rather than every
+   button in the app sharing the exact same blue. Text is --bg (near-black
+   navy), not white - verified 12.09:1, white-on-amber would only clear
+   ~1.4:1. */
+body[data-theme="webline"] .btn-outline{
+  background:#FBC98A;
+  color:var(--bg);
+  border:2px solid #B87A3D;
+  box-shadow:
+    inset 2px 2px 0 rgba(255,255,255,.55),
+    inset -2px -2px 0 rgba(0,0,0,.3);
+}
+body[data-theme="webline"] .btn-outline:hover{ background:#FBC98A; }
+body[data-theme="webline"] .btn-outline:active{
+  box-shadow:
+    inset -2px -2px 0 rgba(255,255,255,.55),
+    inset 2px 2px 0 rgba(0,0,0,.3);
+}
+body[data-theme="webline"] .icon-btn-sm{ border-radius:0; border:2px solid var(--line); background:var(--card); }
+body[data-theme="webline"] .icon-btn-sm:hover{ background:var(--line); }
+
+/* Segmented control (used by the theme picker itself, among others) */
+body[data-theme="webline"] .segmented{ border-radius:0; border:2px solid var(--line); background:#16181C; }
+body[data-theme="webline"] .segmented button{ border-radius:0; }
+
+/* Toggle switch -> pixel square instead of a pill/circle. Same box model
+   (width/height/position unchanged), only shape/colour of the painted
+   pieces inside it. */
+body[data-theme="webline"] .theme-toggle{ border-radius:0; border:2px solid var(--line); background:#16181C; }
+body[data-theme="webline"] .theme-toggle .theme-toggle-thumb{ border-radius:0; background:var(--ink-soft); box-shadow:none; }
+body[data-theme="webline"] .theme-toggle.on{ background:var(--binder); border-color:var(--binder-light); }
+body[data-theme="webline"] .theme-toggle.on .theme-toggle-thumb{ background:#FFFFFF; }
+
+/* Panel/section headers (More sub-pages, report header) get a small
+   bottom rule in the frame colour, reading as a console header bar without
+   touching the heading element's own box model. */
+body[data-theme="webline"] .more-sub h2,
+body[data-theme="webline"] .report-header h2{
+  padding-bottom:10px; border-bottom:2px solid var(--binder);
+}
+
+/* Focus ring uses the amber accent already used for --gold everywhere else
+   in this app - unchanged mechanism (*:focus-visible), only colour, and
+   --gold already IS the Webline amber, so this rule needs no override at
+   all; kept here only as an explicit statement of that fact for review. */
+
+/* ---------- Auth screen ----------
+   No positioning/padding rules for #auth-overlay here on purpose - its
+   safe-area handling was fixed recently and is confirmed correct on real
+   hardware; this file only ever adds colour/border rules that cascade in
+   through the same .card/.btn-pill/input selectors already covered above,
+   since the auth screens are built from the same shared components as the
+   rest of the app rather than their own bespoke markup. */
