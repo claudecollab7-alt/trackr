@@ -3558,7 +3558,13 @@
       document.head.appendChild(link);
     }
     if(!weblineModulePromise){
-      weblineModulePromise = import('./js/webline.js').then((mod) => { weblineModule = mod; return mod; }).catch((err) => {
+      // Specifier is relative to THIS SCRIPT's own URL (js/app.js), not the document location -
+      // that's './webline.js' (same js/ directory), not './js/webline.js' (which 404s as
+      // js/js/webline.js). Confirmed by direct test - the document-base-URL assumption that
+      // would justify './js/webline.js' only holds for import specifiers written inside an ES
+      // module; dynamic import() from a classic <script src="js/app.js"> resolves against that
+      // script's own URL instead.
+      weblineModulePromise = import('./webline.js').then((mod) => { weblineModule = mod; return mod; }).catch((err) => {
         console.error('[webline] js/webline.js failed to load - theme stays CSS-only, no mount() side effects', err);
         try{ if(typeof diagLogPage==='function') diagLogPage('webline:js-load-failed', err && err.message); }catch(e){}
         weblineModulePromise = null; // allow a retry on the next activation attempt
