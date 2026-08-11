@@ -285,12 +285,14 @@ function pauseAnimations(){
   animationsPaused = true;
   if(crtEl) crtEl.classList.add('webline-anim-paused');
   stopParticles();
+  pauseMascotTimers();
 }
 function resumeAnimations(){
   if(!animationsPaused) return;
   animationsPaused = false;
   if(crtEl) crtEl.classList.remove('webline-anim-paused');
   if(!reduceAnimationsRequested()) startParticles();
+  if(!reduceAnimationsRequested()) resumeMascotTimers();
 }
 function handleVisibilityChange(){
   if(document.hidden) pauseAnimations();
@@ -362,8 +364,396 @@ function handleBodyMutations(mutations){
     if(m.type === 'attributes') attrChanged = true;
     else contentChanged = true;
   });
-  if(contentChanged) scheduleForwardPass();
+  if(contentChanged){ scheduleForwardPass(); detectCelebration(); }
   if(attrChanged) handleReducedMotionChange();
+}
+
+// ---------- Mascot (Phase 3, Part B) ----------
+// A companion pixel spider. State lives entirely in this module - the only
+// application state it ever reads is the existing DOM (bottom-nav position
+// for placement, .goal-reached-tag/.paidoff-tag for celebration), never a
+// closure variable or storage call, per the hard rule. Every timer/
+// listener/rAF handle created below goes through the same track()/untrack()
+// registry as the atmosphere code above, and reuses the SAME pause/resume
+// choke point (pauseAnimations()/resumeAnimations(), extended above) rather
+// than standing up its own visibilitychange/reduced-motion listeners.
+let mascotEl = null;
+let hitEl = null;
+let threadEl = null;
+let pupilL = null;
+let pupilR = null;
+let mascotResizeHandler = null;
+let mascotTapHandler = null;
+let scrollContainer = null;
+let mascotScrollHandler = null;
+let scrollEndHandle = null;
+let interactionHandler = null;
+let sleepTimeoutHandle = null;
+let isSleeping = false;
+let blinkHandle = null;
+let idleHandle = null;
+let transientTimeoutHandle = null;
+let transientLock = false;
+let celebrationTimeoutHandle = null;
+let dropInTimeoutHandles = [];
+let mousemoveHandler = null;
+let eyeTrackRafHandle = null;
+let mouseX = null;
+let mouseY = null;
+let desktopMql = null;
+let desktopMqlHandler = null;
+let initialMountRafHandle = null;
+const celebratedIds = new Set();
+const IDLE_VARIANTS = ['webline-mascot-idle-stretch', 'webline-mascot-idle-hop', 'webline-mascot-idle-tilt'];
+const IDLE_DURATIONS = { 'webline-mascot-idle-stretch': 1200, 'webline-mascot-idle-hop': 600, 'webline-mascot-idle-tilt': 800 };
+
+// bottom is computed from .bottom-nav's own measured rect (a DOM read, not
+// a duplicated safe-area formula) so the mascot inherits correctness from
+// the nav's already-correct position instead of re-deriving it - see the
+// CSS comment above .webline-mascot. On desktop the media query's
+// `bottom:20px !important` overrides this inline value entirely.
+function repositionMascot(){
+  if(!mascotEl || !hitEl) return;
+  const nav = document.querySelector('.bottom-nav');
+  let bottomOffset = 8;
+  if(nav){
+    const rect = nav.getBoundingClientRect();
+    if(rect.height > 0) bottomOffset = Math.max(0, window.innerHeight - rect.top);
+  }
+  mascotEl.style.bottom = bottomOffset + 'px';
+  hitEl.style.bottom = bottomOffset + 'px';
+  positionThread();
+}
+
+function positionThread(){
+  if(!threadEl || !mascotEl) return;
+  const rect = mascotEl.getBoundingClientRect();
+  threadEl.style.left = (rect.left + rect.width / 2 - 1) + 'px';
+  threadEl.style.height = Math.max(0, rect.top) + 'px';
+}
+
+function clearDropInTimeouts(){
+  dropInTimeoutHandles.forEach((h) => { clearTimeout(h); untrack(h); });
+  dropInTimeoutHandles = [];
+}
+
+// B3 priority 1, the signature moment. Once per activation (called once
+// from mount(), never from a re-render), reduced-motion aware: with
+// animations off the sprite still needs to exist and sit in its resting
+// spot, it just doesn't get the fall/bounce/thread treatment.
+function triggerDropIn(){
+  if(!mascotEl || !threadEl) return;
+  clearDropInTimeouts();
+  repositionMascot();
+  if(reduceAnimationsRequested()){
+    return;
+  }
+  transientLock = true;
+  threadEl.style.opacity = '1';
+  threadEl.classList.remove('webline-mascot-thread-retracting');
+  mascotEl.classList.add('webline-mascot-dropping');
+  const h1 = track(setTimeout(() => {
+    dropInTimeoutHandles = dropInTimeoutHandles.filter((h) => h !== h1);
+    untrack(h1);
+    if(threadEl) threadEl.classList.add('webline-mascot-thread-retracting');
+  }, 50));
+  const h2 = track(setTimeout(() => {
+    dropInTimeoutHandles = dropInTimeoutHandles.filter((h) => h !== h2);
+    untrack(h2);
+    if(mascotEl) mascotEl.classList.remove('webline-mascot-dropping');
+    transientLock = false;
+  }, 1150));
+  const h3 = track(setTimeout(() => {
+    dropInTimeoutHandles = dropInTimeoutHandles.filter((h) => h !== h3);
+    untrack(h3);
+    if(threadEl) threadEl.style.opacity = '0';
+  }, 1300));
+  dropInTimeoutHandles = [h1, h2, h3];
+}
+
+// Shared one-shot animation player for blink/surprised/random-idle - every
+// caller just names a state class and a duration, so there is exactly one
+// place that owns the "add class, hold, remove class" timer instead of one
+// per animation. transientLock keeps two of these from stomping each
+// other's background-position mid-animation (e.g. a blink firing while a
+// celebration wave is still playing).
+function playTransient(className, duration){
+  if(!mascotEl) return;
+  transientLock = true;
+  mascotEl.classList.add(className);
+  if(transientTimeoutHandle != null){ clearTimeout(transientTimeoutHandle); untrack(transientTimeoutHandle); }
+  transientTimeoutHandle = track(setTimeout(() => {
+    untrack(transientTimeoutHandle);
+    transientTimeoutHandle = null;
+    if(mascotEl) mascotEl.classList.remove(className);
+    transientLock = false;
+  }, duration));
+}
+
+// Recursive setTimeout scheduling, following the same rule the Phase 2 rAF
+// particle loop had to learn the hard way: untrack a handle the moment it
+// fires (first line of the callback), before tracking the next one - never
+// let two generations of the same recurring handle exist in the registry
+// at once.
+function scheduleBlink(){
+  blinkHandle = track(setTimeout(runBlink, 3000 + Math.random() * 4000));
+}
+function runBlink(){
+  untrack(blinkHandle);
+  blinkHandle = null;
+  if(mascotEl && !isSleeping && !transientLock && !document.hidden && !reduceAnimationsRequested()){
+    playTransient('webline-mascot-blinking', 900);
+  }
+  scheduleBlink();
+}
+
+function scheduleIdle(){
+  idleHandle = track(setTimeout(runIdle, 15000 + Math.random() * 15000));
+}
+function runIdle(){
+  untrack(idleHandle);
+  idleHandle = null;
+  if(mascotEl && !isSleeping && !transientLock && !document.hidden && !reduceAnimationsRequested()){
+    const variant = IDLE_VARIANTS[Math.floor(Math.random() * IDLE_VARIANTS.length)];
+    playTransient(variant, IDLE_DURATIONS[variant]);
+  }
+  scheduleIdle();
+}
+
+function pauseMascotTimers(){
+  if(blinkHandle != null){ clearTimeout(blinkHandle); untrack(blinkHandle); blinkHandle = null; }
+  if(idleHandle != null){ clearTimeout(idleHandle); untrack(idleHandle); idleHandle = null; }
+}
+function resumeMascotTimers(){
+  if(!mascotEl) return;
+  if(blinkHandle == null) scheduleBlink();
+  if(idleHandle == null) scheduleIdle();
+}
+
+// B3 priority 8: after 2 minutes with no interaction anywhere in the app
+// (not just on the mascot itself), curl legs in and close eyes to slits.
+// Any interaction resets the clock and wakes him if he was asleep.
+function enterSleep(){
+  isSleeping = true;
+  if(mascotEl) mascotEl.classList.add('webline-mascot-sleeping');
+}
+function wakeMascot(){
+  if(!isSleeping) return;
+  isSleeping = false;
+  if(mascotEl) mascotEl.classList.remove('webline-mascot-sleeping');
+}
+function resetSleepTimer(){
+  if(sleepTimeoutHandle != null){ clearTimeout(sleepTimeoutHandle); untrack(sleepTimeoutHandle); sleepTimeoutHandle = null; }
+  wakeMascot();
+  sleepTimeoutHandle = track(setTimeout(() => {
+    untrack(sleepTimeoutHandle);
+    sleepTimeoutHandle = null;
+    enterSleep();
+  }, 120000));
+}
+
+// B2: fades toward 25% opacity while the app's one real scroll container is
+// actively moving, restored ~200ms after it settles, so the mascot never
+// sits on top of a transaction being read.
+function attachScrollFade(){
+  scrollContainer = document.querySelector('.views') || window;
+  mascotScrollHandler = track(() => {
+    if(mascotEl) mascotEl.classList.add('webline-mascot-scrolling');
+    resetSleepTimer();
+    if(scrollEndHandle != null){ clearTimeout(scrollEndHandle); untrack(scrollEndHandle); }
+    scrollEndHandle = track(setTimeout(() => {
+      untrack(scrollEndHandle);
+      scrollEndHandle = null;
+      if(mascotEl) mascotEl.classList.remove('webline-mascot-scrolling');
+    }, 200));
+  });
+  scrollContainer.addEventListener('scroll', mascotScrollHandler, { passive: true });
+}
+
+function handleMascotTap(){
+  resetSleepTimer();
+  if(reduceAnimationsRequested()) return;
+  playTransient('webline-mascot-surprised', 500);
+}
+
+// B3 priority 4, desktop only. Throttled to at most one pending rAF at a
+// time (scheduleEyeTrackFrame only requests a new frame if none is already
+// queued) rather than requesting a fresh frame per mousemove event, which
+// keeps this from ever accumulating more than one live handle - the exact
+// shape of bug the particle loop had before its fix.
+function runEyeTrackFrame(){
+  untrack(eyeTrackRafHandle);
+  eyeTrackRafHandle = null;
+  if(!mascotEl || !pupilL || !pupilR || mouseX == null) return;
+  const rect = mascotEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2, cy = rect.top + rect.height * 0.3;
+  const dx = mouseX - cx, dy = mouseY - cy;
+  const dist = Math.max(1, Math.hypot(dx, dy));
+  const maxShift = 1.6;
+  const shiftX = (dx / dist) * Math.min(maxShift, dist / 40);
+  const shiftY = (dy / dist) * Math.min(maxShift, dist / 40);
+  const t = 'translate(' + shiftX.toFixed(2) + 'px,' + shiftY.toFixed(2) + 'px)';
+  pupilL.style.transform = t;
+  pupilR.style.transform = t;
+}
+function handleMouseMove(e){
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  if(eyeTrackRafHandle == null) eyeTrackRafHandle = track(requestAnimationFrame(runEyeTrackFrame));
+}
+function updateEyeTrackingListener(){
+  const desktop = desktopMql ? desktopMql.matches : false;
+  if(desktop && !mousemoveHandler){
+    mousemoveHandler = track(handleMouseMove);
+    window.addEventListener('mousemove', mousemoveHandler);
+  } else if(!desktop && mousemoveHandler){
+    window.removeEventListener('mousemove', mousemoveHandler);
+    untrack(mousemoveHandler);
+    mousemoveHandler = null;
+    if(eyeTrackRafHandle != null){ cancelAnimationFrame(eyeTrackRafHandle); untrack(eyeTrackRafHandle); eyeTrackRafHandle = null; }
+    if(pupilL) pupilL.style.transform = '';
+    if(pupilR) pupilR.style.transform = '';
+  }
+}
+
+// B3 priority 7. Reads existing rendered state only - the debt/goal card's
+// own .paidoff-tag/.goal-reached-tag markup (js/app.js) - never a hook into
+// logDebtPayment()/goal contribution code. Dedupes on the card's own
+// data-id (already present on its edit button) rather than the tag element
+// itself, since re-renders create fresh tag elements every time the list
+// redraws, not just when a debt/goal newly completes.
+function detectCelebration(){
+  if(!mascotEl) return;
+  const tags = document.querySelectorAll('.goal-reached-tag, .paidoff-tag');
+  for(const tag of tags){
+    const card = tag.closest('.goal-card, .debt-card');
+    const idEl = card && card.querySelector('[data-id]');
+    if(!idEl) continue;
+    const key = (card.classList.contains('goal-card') ? 'goal:' : 'debt:') + idEl.dataset.id;
+    if(celebratedIds.has(key)) continue;
+    celebratedIds.add(key);
+    if(!reduceAnimationsRequested()) triggerCelebration();
+    return;
+  }
+}
+function triggerCelebration(){
+  if(!mascotEl) return;
+  if(celebrationTimeoutHandle != null){ clearTimeout(celebrationTimeoutHandle); untrack(celebrationTimeoutHandle); }
+  mascotEl.classList.remove('webline-mascot-blinking', 'webline-mascot-surprised', 'webline-mascot-idle-stretch', 'webline-mascot-idle-hop', 'webline-mascot-idle-tilt');
+  transientLock = true;
+  mascotEl.classList.add('webline-mascot-celebrating');
+  celebrationTimeoutHandle = track(setTimeout(() => {
+    untrack(celebrationTimeoutHandle);
+    celebrationTimeoutHandle = null;
+    if(mascotEl) mascotEl.classList.remove('webline-mascot-celebrating');
+    transientLock = false;
+  }, 1650));
+}
+
+function mountMascot(){
+  threadEl = track(document.createElement('div'));
+  threadEl.className = 'webline-mascot-thread';
+  threadEl.setAttribute('aria-hidden', 'true');
+  threadEl.style.opacity = '0';
+  document.body.appendChild(threadEl);
+
+  mascotEl = track(document.createElement('div'));
+  mascotEl.className = 'webline-mascot';
+  mascotEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(mascotEl);
+
+  pupilL = track(document.createElement('div'));
+  pupilL.className = 'webline-mascot-pupil webline-mascot-pupil-l';
+  mascotEl.appendChild(pupilL);
+  pupilR = track(document.createElement('div'));
+  pupilR.className = 'webline-mascot-pupil webline-mascot-pupil-r';
+  mascotEl.appendChild(pupilR);
+
+  hitEl = track(document.createElement('div'));
+  hitEl.className = 'webline-mascot-hit';
+  hitEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(hitEl);
+
+  mascotResizeHandler = track(() => repositionMascot());
+  window.addEventListener('resize', mascotResizeHandler);
+
+  mascotTapHandler = track(handleMascotTap);
+  hitEl.addEventListener('click', mascotTapHandler);
+
+  attachScrollFade();
+
+  interactionHandler = track(() => resetSleepTimer());
+  document.addEventListener('pointerdown', interactionHandler);
+  document.addEventListener('keydown', interactionHandler);
+
+  desktopMql = window.matchMedia('(min-width:781px)');
+  desktopMqlHandler = track(updateEyeTrackingListener);
+  desktopMql.addEventListener('change', desktopMqlHandler);
+  updateEyeTrackingListener();
+
+  resetSleepTimer();
+  if(!document.hidden && !reduceAnimationsRequested()){
+    scheduleBlink();
+    scheduleIdle();
+  }
+
+  // Measuring .bottom-nav's rect right on mount (a remount, not the first
+  // one this page load) sometimes raced a layout that hadn't settled yet -
+  // confirmed the hard way, a real device-independent repro: switch theme
+  // away and back, and the very next getBoundingClientRect() on the nav
+  // could still reflect a stale/mid-reflow position, throwing the mascot
+  // off-screen (bottom:900px, i.e. nav.top read as 0). Hiding the sprite
+  // and deferring the first repositionMascot()/triggerDropIn() past two
+  // animation frames guarantees layout has been flushed and stable before
+  // anything measures it or starts animating from that measurement.
+  mascotEl.style.visibility = 'hidden';
+  threadEl.style.visibility = 'hidden';
+  const raf1 = track(requestAnimationFrame(() => {
+    untrack(raf1);
+    const raf2 = track(requestAnimationFrame(() => {
+      untrack(raf2);
+      initialMountRafHandle = null;
+      if(mascotEl) mascotEl.style.visibility = '';
+      if(threadEl) threadEl.style.visibility = '';
+      triggerDropIn();
+    }));
+    initialMountRafHandle = raf2;
+  }));
+  initialMountRafHandle = raf1;
+}
+
+function unmountMascot(){
+  if(mascotResizeHandler){ window.removeEventListener('resize', mascotResizeHandler); untrack(mascotResizeHandler); mascotResizeHandler = null; }
+  if(mascotTapHandler && hitEl){ hitEl.removeEventListener('click', mascotTapHandler); untrack(mascotTapHandler); mascotTapHandler = null; }
+  if(mascotScrollHandler && scrollContainer){ scrollContainer.removeEventListener('scroll', mascotScrollHandler); untrack(mascotScrollHandler); mascotScrollHandler = null; }
+  scrollContainer = null;
+  if(scrollEndHandle != null){ clearTimeout(scrollEndHandle); untrack(scrollEndHandle); scrollEndHandle = null; }
+  if(interactionHandler){
+    document.removeEventListener('pointerdown', interactionHandler);
+    document.removeEventListener('keydown', interactionHandler);
+    untrack(interactionHandler);
+    interactionHandler = null;
+  }
+  if(sleepTimeoutHandle != null){ clearTimeout(sleepTimeoutHandle); untrack(sleepTimeoutHandle); sleepTimeoutHandle = null; }
+  if(blinkHandle != null){ clearTimeout(blinkHandle); untrack(blinkHandle); blinkHandle = null; }
+  if(idleHandle != null){ clearTimeout(idleHandle); untrack(idleHandle); idleHandle = null; }
+  if(transientTimeoutHandle != null){ clearTimeout(transientTimeoutHandle); untrack(transientTimeoutHandle); transientTimeoutHandle = null; }
+  if(celebrationTimeoutHandle != null){ clearTimeout(celebrationTimeoutHandle); untrack(celebrationTimeoutHandle); celebrationTimeoutHandle = null; }
+  if(initialMountRafHandle != null){ cancelAnimationFrame(initialMountRafHandle); untrack(initialMountRafHandle); initialMountRafHandle = null; }
+  clearDropInTimeouts();
+  if(mousemoveHandler){ window.removeEventListener('mousemove', mousemoveHandler); untrack(mousemoveHandler); mousemoveHandler = null; }
+  if(eyeTrackRafHandle != null){ cancelAnimationFrame(eyeTrackRafHandle); untrack(eyeTrackRafHandle); eyeTrackRafHandle = null; }
+  if(desktopMql && desktopMqlHandler){ desktopMql.removeEventListener('change', desktopMqlHandler); untrack(desktopMqlHandler); desktopMqlHandler = null; desktopMql = null; }
+  if(hitEl){ hitEl.remove(); untrack(hitEl); hitEl = null; }
+  if(pupilL){ untrack(pupilL); pupilL = null; }
+  if(pupilR){ untrack(pupilR); pupilR = null; }
+  if(mascotEl){ mascotEl.remove(); untrack(mascotEl); mascotEl = null; }
+  if(threadEl){ threadEl.remove(); untrack(threadEl); threadEl = null; }
+  celebratedIds.clear();
+  isSleeping = false;
+  transientLock = false;
+  mouseX = null;
+  mouseY = null;
 }
 
 export function mount(){
@@ -376,6 +766,7 @@ export function mount(){
     });
   }
   mountAtmosphere();
+  mountMascot();
 }
 
 export function unmount(){
@@ -389,6 +780,7 @@ export function unmount(){
     untrack(rafHandle);
     rafHandle = null;
   }
+  unmountMascot();
   unmountAtmosphere();
   // Reverts every element the forward pass ever touched, in one pass over
   // the DOM as it stands right now — every relabel target is a static,

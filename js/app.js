@@ -137,16 +137,24 @@
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
   const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
-  // Webline (Phase 2, A4): the base CAT_PALETTE's bright pink/lime/hot-orange swatches read as
-  // loudest-thing-on-screen against Webline's navy console and looked like a different app on a
-  // real device. Every value here is drawn from the blue/cyan/amber/green/red families the
-  // Webline palette itself uses (not invented separately) and independently checked for white
-  // text on top - .cat-badge hardcodes color:#fff - at >=4.28:1 (most well above), so the
-  // category-initial letter stays legible on every swatch, not just some of them. Presentation
-  // only: this is a rendering-time lookup keyed by category name (see categoryColor() below),
+  // Webline (Phase 2, A4; rebuilt Phase 3, A3): the base CAT_PALETTE's bright pink/lime/hot-orange
+  // swatches read as loudest-thing-on-screen against Webline's navy console on a real device -
+  // fixed in Phase 2 by deriving every swatch from the Webline hue families instead. That first
+  // attempt clustered 3 near-identical blues and 2 near-identical teals next to each other in the
+  // array, so on a real device with several categories in a row, 5 of 7 visible avatars read as
+  // "green" and the amber read as muddy brown against the navy - confirmed on a real screenshot,
+  // not assumed. Rebuilt from scratch in HSL space (not picked by eye) - 11 hues spread across the
+  // wheel (5-332 degrees) with saturation/lightness individually tuned per hue (some hues go muddy
+  // or lose contrast faster than others at the same lightness), THEN interleaved warm/cool so no
+  // two ADJACENT entries share a hue family - categoryColor() below assigns palette indices in the
+  // order categories were created, so adjacent array entries are exactly the case that actually
+  // shows up side-by-side in a real category list. Every value independently checked for white
+  // text on top (.cat-badge hardcodes color:#fff) at >=5.4:1, comfortably clearing AA even for the
+  // weakest entry (cyan-2, 5.41:1) - stronger margin than Phase 2's own palette had throughout.
+  // Presentation only: a rendering-time lookup keyed by category name (see categoryColor() below),
   // never the category's own stored colour value - unaffected on every other theme, same as the
   // Crimson palette above already proves the pattern for.
-  const CAT_PALETTE_WEBLINE = ['#0F4C81','#1E5A94','#2C6FB5','#177A94','#1A7A7A','#8A5A10','#A8650F','#3D8A2F','#2F7A22','#C23B3B','#B33333','#3D4FA8'];
+  const CAT_PALETTE_WEBLINE = ['#9B3027','#29488E','#935015','#186253','#91305E','#156579','#766019','#4B3B9B','#2A6F2C','#713D8F','#2E6F9E'];
 
   function defaultCategories(){
     return {
