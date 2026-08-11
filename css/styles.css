@@ -68,7 +68,7 @@
   html{ background:var(--bg); }
   html[data-theme="dark"]{ background:#0B1220; }
   html[data-theme="crimson"]{ background:#1E1E27; }
-  html[data-theme="webline"]{ background:#0A1428; }
+  html[data-theme="black"]{ background:#000000; }
   button, a, .node, [onclick]{ touch-action:manipulation; }
   body{
     font-family:'Inter',system-ui,sans-serif;
@@ -767,15 +767,142 @@
   body[data-theme="crimson"] .btn-debit{ color:var(--bg); }
   body[data-theme="crimson"] .bottom-nav .tab-btn.active{ color:var(--binder); }
 
-  /* Hidden here (a normal stylesheet rule, not the inline style the element used to carry) so
-     webline.css's own body[data-theme="webline"] #webline-reduce-anim-row{display:flex} override
-     - a more specific selector, but still just a stylesheet rule - can actually win by CSS
-     specificity. An inline style="display:none" would have needed !important to be overridden at
-     all, since inline styles always beat any external-stylesheet selector regardless of
-     specificity - confirmed the hard way, this element was undetectable/unclickable in a
-     real end-to-end test until the display:none moved out of its own style attribute. Meaningless
-     for Light/Dark/Crimson (no animation to reduce), which is why it starts hidden at all. */
-  #webline-reduce-anim-row{ display:none; }
+  /* ---------- Type-scale calibration findings (Webline, v48-v50, retired) ----------
+     Webline (the pixel-console theme) measured how VT323/Press Start 2P actually render
+     compared to Inter, at real sizes, on a real device. The theme itself is gone, but these
+     numbers were expensive to derive (two separate Playwright measurement passes across two
+     rounds) and may be useful again if any future theme ever mixes display faces with Inter:
+       - Cap-height ratio, measured by rendering 'M' in each face across an 8-34px sweep and
+         reading back actualBoundingBoxAscent/Descent from canvas text metrics, then a
+         least-squares fit: Inter ~0.695, Press Start 2P (pixel face) ~0.887, VT323 (mono face)
+         ~0.572. To make a face's rendered cap-height match Inter's own for a given nominal
+         size N: pixel_px = N * (0.695/0.887) = N * 0.784; mono_px = N * (0.695/0.572) = N * 1.215.
+       - The pixel-face ratio (0.784) held up on a real device. The mono-face ratio (1.215) did
+         NOT - cap-height alone missed VT323's much heavier stroke weight and wider per-
+         character advance width, both of which dominate how "big" a full string of real
+         (mostly lowercase, numeral-heavy) text actually reads at a glance. Re-measured by
+         rendering 5 real strings in Inter (at real app-context sizes) and in VT323 across a
+         candidate sweep, side by side, and finding the size at which VT323 stopped reading as
+         visually larger - not a formula applied blind, an actual side-by-side comparison. All 5
+         strings converged independently on the same ratio: mono_px = N * 0.84 (not 1.215). */
+
+  /* ---------- Black theme ----------
+     Strict monochrome dark theme - pure black, greys, and white, no hues anywhere. NOT a
+     recolour of Dark (which is navy-tinted with a blue accent) - every token below is a true
+     grey or pure white/black so it reads as a genuinely different theme sitting next to Dark in
+     the picker, not a variant of it. Structurally identical to every other theme here (same
+     selectors, same component list) - this is a palette swap, not a redesign.
+     --credit/--debit deliberately carry NO colour (white/grey, distinguished by the +/- sign and
+     a weight difference elsewhere - see .activity-amt.expense below) - a deliberate experiment
+     per the brief; both live as ordinary custom properties here like every other theme's, so
+     reintroducing colour later is a one-line edit to these two lines, nothing else.
+     --binder (primary CTA/FAB/active-nav-tab colour) is pure white, inverted from every other
+     theme - the reference design's defining move. Every existing rule that pairs
+     background:var(--binder) with a hardcoded color:#FFFFFF (.btn-black, .spine .tab-btn.active,
+     .bottom-nav .tab-btn.fab, .cat-col form button) would otherwise render white text on a white
+     button, so each gets a Black-specific override below flipping the text to black - the same
+     "override the hardcoded text colour when the token's lightness flips" pattern Dark/Crimson
+     already use for .btn-debit (see line ~695/767 above), just applied to the primary-button
+     token instead of the debit one, and to more call sites since more of them hardcode white. */
+  body[data-theme="black"]{
+    --bg:#000000;
+    --card:#121212;
+    --ink:#FFFFFF;
+    --ink-soft:#A0A0A0;
+    --line:#2A2A2A;
+    --credit:#FFFFFF;
+    --debit:#A0A0A0;
+    --gold:#C8C8C8;
+    --link:#B0B0B0;
+    --goal:#E0E0E0;
+    --binder:#FFFFFF;
+    --binder-light:#E8E8E8;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 20px rgba(0,0,0,.5);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.5), 0 4px 12px rgba(0,0,0,.55);
+    --shadow-glass:0 1px 2px rgba(0,0,0,.5), 0 12px 28px rgba(0,0,0,.5);
+    --shadow-fab:0 8px 22px rgba(0,0,0,.6);
+    --shadow-nav:0 -4px 20px rgba(0,0,0,.5);
+  }
+  body[data-theme="black"] .spine{ background:rgba(18,18,18,.9); border-right-color:var(--line); }
+  body[data-theme="black"] .bottom-nav{ background:rgba(18,18,18,.9); border-top-color:var(--line); }
+  body[data-theme="black"] .topbar{ background:rgba(0,0,0,.82); border-bottom-color:var(--line); }
+  body[data-theme="black"] .icon-circle{ background:rgba(28,28,28,.85); border-color:rgba(255,255,255,.08); }
+  body[data-theme="black"] .card-glass{ background:rgba(28,28,28,.6); border-color:rgba(255,255,255,.08); }
+  body[data-theme="black"] .stamp-overlay .stamp{ background:rgba(0,0,0,.82); }
+  body[data-theme="black"] .data-table tr:hover{ background:rgba(255,255,255,.04); }
+  /* #backup-nag-banner's border is a hardcoded rgba(245,158,11,...) amber INLINE style in
+     index.html itself (shared markup, not a per-theme CSS rule - every other theme shows this
+     same amber too), the one hardcoded hue found anywhere in the app chrome that Black's
+     screenshots actually surface. Every other theme keeps it (out of scope - not a Black-specific
+     rule to touch there), but under Black's "no hues anywhere" requirement this needed a theme
+     override - and needs !important specifically, because an inline style="border:..." always
+     beats an external stylesheet selector regardless of specificity (confirmed the hard way on
+     this exact element type before - see the retired Webline "Reduce Animations" row's own
+     history for the same lesson). */
+  body[data-theme="black"] #backup-nag-banner{ border-color:rgba(255,255,255,.25) !important; }
+  /* Same class of hardcoded-hue leak as the banner above, but in CSS this time rather than an
+     inline style: these badges pair a THEME-REACTIVE text colour (var(--credit)/--debit/--gold,
+     already correctly white/grey under Black) with a HARDCODED translucent rgba(22,163,74/
+     220,38,38/245,158,11,...) background tint that never changes per theme. Ordinary specificity
+     is enough here (no inline style involved), so no !important needed. */
+  body[data-theme="black"] .txdetail-badge.credit,
+  body[data-theme="black"] .schedule-status.paid{ background:rgba(255,255,255,.14); }
+  body[data-theme="black"] .txdetail-badge.debit,
+  body[data-theme="black"] .schedule-status.overdue,
+  body[data-theme="black"] .reminder-status.overdue{ background:rgba(160,160,160,.18); }
+  body[data-theme="black"] .reminder-status.upcoming{ background:rgba(200,200,200,.16); }
+  body[data-theme="black"] .danger-zone{ background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.22); }
+  /* 2.2c: over-budget/overdue/alert states share var(--debit) elsewhere (already grey, already
+     "no red"), but under strict monochrome that alone makes an alert read as ordinary debit text
+     - nothing marks it as something needing attention. White + underline gives it its own signal
+     (brighter than debit-grey, underlined unlike credit-white) instead of leaning on colour. */
+  body[data-theme="black"] .budget-row-meta.over,
+  body[data-theme="black"] .overdue-tag,
+  body[data-theme="black"] .reminder-key-figure.alert{
+    color:#FFFFFF; text-decoration:underline; text-underline-offset:2px;
+  }
+  body[data-theme="black"] .ledger-form input, body[data-theme="black"] .ledger-form select,
+  body[data-theme="black"] .filter-row select, body[data-theme="black"] .search-input,
+  body[data-theme="black"] .period-inputs input, body[data-theme="black"] .budget-limit-input input,
+  body[data-theme="black"] .log-payment-form input, body[data-theme="black"] .log-payment-form select, body[data-theme="black"] .cat-col form input,
+  body[data-theme="black"] .settings-row input, body[data-theme="black"] .btn-outline,
+  body[data-theme="black"] .filter-inline-label input,
+  body[data-theme="black"] .contribution-form input{
+    background:#1C1C1C; border-color:var(--line); color:var(--ink);
+  }
+  body[data-theme="black"] .more-row, body[data-theme="black"] .summary-box, body[data-theme="black"] .insight-note,
+  body[data-theme="black"] .log-payment-form, body[data-theme="black"] .contribution-form{
+    background:var(--card);
+  }
+  body[data-theme="black"] .progress-track, body[data-theme="black"] .breakdown-track,
+  body[data-theme="black"] .budget-bar-track, body[data-theme="black"] .debt-bar-track,
+  body[data-theme="black"] .goal-bar-track{ background:#1C1C1C; }
+  body[data-theme="black"] .ring-period-btn.active,
+  body[data-theme="black"] .type-btn.active,
+  body[data-theme="black"] .segmented button.active{
+    background:#2A2A2A; color:#FFFFFF; box-shadow:var(--shadow-sm);
+  }
+  body[data-theme="black"] .type-btn.credit.active{ color:var(--credit); }
+  body[data-theme="black"] .type-btn.debit.active{ color:var(--debit); }
+  body[data-theme="black"] .btn-debit{ color:var(--bg); }
+  body[data-theme="black"] .btn-danger{ color:var(--bg); }
+  body[data-theme="black"] .bottom-nav .tab-btn.active{ color:var(--binder); }
+  /* Inverted-button text flip - see the comment above body[data-theme="black"] for why these
+     exist: every one of these hardcodes color:#FFFFFF against background:var(--binder), which is
+     now white too. */
+  body[data-theme="black"] .btn-black,
+  body[data-theme="black"] .spine .tab-btn.active,
+  body[data-theme="black"] .bottom-nav .tab-btn.fab,
+  body[data-theme="black"] .cat-col form button{
+    color:#000000;
+  }
+  /* 2.2a: the +/- sign and a weight difference are the only distinction between credit and
+     debit under Black (no colour difference beyond white-vs-grey) - .activity-amt already
+     carries the +/- via its own markup and a flat font-weight:700 for both; this drops expense
+     rows specifically to 600 so credit reads very slightly heavier, matching the brief exactly. */
+  body[data-theme="black"] .activity-amt.expense{ font-weight:600; }
+  body[data-theme="black"] .summary-box.debit .mono-num{ font-weight:600; }
+  body[data-theme="black"] .mono-num.negative{ font-weight:600; }
 
   .theme-toggle{ width:46px; height:26px; border-radius:999px; background:var(--line); border:none; position:relative; padding:0; flex-shrink:0; transition:background .15s; }
   .theme-toggle .theme-toggle-thumb{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); transition:transform .18s; }

@@ -137,24 +137,51 @@
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
   const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
-  // Webline (Phase 2, A4; rebuilt Phase 3, A3): the base CAT_PALETTE's bright pink/lime/hot-orange
-  // swatches read as loudest-thing-on-screen against Webline's navy console on a real device -
-  // fixed in Phase 2 by deriving every swatch from the Webline hue families instead. That first
-  // attempt clustered 3 near-identical blues and 2 near-identical teals next to each other in the
-  // array, so on a real device with several categories in a row, 5 of 7 visible avatars read as
-  // "green" and the amber read as muddy brown against the navy - confirmed on a real screenshot,
-  // not assumed. Rebuilt from scratch in HSL space (not picked by eye) - 11 hues spread across the
-  // wheel (5-332 degrees) with saturation/lightness individually tuned per hue (some hues go muddy
-  // or lose contrast faster than others at the same lightness), THEN interleaved warm/cool so no
-  // two ADJACENT entries share a hue family - categoryColor() below assigns palette indices in the
-  // order categories were created, so adjacent array entries are exactly the case that actually
-  // shows up side-by-side in a real category list. Every value independently checked for white
-  // text on top (.cat-badge hardcodes color:#fff) at >=5.4:1, comfortably clearing AA even for the
-  // weakest entry (cyan-2, 5.41:1) - stronger margin than Phase 2's own palette had throughout.
-  // Presentation only: a rendering-time lookup keyed by category name (see categoryColor() below),
-  // never the category's own stored colour value - unaffected on every other theme, same as the
-  // Crimson palette above already proves the pattern for.
-  const CAT_PALETTE_WEBLINE = ['#9B3027','#29488E','#935015','#186253','#91305E','#156579','#766019','#4B3B9B','#2A6F2C','#713D8F','#2E6F9E'];
+  // Black theme (strict monochrome - no hues anywhere, see css/styles.css's body[data-theme=
+  // "black"] block): 10 grey steps, evenly spaced from #3A3A3A to #E0E0E0 so adjacent categories
+  // (categoryColor() below assigns palette indices in category-creation order, so adjacent array
+  // entries are exactly what shows up side-by-side in a real list) read as visibly different
+  // steps rather than a near-identical wash of "grey". Presentation only, same mechanism as the
+  // Crimson palette above - never the category's own stored colour value, unaffected on every
+  // other theme. Unlike every other palette here, several of these steps are LIGHT enough that
+  // white text (.cat-badge's hardcoded color:#fff default) would fail contrast outright - see
+  // categoryAvatarTextColor() below, which picks black or white per swatch by sampled luminance
+  // and is threaded into every .cat-badge/.chip-badge call site instead of relying on the CSS
+  // default the other (uniformly dark/saturated) palettes can get away with.
+  const CAT_PALETTE_BLACK = ['#3A3A3A','#4C4C4C','#5F5F5F','#717171','#848484','#969696','#A9A9A9','#BBBBBB','#CECECE','#E0E0E0'];
+  // Income avatars bypass categoryColor() entirely (see the three call sites below that special-
+  // case t.type==='income') - a fixed hardcoded green in every other theme, which under Black's
+  // "no hues anywhere" rule needs its own monochrome substitute rather than just falling through.
+  // White (paired with black glyph text, same luminance-based rule as the category palette) keeps
+  // it visually distinct from every expense avatar's grey without introducing a colour.
+  const BLACK_INCOME_AVATAR = '#FFFFFF';
+  function incomeAvatarColor(){
+    return document.body.getAttribute('data-theme')==='black' ? BLACK_INCOME_AVATAR : '#16A34A';
+  }
+  // Relative luminance (WCAG formula, sRGB gamma-corrected) of a #RRGGBB hex string, used only to
+  // pick a legible glyph colour for Black's avatar badges - see categoryAvatarTextColor().
+  function hexLuminance(hex){
+    const c = hex.replace('#','');
+    const chan = (h)=>{ const v = parseInt(h,16)/255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
+    return 0.2126*chan(c.slice(0,2)) + 0.7152*chan(c.slice(2,4)) + 0.0722*chan(c.slice(4,6));
+  }
+  // Every other theme's palettes are dark/saturated enough that .cat-badge/.chip-badge's plain
+  // CSS color:#fff default always works, so this returns null (meaning "don't set an inline
+  // color, let the CSS default handle it") for anything but Black - Light/Dark/Crimson rendering
+  // is completely unaffected by this function existing.
+  function categoryAvatarTextColor(bgHex){
+    if(document.body.getAttribute('data-theme')!=='black') return null;
+    return hexLuminance(bgHex) > 0.4 ? '#000000' : '#FFFFFF';
+  }
+  // Centralizes the "background + legible text colour" inline style for every lettered avatar
+  // badge (.cat-badge/.chip-badge) in one place, rather than duplicating the luminance branch at
+  // each of the ~10 call sites that render one. bg defaults to categoryColor(name) but can be
+  // overridden (the three income-avatar call sites pass incomeAvatarColor() instead).
+  function catBadgeStyle(name, bgOverride){
+    const bg = bgOverride || categoryColor(name);
+    const textColor = categoryAvatarTextColor(bg);
+    return 'background:' + bg + ';' + (textColor ? ' color:' + textColor + ';' : '');
+  }
 
   function defaultCategories(){
     return {
@@ -308,7 +335,7 @@
   }
   function categoryColor(name){
     const themeNow3 = document.body.getAttribute('data-theme');
-    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : (themeNow3==='webline' ? CAT_PALETTE_WEBLINE : CAT_PALETTE);
+    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : (themeNow3==='black' ? CAT_PALETTE_BLACK : CAT_PALETTE);
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
     const idx = allCats.indexOf(name);
     if(idx !== -1) return palette[idx % palette.length];
@@ -417,6 +444,13 @@
     // saveSettings() is local-storage-only (no cloud sync - theme is explicitly per-device), so
     // this is safe to persist unconditionally, signed in or not.
     if(settings.theme==='purply'){ settings.theme = 'light'; await saveSettings(); }
+    // Webline (the pixel-console theme) was retired in turn and replaced by Black in the same
+    // picker slot - same one-time-redirect mechanism as the purply migration directly above, run
+    // right here for the same reason: before applyTheme() is ever called for the first time this
+    // load, so a device with "webline" already saved never renders unstyled or flashes stale
+    // Webline chrome before landing on Black, and the persisted value is corrected on disk (not
+    // just redirected in memory) so this redirect only ever needs to run once per device.
+    if(settings.theme==='webline'){ settings.theme = 'black'; await saveSettings(); }
     // Dismissal state for notification items the user has already reviewed - device-local, same
     // as every other entry in settings (theme, hideBalances, etc.), not synced to the cloud.
     // That's a deliberate call, not an oversight: these are purely "have I already looked at this
@@ -697,7 +731,7 @@
 
     let svg = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">`;
     const themeNow = document.body.getAttribute('data-theme');
-    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='crimson' ? '#17151B' : (themeNow==='webline' ? '#16181C' : '#E2E8F0'));
+    const trackColor = themeNow==='dark' ? '#232C42' : (themeNow==='crimson' ? '#17151B' : (themeNow==='black' ? '#1C1C1C' : '#E2E8F0'));
     svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${trackColor}" stroke-width="${strokeW}"/>`;
     let cursor = 0; const labels = []; let hitAreas = '';
     segments.forEach((seg,i)=>{
@@ -770,7 +804,7 @@
   // search) omits it and gets exactly the same markup/behavior as before this round, unaffected.
   function buildActivityRow(t, withActions, showDate, historyMode){
     const row = document.createElement('div'); row.className='activity-row clickable-row' + (historyMode ? ' history-row' : '');
-    const color = t.type==='income' ? '#16A34A' : categoryColor(t.category);
+    const color = t.type==='income' ? incomeAvatarColor() : categoryColor(t.category);
     const badgeChar = t.type==='income' ? '↑' : categoryInitial(t.category);
     const typeLabel = t.type==='income' ? 'Credit' : 'Debit';
     // Note and date are separate flex children (not one combined truncating string) so a long
@@ -805,7 +839,7 @@
     // edit/delete buttons, when present) opens something, rather than relying on a user to
     // discover that by guessing or by an active-state background flash that only ever shows up
     // mid-tap, after the fact.
-    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${color};">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div>${historySubMobile}</div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}<span class="activity-chevron" aria-hidden="true">${icon('chevronRight',15)}</span></div>`;
+    row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="${catBadgeStyle(t.category, color)}">${badgeChar}</span><div><div class="activity-name">${escapeHtml(t.category)}</div><div class="activity-sub">${sub}</div>${historySubMobile}</div></div><div class="activity-right"><span class="activity-amt ${t.type} mono-num">${t.type==='income'?'+':'-'}${fmt(t.amount)}</span>${actionsHtml}<span class="activity-chevron" aria-hidden="true">${icon('chevronRight',15)}</span></div>`;
     row.dataset.category = t.category; row.dataset.txType = t.type;
     row.addEventListener('click', (e)=>{
       if(e.target.closest('.activity-actions')) return;
@@ -1123,7 +1157,7 @@
       const pct = total ? Math.round(amt/total*100) : 0;
       const color = categoryColor(cat);
       const cell = document.createElement('div'); cell.className='cat-grid-cell clickable-row';
-      cell.innerHTML = `<div class="cat-grid-top"><span class="cat-amt mono-num">${fmt(amt)}</span><span class="cat-pct" style="background:${color}1a; color:${color};">${pct}%</span></div><div class="cat-grid-name">${escapeHtml(cat)}</div><span class="cat-badge sm" style="background:${color};">${categoryInitial(cat)}</span>`;
+      cell.innerHTML = `<div class="cat-grid-top"><span class="cat-amt mono-num">${fmt(amt)}</span><span class="cat-pct" style="background:${color}1a; color:${color};">${pct}%</span></div><div class="cat-grid-name">${escapeHtml(cat)}</div><span class="cat-badge sm" style="${catBadgeStyle(cat, color)}">${categoryInitial(cat)}</span>`;
       cell.addEventListener('click', ()=>{
         const catTx = monthExpense.filter(t=>t.category===cat);
         openCategoryDetail(cat, `${fmt(amt)} this month`, catTx);
@@ -1261,7 +1295,7 @@
       const barColor = r.over ? 'var(--debit)' : (r.pct>=80 ? 'var(--gold)' : 'var(--credit)');
       const color = categoryColor(r.cat);
       const row = document.createElement('div'); row.className='budget-row clickable-row';
-      row.innerHTML = `<div class="budget-row-top"><span class="budget-cat-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(r.cat)}</span><span class="budget-cat-name">${escapeHtml(r.cat)}</span></span><span class="mono-num" style="font-size:12.5px;">${fmt(r.spent)} / ${fmt(r.limit)}</span></div><div class="budget-bar-track"><div class="budget-bar-fill" style="width:${r.pct}%; background:${barColor};"></div></div>`;
+      row.innerHTML = `<div class="budget-row-top"><span class="budget-cat-left"><span class="cat-badge sm" style="${catBadgeStyle(r.cat, color)}">${categoryInitial(r.cat)}</span><span class="budget-cat-name">${escapeHtml(r.cat)}</span></span><span class="mono-num" style="font-size:12.5px;">${fmt(r.spent)} / ${fmt(r.limit)}</span></div><div class="budget-bar-track"><div class="budget-bar-fill" style="width:${r.pct}%; background:${barColor};"></div></div>`;
       row.addEventListener('click', ()=>{
         const catTx = monthExpense.filter(t=>t.category===r.cat);
         openCategoryDetail(r.cat, `${fmt(r.spent)} of ${fmt(r.limit)} budget this month`, catTx);
@@ -1290,11 +1324,15 @@
       const themeNow2 = document.body.getAttribute('data-theme');
       const isDark = themeNow2==='dark';
       const isCrimson = themeNow2==='crimson';
-      const isWebline = themeNow2==='webline';
-      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isWebline ? '#234A73' : '#E2E8F0'));
-      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isWebline ? '#7FB8D6' : '#64748B'));
-      const creditColor = isCrimson ? '#3DDC84' : (isWebline ? '#6FCF57' : '#16A34A');
-      const debitColor = isCrimson ? '#FF7A59' : (isWebline ? '#EE6B6B' : '#DC2626');
+      const isBlack = themeNow2==='black';
+      const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isBlack ? '#2A2A2A' : '#E2E8F0'));
+      const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isBlack ? '#A0A0A0' : '#64748B'));
+      // Black is a deliberately monochrome experiment (see --credit/--debit in css/styles.css's
+      // body[data-theme="black"] block, which these two mirror exactly rather than re-deriving) -
+      // white vs mid-grey bars instead of green/red, distinguished by lightness and the axis
+      // labels alone, not hue.
+      const creditColor = isCrimson ? '#3DDC84' : (isBlack ? '#FFFFFF' : '#16A34A');
+      const debitColor = isCrimson ? '#FF7A59' : (isBlack ? '#A0A0A0' : '#DC2626');
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -1554,10 +1592,10 @@
     wrap.style.display='block';
     container.innerHTML='';
     recurring.forEach(r=>{
-      const color = r.type==='income' ? '#16A34A' : categoryColor(r.category);
+      const color = r.type==='income' ? incomeAvatarColor() : categoryColor(r.category);
       const chip = document.createElement('button'); chip.type='button'; chip.className='recurring-chip'; chip.dataset.id=r.id;
       chip.setAttribute('aria-label', `Log ${r.category}, ${fmt(r.amount)}`);
-      chip.innerHTML = `<span class="chip-badge" style="background:${color};">${r.type==='income'?'↑':categoryInitial(r.category)}</span><span>${escapeHtml(r.category)} · ${fmt(r.amount)}</span><span class="chip-del" data-id="${r.id}" aria-label="Remove ${escapeHtml(r.category)} quick add" role="button">×</span>`;
+      chip.innerHTML = `<span class="chip-badge" style="${catBadgeStyle(r.category, color)}">${r.type==='income'?'↑':categoryInitial(r.category)}</span><span>${escapeHtml(r.category)} · ${fmt(r.amount)}</span><span class="chip-del" data-id="${r.id}" aria-label="Remove ${escapeHtml(r.category)} quick add" role="button">×</span>`;
       container.appendChild(chip);
     });
     container.querySelectorAll('.chip-del').forEach(x=>{
@@ -1648,7 +1686,7 @@
     entries.forEach(e=>{
       const row = document.createElement('div'); row.className='breakdown-row';
       const pct = max ? (e.amt/max*100) : 0;
-      const color = e.type==='income' ? '#16A34A' : categoryColor(e.category);
+      const color = e.type==='income' ? incomeAvatarColor() : categoryColor(e.category);
       row.innerHTML = `<span class="dot" style="background:${color};"></span><span class="breakdown-name">${escapeHtml(e.category)} <span style="color:var(--ink-soft); font-size:10.5px;">(${e.type==='income'?'Credit':'Debit'})</span></span><span class="breakdown-track"><span class="breakdown-fill" style="width:${pct}%; background:${color};"></span></span><span class="breakdown-amt mono-num">${fmt(e.amt)}</span>`;
       container.appendChild(row);
     });
@@ -1909,7 +1947,7 @@
       const row = document.createElement('div'); row.className='budget-row';
       row.innerHTML = `
         <div class="budget-row-top">
-          <span class="budget-cat-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(cat)}</span><span class="budget-cat-name">${escapeHtml(cat)}</span></span>
+          <span class="budget-cat-left"><span class="cat-badge sm" style="${catBadgeStyle(cat, color)}">${categoryInitial(cat)}</span><span class="budget-cat-name">${escapeHtml(cat)}</span></span>
           <span class="budget-limit-input"><span style="font-size:11.5px;color:var(--ink-soft); font-weight:600;">Limit ${settings.currency}</span><input type="number" min="0" step="1" class="budget-input" data-cat="${escapeHtml(cat)}" value="${limit||''}" placeholder="None"></span>
         </div>
         ${ limit>0
@@ -2942,7 +2980,7 @@
         populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
         applyTheme(settings.theme);
         balancesRevealed = false; isAppLocked = false;
-        syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI(); syncWeblineReduceAnimToggleUI();
+        syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
         resetHideBalancesTimer(); resetAppLockTimer();
         refreshAll();
         renderCategoriesView();
@@ -3223,7 +3261,7 @@
       const h = document.createElement('div'); h.className='activity-group-label'; h.textContent='Debts'; container.appendChild(h);
       matchedDebts.forEach(d=>{
         const row = document.createElement('div'); row.className='activity-row';
-        row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${categoryColor(d.name)};">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} debt</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
+        row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="${catBadgeStyle(d.name)}">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} debt</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
         container.appendChild(row);
       });
     }
@@ -3231,7 +3269,7 @@
       const h = document.createElement('div'); h.className='activity-group-label'; h.textContent='Receivables'; container.appendChild(h);
       matchedReceivables.forEach(d=>{
         const row = document.createElement('div'); row.className='activity-row';
-        row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${categoryColor(d.name)};">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} receivable</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
+        row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="${catBadgeStyle(d.name)}">${categoryInitial(d.name)}</span><div><div class="activity-name">${escapeHtml(d.name)}</div><div class="activity-sub">${d.type==='emi'?'EMI':'One-time'} receivable</div></div></div><div class="activity-right"><span class="activity-amt mono-num">${fmt(debtRemaining(d))} left</span></div>`;
         container.appendChild(row);
       });
     }
@@ -3248,7 +3286,7 @@
     categories[type].forEach(c=>{
       const color = categoryColor(c);
       const row = document.createElement('div'); row.className='cat-row';
-      row.innerHTML = `<span class="cat-row-left"><span class="cat-badge sm" style="background:${color};">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
+      row.innerHTML = `<span class="cat-row-left"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-cat-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteCategory(btn.dataset.type, btn.dataset.cat)));
@@ -3285,7 +3323,7 @@
       const row = document.createElement('div'); row.className='budget-row';
       row.innerHTML = `
         <div class="budget-row-top">
-          <span class="budget-cat-left"><span class="cat-badge sm" style="background:${categoryColor(a.name)};">${categoryInitial(a.name)}</span><span class="budget-cat-name">${escapeHtml(a.name)}</span></span>
+          <span class="budget-cat-left"><span class="cat-badge sm" style="${catBadgeStyle(a.name)}">${categoryInitial(a.name)}</span><span class="budget-cat-name">${escapeHtml(a.name)}</span></span>
           <span style="display:flex; gap:4px;">
             <button class="icon-btn-sm rename-account-btn" data-id="${a.id}" aria-label="Rename account ${escapeHtml(a.name)}">${icon('edit',14)}</button>
             <button class="icon-btn-sm del-account-btn" data-id="${a.id}" aria-label="Delete account ${escapeHtml(a.name)}">${icon('trash',14)}</button>
@@ -3360,7 +3398,7 @@
     accounts.forEach(a=>{
       const bal = accountBalance(a.name);
       const row = document.createElement('div'); row.className='activity-row';
-      row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="background:${categoryColor(a.name)};">${categoryInitial(a.name)}</span><div><div class="activity-name">${escapeHtml(a.name)}</div></div></div><div class="activity-right"><span class="activity-amt mono-num" style="color:${bal<0?'var(--debit)':'var(--ink)'};">${fmt(bal)}</span></div>`;
+      row.innerHTML = `<div class="activity-left"><span class="cat-badge" style="${catBadgeStyle(a.name)}">${categoryInitial(a.name)}</span><div><div class="activity-name">${escapeHtml(a.name)}</div></div></div><div class="activity-right"><span class="activity-amt mono-num" style="color:${bal<0?'var(--debit)':'var(--ink)'};">${fmt(bal)}</span></div>`;
       list.appendChild(row);
     });
   }
@@ -3550,66 +3588,6 @@
     renderDesktopExtras();
   }
 
-  // ---------- Webline lazy-load ----------
-  // css/webline.css and js/webline.js are never referenced from index.html at all - they're
-  // fetched only here, only at the moment the theme actually becomes "webline", so Light/Dark/
-  // Crimson never download either file. weblineModule caches the dynamic import() result across
-  // repeated activations in the same page session (so switching Webline -> Dark -> Webline only
-  // ever fetches js/webline.js once, not once per switch); the <link> element is fully removed
-  // and re-created every time instead, since that's cheap and keeps "is Webline's CSS currently
-  // applied" a simple, always-correct DOM query rather than extra state to track.
-  let weblineModule = null;
-  let weblineModulePromise = null;
-  const WEBLINE_CSS_LINK_ID = 'webline-css-link';
-  function activateWebline(){
-    // Re-synced here (not just at init) so the very first Webline activation of a session - which
-    // can happen before init()'s own settings-driven UI sync has run, if the stored theme is
-    // already "webline" on load - always has document.body.dataset.weblineReduceAnim set before
-    // js/webline.js's mount() reads it, rather than racing it.
-    syncWeblineReduceAnimToggleUI();
-    if(!document.getElementById(WEBLINE_CSS_LINK_ID)){
-      const link = document.createElement('link');
-      link.id = WEBLINE_CSS_LINK_ID;
-      link.rel = 'stylesheet';
-      link.href = 'css/webline.css';
-      // If the stylesheet 404s or the request otherwise fails, this is the only place that would
-      // ever know - left unhandled, body[data-theme="webline"] would stay set with none of its
-      // variable overrides in effect. That's not a broken/blank screen though: every rule this
-      // theme needs lives entirely in this one file, so with it missing the app just renders
-      // using :root's own Light-theme variable defaults (the same ones that already apply before
-      // this file ever loads) - a working, fully readable Light-looking screen, just without
-      // Webline's pixel chrome. Logged so it's visible in the diagnostic log rather than silently
-      // swallowed, but deliberately NOT auto-reverting the user's theme choice - a transient
-      // network hiccup on one load shouldn't permanently overwrite a persisted preference; the
-      // next successful load tries again on its own.
-      link.addEventListener('error', () => {
-        console.error('[webline] css/webline.css failed to load - falling back to Light defaults for any rule not covered by it');
-        try{ if(typeof diagLogPage==='function') diagLogPage('webline:css-load-failed'); }catch(e){}
-      });
-      document.head.appendChild(link);
-    }
-    if(!weblineModulePromise){
-      // Specifier is relative to THIS SCRIPT's own URL (js/app.js), not the document location -
-      // that's './webline.js' (same js/ directory), not './js/webline.js' (which 404s as
-      // js/js/webline.js). Confirmed by direct test - the document-base-URL assumption that
-      // would justify './js/webline.js' only holds for import specifiers written inside an ES
-      // module; dynamic import() from a classic <script src="js/app.js"> resolves against that
-      // script's own URL instead.
-      weblineModulePromise = import('./webline.js').then((mod) => { weblineModule = mod; return mod; }).catch((err) => {
-        console.error('[webline] js/webline.js failed to load - theme stays CSS-only, no mount() side effects', err);
-        try{ if(typeof diagLogPage==='function') diagLogPage('webline:js-load-failed', err && err.message); }catch(e){}
-        weblineModulePromise = null; // allow a retry on the next activation attempt
-        return null;
-      });
-    }
-    weblineModulePromise.then((mod) => { if(mod && mod.mount) mod.mount(); });
-  }
-  function deactivateWebline(){
-    if(weblineModule && weblineModule.unmount) weblineModule.unmount();
-    const link = document.getElementById(WEBLINE_CSS_LINK_ID);
-    if(link) link.remove();
-  }
-
   function applyTheme(theme){
     if(theme==='sunset' || theme==='mounty' || theme==='reddy') theme = 'crimson';
     // Sun Light was removed entirely and replaced by Purply, which occupies the same light-theme
@@ -3623,8 +3601,13 @@
     // before-first-paint half of this migration, which is what stops a purply device from ever
     // re-derailing through this same redirect on every subsequent load.
     if(theme==='purply') theme = 'light';
-    const previousTheme = document.body.getAttribute('data-theme');
-    if(previousTheme==='webline' && theme!=='webline') deactivateWebline();
+    // Webline (the pixel-console theme, v48-v50) was retired in turn and replaced by Black in the
+    // same picker slot - a device with "webline" already saved redirects to "black" (both are
+    // dark themes, the closest match), same one-time-redirect mechanism as every migration above.
+    // Unlike Webline, Black is a plain CSS palette with no lazy-loaded module/stylesheet and no
+    // mount()/unmount() side effects to reverse - there is deliberately no "deactivateBlack()" or
+    // "activateBlack()" here, just the data-theme attribute below, same as Light/Dark/Crimson.
+    if(theme==='webline') theme = 'black';
     document.body.setAttribute('data-theme', theme);
     // Mirrored onto <html> too, not just <body> - see the html{background} rule in styles.css:
     // a CSS custom property redefined on body[data-theme=X] only cascades to body's own
@@ -3636,7 +3619,6 @@
     document.documentElement.setAttribute('data-theme', theme);
     const buttons = document.querySelectorAll('#theme-select [data-theme-choice]');
     buttons.forEach(b=> b.classList.toggle('active', b.getAttribute('data-theme-choice')===theme));
-    if(theme==='webline') activateWebline();
   }
 
   /* ---------- Privacy: Hide Balances ---------- */
@@ -3679,20 +3661,6 @@
     const on = settings.showNetWorth!==false;
     toggle.classList.toggle('on', on);
     toggle.setAttribute('aria-checked', on);
-  }
-  // Webline's "Reduce Animations" toggle (Phase 2, B3c) - persisted like every other setting
-  // here, since js/webline.js itself must never touch storage (the theme layer may only read
-  // state and add DOM - see the hard rule at the top of css/webline.css). The setting is
-  // mirrored onto document.body's own dataset below, which is what webline.js actually reads -
-  // a plain DOM attribute read, not a closure/storage access, keeps that boundary real rather
-  // than just documented.
-  function syncWeblineReduceAnimToggleUI(){
-    const toggle = document.getElementById('webline-reduce-anim-toggle');
-    if(!toggle) return;
-    const on = settings.weblineReduceAnimations===true;
-    toggle.classList.toggle('on', on);
-    toggle.setAttribute('aria-checked', on);
-    document.body.dataset.weblineReduceAnim = on ? '1' : '0';
   }
   function syncHideBalancesUI(){
     const toggle = document.getElementById('hide-balances-toggle');
@@ -5148,13 +5116,6 @@
       await saveSettings();
     });
 
-    document.getElementById('webline-reduce-anim-toggle').addEventListener('click', async ()=>{
-      settings.weblineReduceAnimations = settings.weblineReduceAnimations===true ? false : true;
-      playSfx('toggle');
-      syncWeblineReduceAnimToggleUI();
-      await saveSettings();
-    });
-
     document.getElementById('sfx-toggle').addEventListener('click', async ()=>{
       settings.sfxEnabled = settings.sfxEnabled===false ? true : false;
       syncSfxToggleUI();
@@ -5366,7 +5327,7 @@
       balancesRevealed = false; isAppLocked = false;
       if(hideBalancesTimer){ clearTimeout(hideBalancesTimer); hideBalancesTimer = null; }
       if(appLockTimer){ clearTimeout(appLockTimer); appLockTimer = null; }
-      syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI(); syncWeblineReduceAnimToggleUI();
+      syncHideBalancesUI(); syncAppLockUI(); syncNetWorthToggleUI(); syncSfxToggleUI();
       refreshAll();
       renderCategoriesView();
     });
@@ -5643,7 +5604,6 @@
     syncAppLockUI();
     syncNetWorthToggleUI();
     syncSfxToggleUI();
-    syncWeblineReduceAnimToggleUI();
     updateNotifPermissionStatus();
     applyDesktopLayout();
     desktopMql.addEventListener('change', applyDesktopLayout);
