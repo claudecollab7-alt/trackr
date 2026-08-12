@@ -137,50 +137,76 @@
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
   const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
-  // Black theme (strict monochrome - no hues anywhere, see css/styles.css's body[data-theme=
-  // "black"] block): 10 grey steps, evenly spaced from #3A3A3A to #E0E0E0 so adjacent categories
-  // (categoryColor() below assigns palette indices in category-creation order, so adjacent array
-  // entries are exactly what shows up side-by-side in a real list) read as visibly different
-  // steps rather than a near-identical wash of "grey". Presentation only, same mechanism as the
-  // Crimson palette above - never the category's own stored colour value, unaffected on every
-  // other theme. Unlike every other palette here, several of these steps are LIGHT enough that
-  // white text (.cat-badge's hardcoded color:#fff default) would fail contrast outright - see
-  // categoryAvatarTextColor() below, which picks black or white per swatch by sampled luminance
-  // and is threaded into every .cat-badge/.chip-badge call site instead of relying on the CSS
-  // default the other (uniformly dark/saturated) palettes can get away with.
-  const CAT_PALETTE_BLACK = ['#3A3A3A','#4C4C4C','#5F5F5F','#717171','#848484','#969696','#A9A9A9','#BBBBBB','#CECECE','#E0E0E0'];
-  // Income avatars bypass categoryColor() entirely (see the three call sites below that special-
-  // case t.type==='income') - a fixed hardcoded green in every other theme, which under Black's
-  // "no hues anywhere" rule needs its own monochrome substitute rather than just falling through.
-  // White (paired with black glyph text, same luminance-based rule as the category palette) keeps
-  // it visually distinct from every expense avatar's grey without introducing a colour.
-  const BLACK_INCOME_AVATAR = '#FFFFFF';
-  function incomeAvatarColor(){
-    return document.body.getAttribute('data-theme')==='black' ? BLACK_INCOME_AVATAR : '#16A34A';
+  // Black theme, round 2: pure monochrome shipped first, but real-device testing found it fails
+  // on scannability - the avatar column mixed two systems (white+arrow for income, grey+letter
+  // for expense, so the SAME visual slot meant "type" for one and "category" for the other), the
+  // 10-step grey ramp collapsed once >6 categories were visible ("Cash in hand"/"Card" both read
+  // as the same near-white circle), and the donut legend couldn't be matched back to its own
+  // slices (several dots landed on the same grey). Decision: reintroduce colour, but only where
+  // it carries meaning - every category gets ONE colour, used identically everywhere it appears
+  // (avatar, donut slice, donut legend dot, Budget Watch row, Top Categories tile) - see
+  // categoryColor()'s black branch below, which now generates from a fixed HSL ramp instead of a
+  // hand-written array so it scales cleanly past 10 categories. Chrome (nav/topbar/cards/body
+  // text) stays fully monochrome - only category identity and credit/debit polarity carry colour.
+  //
+  // 10 base hues (not picked by eye - given directly), fixed saturation/lightness for the first
+  // lap through the ramp. A category's hue is chosen by hashing its NAME (not its index in the
+  // categories array), so its colour survives category reordering and is identical across
+  // devices/sessions without needing the two device's arrays to be in the same order - the
+  // ordering feature planned for a future round would otherwise have silently reshuffled every
+  // avatar colour under the old index-based scheme.
+  const CAT_HUE_RAMP_BLACK = [210, 25, 145, 280, 45, 330, 180, 95, 255, 15];
+  // Past the first 10 categories, a second/third category can hash to the same hue - rather than
+  // repeat the exact same colour, later "laps" through the ramp step LIGHTNESS UP (58 -> 70 ->
+  // 82%), never down: avatar letters are fixed near-black (#0B0B0B, see below) for contrast, and
+  // going lighter only ever improves that contrast, where going darker (the more obvious "next
+  // shade" choice) was checked and found to drop as low as ~2.25:1 against near-black text at the
+  // base saturation - a real legibility failure the brief's own fixed-lightness example didn't
+  // anticipate, so this deviates deliberately rather than following "vary lightness" blindly.
+  function hashString(name){
+    let hash = 0; const s = name || '?';
+    for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
+    return Math.abs(hash);
   }
-  // Relative luminance (WCAG formula, sRGB gamma-corrected) of a #RRGGBB hex string, used only to
-  // pick a legible glyph colour for Black's avatar badges - see categoryAvatarTextColor().
-  function hexLuminance(hex){
-    const c = hex.replace('#','');
-    const chan = (h)=>{ const v = parseInt(h,16)/255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
-    return 0.2126*chan(c.slice(0,2)) + 0.7152*chan(c.slice(2,4)) + 0.0722*chan(c.slice(4,6));
+  function hslToHex(h, s, l){
+    s/=100; l/=100;
+    const c = (1-Math.abs(2*l-1))*s;
+    const x = c*(1-Math.abs(((h/60)%2)-1));
+    const m = l-c/2;
+    let r,g,b;
+    if(h<60){ [r,g,b]=[c,x,0]; } else if(h<120){ [r,g,b]=[x,c,0]; } else if(h<180){ [r,g,b]=[0,c,x]; }
+    else if(h<240){ [r,g,b]=[0,x,c]; } else if(h<300){ [r,g,b]=[x,0,c]; } else { [r,g,b]=[c,0,x]; }
+    const toHex = (v)=> Math.round((v+m)*255).toString(16).padStart(2,'0');
+    return '#'+toHex(r)+toHex(g)+toHex(b);
   }
-  // Every other theme's palettes are dark/saturated enough that .cat-badge/.chip-badge's plain
-  // CSS color:#fff default always works, so this returns null (meaning "don't set an inline
-  // color, let the CSS default handle it") for anything but Black - Light/Dark/Crimson rendering
-  // is completely unaffected by this function existing.
-  function categoryAvatarTextColor(bgHex){
-    if(document.body.getAttribute('data-theme')!=='black') return null;
-    return hexLuminance(bgHex) > 0.4 ? '#000000' : '#FFFFFF';
+  function categoryColorBlack(name){
+    const hash = hashString(name);
+    const hue = CAT_HUE_RAMP_BLACK[hash % CAT_HUE_RAMP_BLACK.length];
+    const lap = Math.floor(hash / CAT_HUE_RAMP_BLACK.length) % 3;
+    const lightness = 58 + lap*12; // 58% / 70% / 82%
+    return hslToHex(hue, 45, lightness);
+  }
+  // Income avatars used to bypass categoryColor() entirely (a hardcoded green in Light/Dark/
+  // Crimson, a hardcoded white in Black v1) - exactly the "two systems" bug above. Under Black
+  // now, income rows get the SAME category-derived colour as any other row (the ↑ glyph still
+  // marks it as income); every other theme's existing hardcoded-green behaviour is untouched.
+  function incomeAvatarColor(name){
+    return document.body.getAttribute('data-theme')==='black' ? categoryColor(name) : '#16A34A';
   }
   // Centralizes the "background + legible text colour" inline style for every lettered avatar
-  // badge (.cat-badge/.chip-badge) in one place, rather than duplicating the luminance branch at
-  // each of the ~10 call sites that render one. bg defaults to categoryColor(name) but can be
-  // overridden (the three income-avatar call sites pass incomeAvatarColor() instead).
+  // badge (.cat-badge/.chip-badge) in one place, rather than duplicating this at each of the ~10
+  // call sites that render one. bg defaults to categoryColor(name) but can be overridden (the
+  // three income-avatar call sites pass incomeAvatarColor(name) instead). The letter colour
+  // itself is written as the literal string "var(--avatar-letter)", not a resolved hex - this is
+  // an inline HTML style attribute, so the browser's own cascade resolves the custom property at
+  // render time; no JS-held copy of #0B0B0B exists anywhere. --avatar-letter is defined once, in
+  // css/styles.css's body[data-theme="black"] block (per (c): every Black category swatch sits
+  // at 45% saturation and >=58% lightness - see the ramp in categoryColorBlack() above - light
+  // enough throughout that one fixed near-black glyph colour stays legible on every step).
   function catBadgeStyle(name, bgOverride){
     const bg = bgOverride || categoryColor(name);
-    const textColor = categoryAvatarTextColor(bg);
-    return 'background:' + bg + ';' + (textColor ? ' color:' + textColor + ';' : '');
+    const isBlack = document.body.getAttribute('data-theme')==='black';
+    return 'background:' + bg + ';' + (isBlack ? ' color:var(--avatar-letter);' : '');
   }
 
   function defaultCategories(){
@@ -335,13 +361,16 @@
   }
   function categoryColor(name){
     const themeNow3 = document.body.getAttribute('data-theme');
-    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : (themeNow3==='black' ? CAT_PALETTE_BLACK : CAT_PALETTE);
+    // Black assigns by hashing the NAME directly (categoryColorBlack, above) rather than the
+    // array-index lookup every other theme uses below - see that function's own comment for why:
+    // stability across category reordering and across devices, independent of array position.
+    if(themeNow3==='black') return categoryColorBlack(name);
+    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
     const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
     const idx = allCats.indexOf(name);
     if(idx !== -1) return palette[idx % palette.length];
-    let hash=0; const s=name||'?';
-    for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
-    return palette[Math.abs(hash) % palette.length];
+    const hash = hashString(name);
+    return palette[hash % palette.length];
   }
   function categoryInitial(name){ const s=(name||'?').trim(); return (s.charAt(0)||'?').toUpperCase(); }
 
@@ -804,7 +833,7 @@
   // search) omits it and gets exactly the same markup/behavior as before this round, unaffected.
   function buildActivityRow(t, withActions, showDate, historyMode){
     const row = document.createElement('div'); row.className='activity-row clickable-row' + (historyMode ? ' history-row' : '');
-    const color = t.type==='income' ? incomeAvatarColor() : categoryColor(t.category);
+    const color = t.type==='income' ? incomeAvatarColor(t.category) : categoryColor(t.category);
     const badgeChar = t.type==='income' ? '↑' : categoryInitial(t.category);
     const typeLabel = t.type==='income' ? 'Credit' : 'Debit';
     // Note and date are separate flex children (not one combined truncating string) so a long
@@ -1291,8 +1320,16 @@
       return { cat, limit, spent, pct, over: spent>limit };
     }).sort((a,b)=> b.pct - a.pct);
     list.innerHTML='';
+    // --warning only exists in css/styles.css's body[data-theme="black"] block (a Black-only
+    // token, not a shared one) - every other theme keeps reading --gold exactly as before, so
+    // this branch is required, not optional, to avoid an undefined-variable break on Light/Dark/
+    // Crimson (which never asked for this change).
+    const isBlackTheme = document.body.getAttribute('data-theme')==='black';
     rows.forEach(r=>{
-      const barColor = r.over ? 'var(--debit)' : (r.pct>=80 ? 'var(--gold)' : 'var(--credit)');
+      // Threshold colours, fill only: under 80% stays on --credit (neutral/on-track, unchanged),
+      // 80-99.99% is --warning amber under Black (--gold everywhere else, unchanged), 100%+ is
+      // --debit red - the same red an overspent category's own amount uses.
+      const barColor = r.over ? 'var(--debit)' : (r.pct>=80 ? (isBlackTheme ? 'var(--warning)' : 'var(--gold)') : 'var(--credit)');
       const color = categoryColor(r.cat);
       const row = document.createElement('div'); row.className='budget-row clickable-row';
       row.innerHTML = `<div class="budget-row-top"><span class="budget-cat-left"><span class="cat-badge sm" style="${catBadgeStyle(r.cat, color)}">${categoryInitial(r.cat)}</span><span class="budget-cat-name">${escapeHtml(r.cat)}</span></span><span class="mono-num" style="font-size:12.5px;">${fmt(r.spent)} / ${fmt(r.limit)}</span></div><div class="budget-bar-track"><div class="budget-bar-fill" style="width:${r.pct}%; background:${barColor};"></div></div>`;
@@ -1327,12 +1364,13 @@
       const isBlack = themeNow2==='black';
       const gridColor = isDark ? '#232C42' : (isCrimson ? '#17151B' : (isBlack ? '#2A2A2A' : '#E2E8F0'));
       const tickColor = isDark ? '#8B95AC' : (isCrimson ? '#9A97A0' : (isBlack ? '#A0A0A0' : '#64748B'));
-      // Black is a deliberately monochrome experiment (see --credit/--debit in css/styles.css's
-      // body[data-theme="black"] block, which these two mirror exactly rather than re-deriving) -
-      // white vs mid-grey bars instead of green/red, distinguished by lightness and the axis
-      // labels alone, not hue.
-      const creditColor = isCrimson ? '#3DDC84' : (isBlack ? '#FFFFFF' : '#16A34A');
-      const debitColor = isCrimson ? '#FF7A59' : (isBlack ? '#A0A0A0' : '#DC2626');
+      // Chart.js needs a resolved colour string, not a live var() reference, so Black reads the
+      // ACTUAL computed --credit/--debit off the body element rather than holding its own copy
+      // of the hex - the single source of truth for both is css/styles.css's body[data-theme=
+      // "black"] block; changing those two lines is now enough to re-colour this chart too,
+      // nothing here needs editing. Light/Dark/Crimson keep their own literal hex, unchanged.
+      const creditColor = isCrimson ? '#3DDC84' : (isBlack ? getComputedStyle(document.body).getPropertyValue('--credit').trim() : '#16A34A');
+      const debitColor = isCrimson ? '#FF7A59' : (isBlack ? getComputedStyle(document.body).getPropertyValue('--debit').trim() : '#DC2626');
       charts.weekTrend = new Chart(canvas.getContext('2d'), {
         type:'bar',
         data:{ labels, datasets:[
@@ -1592,7 +1630,7 @@
     wrap.style.display='block';
     container.innerHTML='';
     recurring.forEach(r=>{
-      const color = r.type==='income' ? incomeAvatarColor() : categoryColor(r.category);
+      const color = r.type==='income' ? incomeAvatarColor(r.category) : categoryColor(r.category);
       const chip = document.createElement('button'); chip.type='button'; chip.className='recurring-chip'; chip.dataset.id=r.id;
       chip.setAttribute('aria-label', `Log ${r.category}, ${fmt(r.amount)}`);
       chip.innerHTML = `<span class="chip-badge" style="${catBadgeStyle(r.category, color)}">${r.type==='income'?'↑':categoryInitial(r.category)}</span><span>${escapeHtml(r.category)} · ${fmt(r.amount)}</span><span class="chip-del" data-id="${r.id}" aria-label="Remove ${escapeHtml(r.category)} quick add" role="button">×</span>`;
@@ -1686,7 +1724,7 @@
     entries.forEach(e=>{
       const row = document.createElement('div'); row.className='breakdown-row';
       const pct = max ? (e.amt/max*100) : 0;
-      const color = e.type==='income' ? incomeAvatarColor() : categoryColor(e.category);
+      const color = e.type==='income' ? incomeAvatarColor(e.category) : categoryColor(e.category);
       row.innerHTML = `<span class="dot" style="background:${color};"></span><span class="breakdown-name">${escapeHtml(e.category)} <span style="color:var(--ink-soft); font-size:10.5px;">(${e.type==='income'?'Credit':'Debit'})</span></span><span class="breakdown-track"><span class="breakdown-fill" style="width:${pct}%; background:${color};"></span></span><span class="breakdown-amt mono-num">${fmt(e.amt)}</span>`;
       container.appendChild(row);
     });
@@ -1938,11 +1976,14 @@
     const today = toLocalDateStr(new Date()); const monthPrefix = today.slice(0,7);
     const monthExpense = transactions.filter(t=>t.type==='expense' && t.date.startsWith(monthPrefix));
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
+    // Same reasoning as renderBudgetWatchInsights() above - --warning is Black-only.
+    const isBlackTheme2 = document.body.getAttribute('data-theme')==='black';
     categories.expense.forEach(cat=>{
       const limit = budgets[cat] || 0; const spent = spentMap[cat] || 0;
       const pct = limit>0 ? Math.min(100, spent/limit*100) : 0;
       const over = limit>0 && spent>limit;
-      const barColor = over ? 'var(--debit)' : (pct>=80 ? 'var(--gold)' : 'var(--credit)');
+      // Same three-state threshold as the Home Budget Watch preview above - see its comment.
+      const barColor = over ? 'var(--debit)' : (pct>=80 ? (isBlackTheme2 ? 'var(--warning)' : 'var(--gold)') : 'var(--credit)');
       const color = categoryColor(cat);
       const row = document.createElement('div'); row.className='budget-row';
       row.innerHTML = `

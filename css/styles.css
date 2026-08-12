@@ -787,31 +787,39 @@
          strings converged independently on the same ratio: mono_px = N * 0.84 (not 1.215). */
 
   /* ---------- Black theme ----------
-     Strict monochrome dark theme - pure black, greys, and white, no hues anywhere. NOT a
-     recolour of Dark (which is navy-tinted with a blue accent) - every token below is a true
-     grey or pure white/black so it reads as a genuinely different theme sitting next to Dark in
-     the picker, not a variant of it. Structurally identical to every other theme here (same
-     selectors, same component list) - this is a palette swap, not a redesign.
-     --credit/--debit deliberately carry NO colour (white/grey, distinguished by the +/- sign and
-     a weight difference elsewhere - see .activity-amt.expense below) - a deliberate experiment
-     per the brief; both live as ordinary custom properties here like every other theme's, so
-     reintroducing colour later is a one-line edit to these two lines, nothing else.
-     --binder (primary CTA/FAB/active-nav-tab colour) is pure white, inverted from every other
-     theme - the reference design's defining move. Every existing rule that pairs
-     background:var(--binder) with a hardcoded color:#FFFFFF (.btn-black, .spine .tab-btn.active,
-     .bottom-nav .tab-btn.fab, .cat-col form button) would otherwise render white text on a white
-     button, so each gets a Black-specific override below flipping the text to black - the same
-     "override the hardcoded text colour when the token's lightness flips" pattern Dark/Crimson
-     already use for .btn-debit (see line ~695/767 above), just applied to the primary-button
-     token instead of the debit one, and to more call sites since more of them hardcode white. */
+     Strict monochrome dark theme - pure black and grey chrome, no hues in nav/topbar/cards/body
+     text/Save Entry/chevrons/dividers/backgrounds. NOT a recolour of Dark (which is navy-tinted
+     with a blue accent) - every chrome token below is a true grey or pure white/black so it
+     reads as a genuinely different theme sitting next to Dark in the picker, not a variant of it.
+     Structurally identical to every other theme here (same selectors, same component list).
+     Round 1 shipped --credit/--debit as pure white/grey (no colour at all). Real-device testing
+     found pure monochrome fails on scannability - round 2 reintroduces colour, but ONLY where it
+     carries meaning: category identity (categoryColorBlack() in js/app.js) and credit/debit
+     polarity (these two lines). Both still live as ordinary custom properties, so a future
+     decision to change them again is still a one-line edit here, nothing else.
+     --warning is new this round - the 80-99.99%-of-budget amber state (see .budget-bar-fill.warn
+     below); --debit doubles as the 100%+ state deliberately, the same red as an overspent
+     category IS an over-budget category.
+     --binder (primary CTA/FAB/active-nav-tab colour) stays pure white, inverted from every other
+     theme - the reference design's defining move, and explicitly NOT the same token as --credit
+     even though both are bright: --binder drives ordinary chrome (Save Entry, the FAB, active nav
+     tab) which stays monochrome per the brief, while --credit is reserved for the credit/debit
+     pair specifically. Every existing rule that pairs background:var(--binder) with a hardcoded
+     color:#FFFFFF (.btn-black, .spine .tab-btn.active, .bottom-nav .tab-btn.fab, .cat-col form
+     button) would otherwise render white text on a white button, so each gets a Black-specific
+     override below flipping the text to black - the same "override the hardcoded text colour
+     when the token's lightness flips" pattern Dark/Crimson already use for .btn-debit (see line
+     ~695/767 above), just applied to the primary-button token instead of the debit one. */
   body[data-theme="black"]{
     --bg:#000000;
     --card:#121212;
     --ink:#FFFFFF;
     --ink-soft:#A0A0A0;
     --line:#2A2A2A;
-    --credit:#FFFFFF;
-    --debit:#A0A0A0;
+    --credit:#3FB950;
+    --debit:#F85149;
+    --warning:#D29922;
+    --avatar-letter:#0B0B0B;
     --gold:#C8C8C8;
     --link:#B0B0B0;
     --goal:#E0E0E0;
@@ -823,6 +831,12 @@
     --shadow-fab:0 8px 22px rgba(0,0,0,.6);
     --shadow-nav:0 -4px 20px rgba(0,0,0,.5);
   }
+  /* Add Credit / Add Debit (Home quick actions) - the ONE place .btn-black/.btn-debit's usual
+     binder-white/debit-red styling gets overridden to the CREDIT colour specifically, so the two
+     buttons read as a green/red pair rather than "primary" vs "disabled". Targeted by id, not by
+     class, because .btn-black/.btn-debit are shared with unrelated buttons (Save Entry, Save
+     Debt, the debt-kind toggle...) that must stay on the ordinary --binder/--debit chrome tokens. */
+  body[data-theme="black"] #qa-money-in{ background:var(--credit); }
   body[data-theme="black"] .spine{ background:rgba(18,18,18,.9); border-right-color:var(--line); }
   body[data-theme="black"] .bottom-nav{ background:rgba(18,18,18,.9); border-top-color:var(--line); }
   body[data-theme="black"] .topbar{ background:rgba(0,0,0,.82); border-bottom-color:var(--line); }
@@ -841,25 +855,27 @@
      history for the same lesson). */
   body[data-theme="black"] #backup-nag-banner{ border-color:rgba(255,255,255,.25) !important; }
   /* Same class of hardcoded-hue leak as the banner above, but in CSS this time rather than an
-     inline style: these badges pair a THEME-REACTIVE text colour (var(--credit)/--debit/--gold,
-     already correctly white/grey under Black) with a HARDCODED translucent rgba(22,163,74/
-     220,38,38/245,158,11,...) background tint that never changes per theme. Ordinary specificity
-     is enough here (no inline style involved), so no !important needed. */
+     inline style: these badges pair a THEME-REACTIVE text colour (var(--credit)/--debit/--gold)
+     with a HARDCODED translucent rgba(22,163,74/220,38,38/245,158,11,...) background tint that
+     never changes per theme. Round 1 (pure monochrome) neutralized these to plain white/grey
+     tints; round 2 tints them to actually match the now-real credit/debit/warning colours the
+     text itself uses, instead of leaving a mismatched grey tint under coloured text. */
   body[data-theme="black"] .txdetail-badge.credit,
-  body[data-theme="black"] .schedule-status.paid{ background:rgba(255,255,255,.14); }
+  body[data-theme="black"] .schedule-status.paid{ background:rgba(63,185,80,.16); }
   body[data-theme="black"] .txdetail-badge.debit,
   body[data-theme="black"] .schedule-status.overdue,
-  body[data-theme="black"] .reminder-status.overdue{ background:rgba(160,160,160,.18); }
-  body[data-theme="black"] .reminder-status.upcoming{ background:rgba(200,200,200,.16); }
-  body[data-theme="black"] .danger-zone{ background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.22); }
-  /* 2.2c: over-budget/overdue/alert states share var(--debit) elsewhere (already grey, already
-     "no red"), but under strict monochrome that alone makes an alert read as ordinary debit text
-     - nothing marks it as something needing attention. White + underline gives it its own signal
-     (brighter than debit-grey, underlined unlike credit-white) instead of leaning on colour. */
+  body[data-theme="black"] .reminder-status.overdue{ background:rgba(248,81,73,.16); }
+  body[data-theme="black"] .reminder-status.upcoming{ background:rgba(210,153,34,.18); }
+  body[data-theme="black"] .danger-zone{ background:rgba(248,81,73,.06); border-color:rgba(248,81,73,.3); }
+  /* 2.2c (round 1): over-budget/overdue/alert states shared var(--debit) with ordinary debit
+     text under pure monochrome, so white+underline gave them their own signal. Round 2: colour
+     is back and --debit IS red now, so these states get the same red as any other debit/overdue
+     figure - the underline workaround is no longer needed and is dropped, matching how a real
+     "something needs attention" state reads once red actually means something again. */
   body[data-theme="black"] .budget-row-meta.over,
   body[data-theme="black"] .overdue-tag,
   body[data-theme="black"] .reminder-key-figure.alert{
-    color:#FFFFFF; text-decoration:underline; text-underline-offset:2px;
+    color:var(--debit);
   }
   body[data-theme="black"] .ledger-form input, body[data-theme="black"] .ledger-form select,
   body[data-theme="black"] .filter-row select, body[data-theme="black"] .search-input,
