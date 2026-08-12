@@ -137,54 +137,88 @@
   // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
   // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
   const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
-  // Black theme, round 2: pure monochrome shipped first, but real-device testing found it fails
-  // on scannability - the avatar column mixed two systems (white+arrow for income, grey+letter
-  // for expense, so the SAME visual slot meant "type" for one and "category" for the other), the
-  // 10-step grey ramp collapsed once >6 categories were visible ("Cash in hand"/"Card" both read
-  // as the same near-white circle), and the donut legend couldn't be matched back to its own
-  // slices (several dots landed on the same grey). Decision: reintroduce colour, but only where
-  // it carries meaning - every category gets ONE colour, used identically everywhere it appears
-  // (avatar, donut slice, donut legend dot, Budget Watch row, Top Categories tile) - see
-  // categoryColor()'s black branch below, which now generates from a fixed HSL ramp instead of a
-  // hand-written array so it scales cleanly past 10 categories. Chrome (nav/topbar/cards/body
-  // text) stays fully monochrome - only category identity and credit/debit polarity carry colour.
+  // Black theme, round 3: round 2's HSL ramp looked like 24 distinct hues on paper but wasn't -
+  // HSL is not perceptually uniform, so e.g. hues 15/25/45 (all "orange" to the eye at this
+  // saturation/lightness) and 210/255/280 (all "blue-purple") rendered as 2-3 visually repeated
+  // colour families, not 10 independent ones. With 18 real categories hashed across a
+  // functionally-6-wide space, real collisions showed up on the Categories page (Freelance/
+  // Rental Income both pink, Salary/Business/Investments/Food & Groceries all green, etc).
   //
-  // 10 base hues (not picked by eye - given directly), fixed saturation/lightness for the first
-  // lap through the ramp. A category's hue is chosen by hashing its NAME (not its index in the
-  // categories array), so its colour survives category reordering and is identical across
-  // devices/sessions without needing the two device's arrays to be in the same order - the
-  // ordering feature planned for a future round would otherwise have silently reshuffled every
-  // avatar colour under the old index-based scheme.
-  const CAT_HUE_RAMP_BLACK = [210, 25, 145, 280, 45, 330, 180, 95, 255, 15];
-  // Past the first 10 categories, a second/third category can hash to the same hue - rather than
-  // repeat the exact same colour, later "laps" through the ramp step LIGHTNESS UP (58 -> 70 ->
-  // 82%), never down: avatar letters are fixed near-black (#0B0B0B, see below) for contrast, and
-  // going lighter only ever improves that contrast, where going darker (the more obvious "next
-  // shade" choice) was checked and found to drop as low as ~2.25:1 against near-black text at the
-  // base saturation - a real legibility failure the brief's own fixed-lightness example didn't
-  // anticipate, so this deviates deliberately rather than following "vary lightness" blindly.
+  // Rebuilt in OKLCH instead - equal L actually looks equally light across hues, which is what
+  // makes 12 evenly-spaced hues (30 degrees apart) read as 12 genuinely different colours rather
+  // than clustering. Two lightness tiers x 12 hues = 24 slots total.
+  //   Tier 1: oklch(0.72 0.13 H) - the brief's own value, unchanged.
+  //   Tier 2: oklch(0.65 0.13 H) - the brief specified 0.60, but sampling every hue at 0.60
+  //     against the fixed near-black avatar letter (#0B0B0B) found a worst-case contrast of only
+  //     4.65:1 - technically over the 4.5:1 floor, but by a margin thin enough that ordinary
+  //     browser-to-browser gamut-mapping differences could plausibly tip a real device under it.
+  //     Raised to 0.65 for a worst-case of 5.68:1, comfortably clear. See the contrast sampling
+  //     script referenced in the PR for both numbers.
+  // Verified real canvas fillStyle AND real SVG fill-attribute both accept raw oklch() strings
+  // in this sandbox's Chromium (a pixel read back after assignment matched this conversion
+  // function exactly) - but Chart.js itself is unreachable here (external CDN), and the actual
+  // target devices' engine versions aren't guaranteed, so colours are still converted to sRGB hex
+  // in JS at generation time below rather than trusting oklch() strings to reach every renderer.
+  const CAT_OKLCH_HUES = [0,30,60,90,120,150,180,210,240,270,300,330];
+  const CAT_OKLCH_TIERS = [0.72, 0.65];
+  const CAT_OKLCH_CHROMA = 0.13;
+  // Standard OKLCH -> OKLab -> linear sRGB -> sRGB conversion (Björn Ottosson's reference
+  // matrices, the same ones the CSS Color 4 spec and every browser's native oklch() parser use -
+  // confirmed to match this browser's own conversion pixel-for-pixel, see above).
+  function oklchToHex(L, C, hDeg){
+    const hRad = hDeg * Math.PI / 180;
+    const a = C * Math.cos(hRad), b = C * Math.sin(hRad);
+    const l_ = L + 0.3963377774*a + 0.2158037573*b;
+    const m_ = L - 0.1055613458*a - 0.0638541728*b;
+    const s_ = L - 0.0894841775*a - 1.2914855480*b;
+    const l = l_**3, m = m_**3, s = s_**3;
+    const r = 4.0767416621*l - 3.3077115913*m + 0.2309699292*s;
+    const g = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s;
+    const bl = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+    const gam = (c)=>{ c = Math.max(0, Math.min(1, c)); return c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055; };
+    const toHex = (c)=> Math.round(Math.max(0,Math.min(1,gam(c)))*255).toString(16).padStart(2,'0');
+    return '#'+toHex(r)+toHex(g)+toHex(bl);
+  }
+  // 24 slots, computed once at load rather than per-render: index = tier*12 + hueIndex.
+  const CAT_OKLCH_SLOTS = CAT_OKLCH_TIERS.flatMap(L => CAT_OKLCH_HUES.map(h => oklchToHex(L, CAT_OKLCH_CHROMA, h)));
   function hashString(name){
     let hash = 0; const s = name || '?';
     for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
     return Math.abs(hash);
   }
-  function hslToHex(h, s, l){
-    s/=100; l/=100;
-    const c = (1-Math.abs(2*l-1))*s;
-    const x = c*(1-Math.abs(((h/60)%2)-1));
-    const m = l-c/2;
-    let r,g,b;
-    if(h<60){ [r,g,b]=[c,x,0]; } else if(h<120){ [r,g,b]=[x,c,0]; } else if(h<180){ [r,g,b]=[0,c,x]; }
-    else if(h<240){ [r,g,b]=[0,x,c]; } else if(h<300){ [r,g,b]=[x,0,c]; } else { [r,g,b]=[c,0,x]; }
-    const toHex = (v)=> Math.round((v+m)*255).toString(16).padStart(2,'0');
-    return '#'+toHex(r)+toHex(g)+toHex(b);
+  // Guarantees no two names in the SAME list share a slot: sorts ALPHABETICALLY (never display/
+  // creation order - a planned drag-to-reorder feature must never change anyone's colour) then
+  // walks in that fixed order, giving each name its hash-preferred slot or, if taken, the next
+  // free one. Recomputed on every call rather than cached, since `categories` is mutable app
+  // state (categories can be added/removed at any time) - trivial cost at these list sizes.
+  function assignCategorySlots(names){
+    const sorted = [...names].sort((a,b)=> a.localeCompare(b));
+    const total = CAT_OKLCH_SLOTS.length;
+    const taken = new Set();
+    const assignment = new Map();
+    sorted.forEach(name=>{
+      let slot = hashString(name) % total;
+      let attempts = 0;
+      while(taken.has(slot) && attempts < total){ slot = (slot+1) % total; attempts++; }
+      taken.add(slot);
+      assignment.set(name, slot);
+    });
+    return assignment;
   }
+  // Income and expense categories get their OWN collision-free pass, run separately per (c) - a
+  // colour clash between "Rent" (expense) and "Rental Income" (income) was never the complaint
+  // (they never appear in the same list/legend together), and running one shared pass across both
+  // would mean adding a category to one list could shift colours in the other for no reason.
+  // Names that aren't in EITHER current list (an account name, or a category since removed from
+  // categories.income/.expense but still referenced by an old transaction) have no list to
+  // guarantee uniqueness against, so they fall back to a plain per-name hash pick - same shape as
+  // before, just against the new 24-slot OKLCH set instead of the old flawed HSL ramp.
   function categoryColorBlack(name){
-    const hash = hashString(name);
-    const hue = CAT_HUE_RAMP_BLACK[hash % CAT_HUE_RAMP_BLACK.length];
-    const lap = Math.floor(hash / CAT_HUE_RAMP_BLACK.length) % 3;
-    const lightness = 58 + lap*12; // 58% / 70% / 82%
-    return hslToHex(hue, 45, lightness);
+    const inIncome = categories && Array.isArray(categories.income) && categories.income.includes(name);
+    const inExpense = categories && Array.isArray(categories.expense) && categories.expense.includes(name);
+    if(inIncome) return CAT_OKLCH_SLOTS[assignCategorySlots(categories.income).get(name)];
+    if(inExpense) return CAT_OKLCH_SLOTS[assignCategorySlots(categories.expense).get(name)];
+    return CAT_OKLCH_SLOTS[hashString(name) % CAT_OKLCH_SLOTS.length];
   }
   // Income avatars used to bypass categoryColor() entirely (a hardcoded green in Light/Dark/
   // Crimson, a hardcoded white in Black v1) - exactly the "two systems" bug above. Under Black
@@ -200,9 +234,10 @@
   // itself is written as the literal string "var(--avatar-letter)", not a resolved hex - this is
   // an inline HTML style attribute, so the browser's own cascade resolves the custom property at
   // render time; no JS-held copy of #0B0B0B exists anywhere. --avatar-letter is defined once, in
-  // css/styles.css's body[data-theme="black"] block (per (c): every Black category swatch sits
-  // at 45% saturation and >=58% lightness - see the ramp in categoryColorBlack() above - light
-  // enough throughout that one fixed near-black glyph colour stays legible on every step).
+  // css/styles.css's body[data-theme="black"] block - every Black category swatch sits at OKLCH
+  // chroma 0.13 and lightness >=0.65 (see CAT_OKLCH_TIERS above), sampled and confirmed legible
+  // at its worst case, so one fixed near-black glyph colour works on every slot without needing
+  // a per-swatch luminance branch.
   function catBadgeStyle(name, bgOverride){
     const bg = bgOverride || categoryColor(name);
     const isBlack = document.body.getAttribute('data-theme')==='black';
@@ -1735,12 +1770,19 @@
     if(filtered.length===0){ emptyNote.style.display='block'; table.style.display='none'; return; }
     emptyNote.style.display='none'; table.style.display='table';
     let balance=0;
+    // Issue 3: under Black, an em-dash placeholder ("nothing happened on this side") must not be
+    // tinted the same as a real amount - only colour the cell that actually holds a figure, grey
+    // for the dash. Every other theme keeps its original always-tinted behaviour, unchanged - the
+    // Balance column itself was already untinted regardless of theme (no fix needed there).
+    const isBlackReports = document.body.getAttribute('data-theme')==='black';
     filtered.forEach(t=>{
       balance += t.type==='income' ? t.amount : -t.amount;
       const tr = document.createElement('tr');
       const debit = t.type==='expense' ? fmt(t.amount) : '—';
       const credit = t.type==='income' ? fmt(t.amount) : '—';
-      tr.innerHTML = `<td>${formatHuman(t.date)}</td><td>${escapeHtml(t.note||'—')}</td><td>${escapeHtml(t.category)}</td><td class="num" style="color:var(--debit)">${debit}</td><td class="num" style="color:var(--credit)">${credit}</td><td class="num">${fmt(balance)}</td>`;
+      const debitColor = isBlackReports ? (t.type==='expense' ? 'var(--debit)' : 'var(--ink-soft)') : 'var(--debit)';
+      const creditColor = isBlackReports ? (t.type==='income' ? 'var(--credit)' : 'var(--ink-soft)') : 'var(--credit)';
+      tr.innerHTML = `<td>${formatHuman(t.date)}</td><td>${escapeHtml(t.note||'—')}</td><td>${escapeHtml(t.category)}</td><td class="num" style="color:${debitColor}">${debit}</td><td class="num" style="color:${creditColor}">${credit}</td><td class="num">${fmt(balance)}</td>`;
       tbody.appendChild(tr);
     });
   }
@@ -3198,7 +3240,12 @@
     const paid = debtPaid(d); const remaining = debtRemaining(d); const isPaidOff = remaining<=0.004;
     setText('debtdetail-title', d.name);
     setText('debtdetail-badge-label', (d.type==='emi' ? 'EMI' : 'One-time') + ' ' + (isReceivable ? 'Receivable' : 'Debt'));
-    document.getElementById('debtdetail-amount').style.color = isReceivable ? 'var(--credit)' : 'var(--debit)';
+    // Issue 3: this "remaining" figure is the same not-yet-settled concept as Outstanding Debt/
+    // Owed to You on Insights - under Black it must read red either way, same as those two now
+    // do, rather than green for a receivable (money not yet received still isn't settled). Every
+    // other theme keeps its original debt=red/receivable=green treatment, unchanged.
+    const isBlackDD = document.body.getAttribute('data-theme')==='black';
+    document.getElementById('debtdetail-amount').style.color = isBlackDD ? 'var(--debit)' : (isReceivable ? 'var(--credit)' : 'var(--debit)');
     setText('debtdetail-amount', fmt(remaining));
     setText('debtdetail-subtitle', isPaidOff ? (isReceivable ? 'Fully received' : 'Paid off') : 'remaining');
     const fields = document.getElementById('debtdetail-fields'); fields.innerHTML='';

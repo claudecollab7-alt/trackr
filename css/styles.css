@@ -837,6 +837,19 @@
      class, because .btn-black/.btn-debit are shared with unrelated buttons (Save Entry, Save
      Debt, the debt-kind toggle...) that must stay on the ordinary --binder/--debit chrome tokens. */
   body[data-theme="black"] #qa-money-in{ background:var(--credit); }
+  /* Issue 4 (round 3): .quick-actions .btn-pill{flex:1} stretches both buttons to fill whatever
+     width the card happens to be - fine on a narrow mobile card, but on a much wider desktop
+     card it means the now-solid green/red pair occupies a lot more visual area than on mobile,
+     particularly the red. Capped to a fixed width on desktop only (mobile untouched - this media
+     query only applies >=781px) and left un-grown, which also makes flexbox's own default
+     justify-content:flex-start left-align the pair automatically, without a separate rule. Two
+     buttons only, targeted by id - no other layout on the page is touched. */
+  @media (min-width:781px){
+    body[data-theme="black"] #qa-money-in,
+    body[data-theme="black"] #qa-money-out{
+      flex:0 0 auto; width:180px;
+    }
+  }
   body[data-theme="black"] .spine{ background:rgba(18,18,18,.9); border-right-color:var(--line); }
   body[data-theme="black"] .bottom-nav{ background:rgba(18,18,18,.9); border-top-color:var(--line); }
   body[data-theme="black"] .topbar{ background:rgba(0,0,0,.82); border-bottom-color:var(--line); }
@@ -876,6 +889,35 @@
   body[data-theme="black"] .overdue-tag,
   body[data-theme="black"] .reminder-key-figure.alert{
     color:var(--debit);
+  }
+  /* Issue 3 (round 3): one settled/pending/neutral rule applied everywhere these figures appear.
+     GREEN = settled (Total Paid/Total Received, already var(--credit) inline - unchanged).
+     RED = not yet settled (Total Pending, already var(--debit) inline - unchanged; Outstanding
+     Debt and Owed to You were previously white and green respectively - the exact "same concept,
+     two treatments" inconsistency this fixes).
+     WHITE = totals/neutral facts (Total Committed was already unstyled - unchanged; Savings
+     Goals was previously var(--goal), a distinct lavender-ish accent, not white).
+     #receivable-summary-amount and #goals-summary-amount need !important - both carry an inline
+     style="color:..." in index.html (shared markup, read by every theme), which always beats an
+     external stylesheet selector regardless of specificity. #debt-summary-amount has no inline
+     colour to begin with, so plain specificity is enough for it. */
+  body[data-theme="black"] #debt-summary-amount,
+  body[data-theme="black"] #receivable-summary-amount{
+    color:var(--debit) !important;
+  }
+  body[data-theme="black"] #goals-summary-amount{
+    color:var(--ink) !important;
+  }
+  /* Net Balance/Net Worth/Net (Reports) already have a pre-existing, cross-theme .negative rule
+     (.balance-amount.negative / .mono-num.negative / .summary-box .mono-num.negative all resolve
+     to var(--debit)) that every OTHER theme keeps relying on unchanged. Under Black specifically,
+     these three are "totals" per the rule above, not pending/debit figures, and must stay white
+     even when the underlying number is negative - overridden by ID, which already outranks the
+     class-only base rules on specificity, no !important needed. */
+  body[data-theme="black"] #home-balance.negative,
+  body[data-theme="black"] #networth-amount.negative,
+  body[data-theme="black"] #report-net.negative{
+    color:var(--ink);
   }
   body[data-theme="black"] .ledger-form input, body[data-theme="black"] .ledger-form select,
   body[data-theme="black"] .filter-row select, body[data-theme="black"] .search-input,
