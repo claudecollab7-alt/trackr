@@ -982,6 +982,21 @@
   body[data-theme="black"] .cat-col form button{
     color:#000000;
   }
+  /* Issue 2 (round 5): a fifth instance of the exact same background:var(--binder) + hardcoded
+     color:#fff pairing above, missed from the original audit - the "Update available" banner's
+     icon circle (#sw-update-banner .update-banner-icon in index.html). Its download glyph is an
+     inline SVG (see icon() in js/app.js) drawn with stroke="currentColor", so it inherits
+     whatever `color` the circle around it resolves to - under every other theme that's a dark
+     --binder circle with a legible white glyph, but under Black, --binder is white too, so the
+     glyph was rendering white-on-white: a blank circle, invisible until the banner actually
+     appears (which only happens mid-update, easy to miss in screenshot-only verification - this
+     is what real-device testing caught). Needs !important: color:#fff is an INLINE style on this
+     element in index.html (shared markup, read by every theme), which always beats an external
+     stylesheet selector regardless of specificity - the same lesson every other inline-style fix
+     in this file has needed. */
+  body[data-theme="black"] .update-banner-icon{
+    color:#000000 !important;
+  }
   /* 2.2a: the +/- sign and a weight difference are the only distinction between credit and
      debit under Black (no colour difference beyond white-vs-grey) - .activity-amt already
      carries the +/- via its own markup and a flat font-weight:700 for both; this drops expense
