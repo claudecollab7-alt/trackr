@@ -186,23 +186,32 @@
     for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
     return Math.abs(hash);
   }
-  // Guarantees no two names in the SAME list share a slot: sorts ALPHABETICALLY (never display/
-  // creation order - a planned drag-to-reorder feature must never change anyone's colour) then
-  // walks in that fixed order, giving each name its hash-preferred slot or, if taken, the next
-  // free one. Recomputed on every call rather than cached, since `categories` is mutable app
-  // state (categories can be added/removed at any time) - trivial cost at these list sizes.
+  // Round 4 CORRECTION: hash-plus-probe (round 3) only guaranteed no two names in a list shared
+  // the exact same slot - it never guaranteed those slots were far apart. Two names could easily
+  // hash to neighbouring slots (adjacent indices are only 30 degrees of hue apart within a tier),
+  // which is exactly what was reported: Business/Gift/Bonus/Utilities & Bills/Education/Insurance/
+  // Other Expense all landing in slots close enough together to read as "green" at avatar size,
+  // even though no two of them were technically identical.
+  //
+  // Replaced with EVEN distribution: sort names alphabetically (still never display/creation
+  // order - a planned drag-to-reorder feature must never change anyone's colour), then walk that
+  // fixed order assigning slot i * floor(24/N), where N is this list's length. This spreads N
+  // categories at the maximum hue distance the 24-slot set can offer, rather than at whatever
+  // distance a hash happened to produce. Recomputed on every call rather than cached, since
+  // `categories` is mutable app state - trivial cost at these list sizes.
+  //
+  // TRADE-OFF, accepted deliberately (per the brief): adding or removing a category changes N,
+  // which reassigns colours across the ENTIRE list, not just the changed entry - unlike the old
+  // hash-based scheme, where only a genuine collision ever moved a colour. Colour here is pure
+  // decoration with no data meaning, so this is fine; alphabetical order still means the planned
+  // drag-to-reorder feature can never change anyone's colour by itself.
   function assignCategorySlots(names){
     const sorted = [...names].sort((a,b)=> a.localeCompare(b));
     const total = CAT_OKLCH_SLOTS.length;
-    const taken = new Set();
+    const n = sorted.length;
+    const step = n>0 ? Math.floor(total/n) : 0;
     const assignment = new Map();
-    sorted.forEach(name=>{
-      let slot = hashString(name) % total;
-      let attempts = 0;
-      while(taken.has(slot) && attempts < total){ slot = (slot+1) % total; attempts++; }
-      taken.add(slot);
-      assignment.set(name, slot);
-    });
+    sorted.forEach((name,i)=>{ assignment.set(name, (i*step) % total); });
     return assignment;
   }
   // Income and expense categories get their OWN collision-free pass, run separately per (c) - a
@@ -2071,6 +2080,14 @@
       if(aPaid!==bPaid) return aPaid ? 1 : -1;
       return 0;
     });
+    // Issue 3 (round 4): this per-item progress fill previously used a type colour (EMI=--link,
+    // one-time=--gold, both light greys under Black) instead of the settled/pending rule, and the
+    // inline "paid ... of ... remaining" text carried no colour at all - both read as "white
+    // progress bar fills" next to the green overview bar above them. Fixed for Black only: the
+    // fill always reads paid-progress in credit green (matching the overview bar's own always-
+    // green fill), and the paid/remaining figures inline in the meta text get the same green/red
+    // as everywhere else. Every other theme's type-coloured fill and plain meta text is untouched.
+    const isBlackList = document.body.getAttribute('data-theme')==='black';
     sorted.forEach(d=>{
       const paid = debtPaid(d); const remaining = debtRemaining(d); const isPaidOff = remaining<=0.004;
       const pct = d.total>0 ? Math.min(100, paid/d.total*100) : 0;
@@ -2082,9 +2099,11 @@
       });
       const typeLabel = d.type==='emi' ? `EMI · ${fmt(d.emiAmount)}/mo` : (isReceivable ? 'One-time receivable' : 'One-time debt');
       const typeColor = d.type==='emi' ? 'var(--link)' : 'var(--gold)';
-      const barColor = isPaidOff ? 'var(--credit)' : typeColor;
+      const barColor = isBlackList ? 'var(--credit)' : (isPaidOff ? 'var(--credit)' : typeColor);
       const paidLabel = isReceivable ? 'received' : 'paid';
       const paidOffLabel = isReceivable ? 'Fully Received ✓' : 'Paid Off ✓';
+      const paidStr = isBlackList ? `<span style="color:var(--credit);">${fmt(paid)}</span>` : fmt(paid);
+      const remainingStr = isBlackList ? `<span style="color:var(--debit);">${fmt(remaining)}</span>` : fmt(remaining);
       let installmentLine = '';
       if(d.type==='emi'){
         const payoff = emiPayoffDate(d);
@@ -2102,7 +2121,7 @@
           </div>
         </div>
         <div class="debt-bar-track"><div class="debt-bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
-        <div class="debt-row-meta">${fmt(paid)} ${paidLabel} of ${fmt(d.total)} ${isPaidOff ? '· <span class="paidoff-tag">'+paidOffLabel+'</span>' : '· '+fmt(remaining)+' remaining'}</div>
+        <div class="debt-row-meta">${paidStr} ${paidLabel} of ${fmt(d.total)} ${isPaidOff ? '· <span class="paidoff-tag">'+paidOffLabel+'</span>' : '· '+remainingStr+' remaining'}</div>
         ${installmentLine}
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           ${ isPaidOff ? '' : `<button class="btn-pill btn-outline log-payment-btn" data-id="${d.id}">+ ${isReceivable?'Log Received':'Log Payment'}</button>` }
@@ -2187,6 +2206,17 @@
     if(lumpSection) lumpSection.style.display = lumpDebts.length ? 'block' : 'none';
     setText(prefix+'-lump-paid', fmt(lumpDebts.reduce((s,d)=>s+debtPaid(d),0)));
     setText(prefix+'-lump-pending', fmt(lumpDebts.reduce((s,d)=>s+debtRemaining(d),0)));
+    // Issue 3 (round 4): the top-level tiles above (-total-paid/-total-pending) already carry the
+    // settled/pending rule via an inline style in index.html, but these nested EMI/One-time
+    // breakdown rows never got any colour at all - they're plain .mono-num spans, inheriting the
+    // card's ordinary white/ink text. Applied here in JS (not CSS) because the rule is genuinely
+    // Black-only and every other theme's markup for these rows was never touched or reviewed for
+    // this treatment, matching the established pattern of gating new Black colour logic behind a
+    // live data-theme check rather than a shared CSS rule.
+    if(document.body.getAttribute('data-theme')==='black'){
+      ['emi-paid','lump-paid'].forEach(k=>{ const el=document.getElementById(prefix+'-'+k); if(el) el.style.color='var(--credit)'; });
+      ['emi-pending','lump-pending'].forEach(k=>{ const el=document.getElementById(prefix+'-'+k); if(el) el.style.color='var(--debit)'; });
+    }
   }
   function renderDebtOverview(){
     renderDebtOverviewInto('debtov', currentDebtList());
@@ -2247,6 +2277,12 @@
       if(aDone!==bDone) return aDone ? 1 : -1;
       return 0;
     });
+    // Issue 4 (round 4): saved-versus-target is the same settled/pending shape as everything else
+    // in the app - saved goes credit green, remaining-to-target goes debit red, same as a debt's
+    // paid/remaining pair. Previously this list used --goal (a neutral lavender/grey accent) for
+    // both the fill and the text, with no settled/pending meaning at all. Black-only, matching the
+    // debt-card fix immediately above; every other theme keeps its original --goal treatment.
+    const isBlackGoals = document.body.getAttribute('data-theme')==='black';
     sorted.forEach(g=>{
       const saved = goalSaved(g); const remaining = goalRemaining(g); const isComplete = remaining<=0.004;
       const pct = g.target>0 ? Math.min(100, saved/g.target*100) : 0;
@@ -2258,6 +2294,9 @@
       const metaParts = [];
       if(g.targetDate) metaParts.push(`Target date: ${formatHuman(g.targetDate)}`);
       if(g.note) metaParts.push(escapeHtml(g.note));
+      const goalBarColor = isBlackGoals ? 'var(--credit)' : (isComplete?'var(--credit)':'var(--goal)');
+      const savedStr = isBlackGoals ? `<span style="color:var(--credit);">${fmt(saved)}</span>` : fmt(saved);
+      const remainingGoalStr = isBlackGoals ? `<span style="color:var(--debit);">${fmt(remaining)}</span>` : fmt(remaining);
       card.innerHTML = `
         <div class="goal-card-top">
           <div>
@@ -2269,8 +2308,8 @@
             <button class="icon-btn-sm del-goal-btn" data-id="${g.id}" aria-label="Delete savings goal">${icon('trash',14)}</button>
           </div>
         </div>
-        <div class="goal-bar-track"><div class="goal-bar-fill" style="width:${pct}%; background:${isComplete?'var(--credit)':'var(--goal)'};"></div></div>
-        <div class="goal-row-meta">${fmt(saved)} saved of ${fmt(g.target)} ${isComplete ? '· <span class="goal-reached-tag">Goal Reached ✓</span>' : '· '+fmt(remaining)+' to go ('+Math.round(pct)+'%)'}</div>
+        <div class="goal-bar-track"><div class="goal-bar-fill" style="width:${pct}%; background:${goalBarColor};"></div></div>
+        <div class="goal-row-meta">${savedStr} saved of ${fmt(g.target)} ${isComplete ? '· <span class="goal-reached-tag">Goal Reached ✓</span>' : '· '+remainingGoalStr+' to go ('+Math.round(pct)+'%)'}</div>
         ${ isComplete ? '' : `
         <button class="btn-pill btn-outline contribute-goal-btn" data-id="${g.id}">+ Add Contribution</button>
         <div class="contribution-form" id="contrib-form-${g.id}" style="display:none;">
@@ -2361,16 +2400,23 @@
     setText('goaldetail-title', g.name);
     setText('goaldetail-amount', fmt(isComplete ? saved : remaining));
     setText('goaldetail-subtitle', isComplete ? 'Goal reached' : 'to go');
+    // Issue 4 (round 4): this big figure shows Saved once the goal is reached, Remaining otherwise
+    // - the same settled/pending shape as debtdetail-amount above, so it gets the same dynamic
+    // colour treatment (green when it's the settled/saved figure, red while still pending), rather
+    // than the static neutral --goal it had before. Black only.
+    const isBlackGD = document.body.getAttribute('data-theme')==='black';
+    document.getElementById('goaldetail-amount').style.color = isBlackGD ? (isComplete ? 'var(--credit)' : 'var(--debit)') : 'var(--goal)';
     const fields = document.getElementById('goaldetail-fields'); fields.innerHTML='';
     const rows = [
       ['Target', fmt(g.target)],
-      ['Saved', fmt(saved)],
+      ['Saved', fmt(saved), 'paid'],
     ];
     if(g.targetDate) rows.push(['Target Date', formatHuman(g.targetDate)]);
     rows.push(['Note', g.note ? g.note : '—']);
-    rows.forEach(([label,value])=>{
+    rows.forEach(([label,value,kind])=>{
       const row = document.createElement('div'); row.className='txdetail-field';
-      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value">${escapeHtml(String(value))}</span>`;
+      const valueColor = (isBlackGD && kind==='paid') ? ' style="color:var(--credit);"' : '';
+      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value"${valueColor}>${escapeHtml(String(value))}</span>`;
       fields.appendChild(row);
     });
     renderGoalDetailContributions(g);
@@ -3255,11 +3301,14 @@
     ];
     if(d.type==='emi'){ rows.push(['EMI Amount', fmt(d.emiAmount)]); rows.push(['Tenure', d.tenure+' months']); }
     rows.push(['Total', fmt(d.total)]);
-    rows.push([isReceivable ? 'Received' : 'Paid', fmt(paid)]);
+    // 'paid' flag marks the settled figure for the Black-only green treatment below - Total stays
+    // neutral (it's a committed/total figure, not a settled one) and every other theme is untouched.
+    rows.push([isReceivable ? 'Received' : 'Paid', fmt(paid), 'paid']);
     rows.push(['Note', d.note ? d.note : '—']);
-    rows.forEach(([label,value])=>{
+    rows.forEach(([label,value,kind])=>{
       const row = document.createElement('div'); row.className='txdetail-field';
-      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value">${escapeHtml(String(value))}</span>`;
+      const valueColor = (isBlackDD && kind==='paid') ? ' style="color:var(--credit);"' : '';
+      row.innerHTML = `<span class="txdetail-field-label">${escapeHtml(label)}</span><span class="txdetail-field-value"${valueColor}>${escapeHtml(String(value))}</span>`;
       fields.appendChild(row);
     });
     renderDebtDetailPayments(d, isReceivable);
