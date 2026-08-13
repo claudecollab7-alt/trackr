@@ -837,19 +837,10 @@
      class, because .btn-black/.btn-debit are shared with unrelated buttons (Save Entry, Save
      Debt, the debt-kind toggle...) that must stay on the ordinary --binder/--debit chrome tokens. */
   body[data-theme="black"] #qa-money-in{ background:var(--credit); }
-  /* Issue 4 (round 3): .quick-actions .btn-pill{flex:1} stretches both buttons to fill whatever
-     width the card happens to be - fine on a narrow mobile card, but on a much wider desktop
-     card it means the now-solid green/red pair occupies a lot more visual area than on mobile,
-     particularly the red. Capped to a fixed width on desktop only (mobile untouched - this media
-     query only applies >=781px) and left un-grown, which also makes flexbox's own default
-     justify-content:flex-start left-align the pair automatically, without a separate rule. Two
-     buttons only, targeted by id - no other layout on the page is touched. */
-  @media (min-width:781px){
-    body[data-theme="black"] #qa-money-in,
-    body[data-theme="black"] #qa-money-out{
-      flex:0 0 auto; width:180px;
-    }
-  }
+  /* Round 3 briefly capped these to 180px on desktop so the solid green/red pair wouldn't occupy
+     as much area as the wide desktop card gave them - round 4 reverses that: the cap left dead
+     space and unbalanced the Net Balance card, so both buttons fill the card width as an equal
+     pair on every breakpoint again, exactly as they did before round 3 (colours unchanged). */
   body[data-theme="black"] .spine{ background:rgba(18,18,18,.9); border-right-color:var(--line); }
   body[data-theme="black"] .bottom-nav{ background:rgba(18,18,18,.9); border-top-color:var(--line); }
   body[data-theme="black"] .topbar{ background:rgba(0,0,0,.82); border-bottom-color:var(--line); }
@@ -905,8 +896,26 @@
   body[data-theme="black"] #receivable-summary-amount{
     color:var(--debit) !important;
   }
+  /* Issue 4 (round 4) CORRECTION: round 3 placed Savings Goals in the white/neutral group - wrong,
+     this tile shows the amount already saved, which is exactly as "settled" as Total Paid/Total
+     Received elsewhere, so it takes the same credit green treatment instead. */
   body[data-theme="black"] #goals-summary-amount{
-    color:var(--ink) !important;
+    color:var(--credit) !important;
+  }
+  /* Issue 4 (round 4): the Savings Goals page's own overview card had the same saved/remaining
+     figures and progress fill all riding on --goal (a neutral lavender/grey accent with no
+     settled/pending meaning), rather than the green/red pair used everywhere else. #goalsov-
+     total-saved and #goalsov-overall-fill carry inline style="color/background:var(--goal)" in
+     index.html (shared markup), hence !important; #goalsov-total-remaining has no inline colour to
+     begin with, so plain specificity is enough for it. */
+  body[data-theme="black"] #goalsov-total-saved{
+    color:var(--credit) !important;
+  }
+  body[data-theme="black"] #goalsov-total-remaining{
+    color:var(--debit);
+  }
+  body[data-theme="black"] #goalsov-overall-fill{
+    background:var(--credit) !important;
   }
   /* Net Balance/Net Worth/Net (Reports) already have a pre-existing, cross-theme .negative rule
      (.balance-amount.negative / .mono-num.negative / .summary-box .mono-num.negative all resolve
@@ -918,6 +927,25 @@
   body[data-theme="black"] #networth-amount.negative,
   body[data-theme="black"] #report-net.negative{
     color:var(--ink);
+  }
+  /* Issue 1 (round 4). History row layout is otherwise a do-not-touch area (it has broken before -
+     see the comments around .history-row in the base stylesheet), so this is deliberately the
+     narrowest possible fix: the shared .activity-sub-note rule (used by every view's activity row,
+     not just History's) is flex:1 1 90px, which grows to fill all available space in its flex
+     container. On a narrow mobile card that's invisible, but History's desktop row is a
+     full-width list, so the note grows across nearly the whole row width and drags the "·"
+     separator plus the full date after it far over toward the amount column - a dangling
+     separator with nothing visibly next to it, and a date stranded away from the row it
+     describes. Un-growing the note (flex:0 1 auto - still free to shrink if it ever needs to)
+     keeps note + "·" + date sitting together right after the type label, matching how mobile's
+     own two-line stacked layout already keeps its note and date close together. Scoped to
+     .history-row specifically (Home/Add Entry/category detail/global search all share
+     .activity-sub-note too and are untouched) and to the existing >=781px breakpoint only -
+     .history-row's mobile CSS below is not touched at all. Also scoped to Black only, consistent
+     with every other round's convention of never touching Light/Dark/Crimson even where the
+     underlying layout bug is arguably universal. */
+  @media (min-width:781px){
+    body[data-theme="black"] .history-row .activity-sub-note{ flex:0 1 auto; }
   }
   body[data-theme="black"] .ledger-form input, body[data-theme="black"] .ledger-form select,
   body[data-theme="black"] .filter-row select, body[data-theme="black"] .search-input,
