@@ -140,28 +140,46 @@
   // Black theme, round 3: round 2's HSL ramp looked like 24 distinct hues on paper but wasn't -
   // HSL is not perceptually uniform, so e.g. hues 15/25/45 (all "orange" to the eye at this
   // saturation/lightness) and 210/255/280 (all "blue-purple") rendered as 2-3 visually repeated
-  // colour families, not 10 independent ones. With 18 real categories hashed across a
-  // functionally-6-wide space, real collisions showed up on the Categories page (Freelance/
-  // Rental Income both pink, Salary/Business/Investments/Food & Groceries all green, etc).
+  // colour families, not 10 independent ones. Rebuilt in OKLCH instead - equal L actually looks
+  // equally light across hues.
   //
-  // Rebuilt in OKLCH instead - equal L actually looks equally light across hues, which is what
-  // makes 12 evenly-spaced hues (30 degrees apart) read as 12 genuinely different colours rather
-  // than clustering. Two lightness tiers x 12 hues = 24 slots total.
-  //   Tier 1: oklch(0.72 0.13 H) - the brief's own value, unchanged.
-  //   Tier 2: oklch(0.65 0.13 H) - the brief specified 0.60, but sampling every hue at 0.60
-  //     against the fixed near-black avatar letter (#0B0B0B) found a worst-case contrast of only
-  //     4.65:1 - technically over the 4.5:1 floor, but by a margin thin enough that ordinary
-  //     browser-to-browser gamut-mapping differences could plausibly tip a real device under it.
-  //     Raised to 0.65 for a worst-case of 5.68:1, comfortably clear. See the contrast sampling
-  //     script referenced in the PR for both numbers.
-  // Verified real canvas fillStyle AND real SVG fill-attribute both accept raw oklch() strings
-  // in this sandbox's Chromium (a pixel read back after assignment matched this conversion
-  // function exactly) - but Chart.js itself is unreachable here (external CDN), and the actual
-  // target devices' engine versions aren't guaranteed, so colours are still converted to sRGB hex
-  // in JS at generation time below rather than trusting oklch() strings to reach every renderer.
-  const CAT_OKLCH_HUES = [0,30,60,90,120,150,180,210,240,270,300,330];
-  const CAT_OKLCH_TIERS = [0.72, 0.65];
+  // Round 5 CORRECTION (twice over). First: rounds 3-4 both ordered the 24 slots as TWO BLOCKS -
+  // 12 hues at L=0.72 (slots 0-11), then the same 12 hues again at L=0.65 (slots 12-23). Round 4's
+  // even-distribution formula (i*floor(24/N)) used an even stride for every N<=12, which lands
+  // exactly on both copies of the same hue (e.g. slot 3 and slot 15 are both hue 90, just a
+  // different tier) - confirmed live on a real device: Business/Other Income, Freelance/Rental
+  // Income, and Gift-Bonus/Salary each shared a hue, distinguished only by lightness. Fixed by
+  // re-ordering the ramp itself so hue is the ONLY thing that changes between adjacent slots:
+  // slot k has hue = k*15 degrees (24 slots x 15 degrees = the full circle, each hue appearing
+  // exactly once), and lightness alternates per slot (even k = 0.72, odd k = 0.65) rather than
+  // being split into two contiguous halves. There is no longer any pair of slots that share a hue.
+  //
+  // Second: rounds 3-4 also ran credit and debit categories through completely SEPARATE
+  // assignment passes, each free to start back at slot 0 - a colour clash between "Rent" (expense)
+  // and "Rental Income" (income) was reasoned to never matter because they don't share a
+  // legend... but they DO share the History screen, which mixes credit and debit rows in one
+  // list. Confirmed live: Healthcare/Gift-Bonus/Salary all the same teal, Food & Groceries/
+  // Shopping both olive, Other Income/Other Expense both pink. Fixed by combining every credit
+  // and debit category into ONE alphabetically sorted pool (still alphabetical, never display/
+  // creation order, so the planned drag-to-reorder feature still can't change anyone's colour) and
+  // assigning slot = round(i * 24/N) mod 24 against that single combined list - cross-list
+  // collisions are now structurally impossible, not just unlikely.
+  //
+  //   Even k (0,2,4...22): oklch(0.72 0.13 H) - the brief's own tier-1 value, unchanged.
+  //   Odd k (1,3,5...23): oklch(0.65 0.13 H) - the brief specified 0.60 (round 3), sampling found
+  //     a worst-case contrast of only 4.65:1 against the fixed near-black avatar letter (#0B0B0B),
+  //     too thin a margin - raised to 0.65 for 5.68:1 (round 3's tier-only ramp) / 5.70:1 (round
+  //     4's redistribution) / see the PR for this round's recomputed number against the new
+  //     hue-major ramp.
+  // Verified real canvas fillStyle AND real SVG fill-attribute both accept raw oklch() strings in
+  // sandbox Chromium (a pixel read back after assignment matched this conversion function exactly)
+  // AND, as of round 5, a real donut chart rendering in colour on a real Android device's Chrome -
+  // still converted to sRGB hex in JS at generation time below rather than trusting oklch()
+  // strings to reach every renderer (Chart.js's own internal colour parser, used for hover/opacity
+  // variants rather than plain fills, remains untested - see the PR).
   const CAT_OKLCH_CHROMA = 0.13;
+  const CAT_OKLCH_TIER_HIGH = 0.72;
+  const CAT_OKLCH_TIER_LOW = 0.65;
   // Standard OKLCH -> OKLab -> linear sRGB -> sRGB conversion (Björn Ottosson's reference
   // matrices, the same ones the CSS Color 4 spec and every browser's native oklch() parser use -
   // confirmed to match this browser's own conversion pixel-for-pixel, see above).
@@ -179,54 +197,49 @@
     const toHex = (c)=> Math.round(Math.max(0,Math.min(1,gam(c)))*255).toString(16).padStart(2,'0');
     return '#'+toHex(r)+toHex(g)+toHex(bl);
   }
-  // 24 slots, computed once at load rather than per-render: index = tier*12 + hueIndex.
-  const CAT_OKLCH_SLOTS = CAT_OKLCH_TIERS.flatMap(L => CAT_OKLCH_HUES.map(h => oklchToHex(L, CAT_OKLCH_CHROMA, h)));
+  // 24 slots, hue-major: slot k = hue k*15deg, lightness alternates by parity. Computed once at
+  // load rather than per-render.
+  const CAT_OKLCH_SLOTS = Array.from({ length: 24 }, (_, k) =>
+    oklchToHex(k % 2 === 0 ? CAT_OKLCH_TIER_HIGH : CAT_OKLCH_TIER_LOW, CAT_OKLCH_CHROMA, k * 15)
+  );
   function hashString(name){
     let hash = 0; const s = name || '?';
     for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
     return Math.abs(hash);
   }
-  // Round 4 CORRECTION: hash-plus-probe (round 3) only guaranteed no two names in a list shared
-  // the exact same slot - it never guaranteed those slots were far apart. Two names could easily
-  // hash to neighbouring slots (adjacent indices are only 30 degrees of hue apart within a tier),
-  // which is exactly what was reported: Business/Gift/Bonus/Utilities & Bills/Education/Insurance/
-  // Other Expense all landing in slots close enough together to read as "green" at avatar size,
-  // even though no two of them were technically identical.
+  // Assigns from a SINGLE shared pool (see the round 5 comment above for why this replaced two
+  // separate per-list passes): sort names alphabetically, then assign slot = round(i*24/N) mod 24.
+  // Spreads N names across the 24-slot ring at the most even spacing that ring can offer, and
+  // since every slot is now a genuinely distinct hue (unlike rounds 3-4's two-block ramp), no
+  // stride can ever land two names on the same hue. Recomputed on every call rather than cached,
+  // since `categories` is mutable app state - trivial cost at these list sizes.
   //
-  // Replaced with EVEN distribution: sort names alphabetically (still never display/creation
-  // order - a planned drag-to-reorder feature must never change anyone's colour), then walk that
-  // fixed order assigning slot i * floor(24/N), where N is this list's length. This spreads N
-  // categories at the maximum hue distance the 24-slot set can offer, rather than at whatever
-  // distance a hash happened to produce. Recomputed on every call rather than cached, since
-  // `categories` is mutable app state - trivial cost at these list sizes.
-  //
-  // TRADE-OFF, accepted deliberately (per the brief): adding or removing a category changes N,
-  // which reassigns colours across the ENTIRE list, not just the changed entry - unlike the old
-  // hash-based scheme, where only a genuine collision ever moved a colour. Colour here is pure
-  // decoration with no data meaning, so this is fine; alphabetical order still means the planned
+  // TRADE-OFF, accepted deliberately (per the brief, same as round 4): adding or removing ANY
+  // category - credit or debit - changes N for the whole shared pool, which can reassign colours
+  // across BOTH lists, not just the one the category was added to. Colour here is pure decoration
+  // with no data meaning, so this is fine; alphabetical order still means the planned
   // drag-to-reorder feature can never change anyone's colour by itself.
   function assignCategorySlots(names){
     const sorted = [...names].sort((a,b)=> a.localeCompare(b));
     const total = CAT_OKLCH_SLOTS.length;
     const n = sorted.length;
-    const step = n>0 ? Math.floor(total/n) : 0;
     const assignment = new Map();
-    sorted.forEach((name,i)=>{ assignment.set(name, (i*step) % total); });
+    sorted.forEach((name,i)=>{ assignment.set(name, n>0 ? Math.round(i*total/n) % total : 0); });
     return assignment;
   }
-  // Income and expense categories get their OWN collision-free pass, run separately per (c) - a
-  // colour clash between "Rent" (expense) and "Rental Income" (income) was never the complaint
-  // (they never appear in the same list/legend together), and running one shared pass across both
-  // would mean adding a category to one list could shift colours in the other for no reason.
-  // Names that aren't in EITHER current list (an account name, or a category since removed from
-  // categories.income/.expense but still referenced by an old transaction) have no list to
-  // guarantee uniqueness against, so they fall back to a plain per-name hash pick - same shape as
-  // before, just against the new 24-slot OKLCH set instead of the old flawed HSL ramp.
+  // Combines categories.income and categories.expense into ONE pool before assigning (see round 5
+  // comment above - the History screen mixes credit and debit rows, so they must be assigned
+  // together to make cross-list collisions structurally impossible, not just per-list collisions).
+  // A Set dedupes the rare case of the same name existing in both lists, so it only ever consumes
+  // one slot rather than being assigned twice. Names in neither list (an account name, or a
+  // category since removed from categories.income/.expense but still referenced by an old
+  // transaction) have no pool to guarantee uniqueness against, so they fall back to a plain
+  // per-name hash pick against the same 24-slot set.
   function categoryColorBlack(name){
-    const inIncome = categories && Array.isArray(categories.income) && categories.income.includes(name);
-    const inExpense = categories && Array.isArray(categories.expense) && categories.expense.includes(name);
-    if(inIncome) return CAT_OKLCH_SLOTS[assignCategorySlots(categories.income).get(name)];
-    if(inExpense) return CAT_OKLCH_SLOTS[assignCategorySlots(categories.expense).get(name)];
+    const incomeList = (categories && Array.isArray(categories.income)) ? categories.income : [];
+    const expenseList = (categories && Array.isArray(categories.expense)) ? categories.expense : [];
+    const combined = [...new Set([...incomeList, ...expenseList])];
+    if(combined.includes(name)) return CAT_OKLCH_SLOTS[assignCategorySlots(combined).get(name)];
     return CAT_OKLCH_SLOTS[hashString(name) % CAT_OKLCH_SLOTS.length];
   }
   // Income avatars used to bypass categoryColor() entirely (a hardcoded green in Light/Dark/
@@ -5240,8 +5253,24 @@
         settings.theme = newTheme;
         await saveSettings();
         applyTheme(newTheme);
-        renderAllRings();
-        renderTrendChart();
+        // Issue 3 (round 5) root cause: applyTheme() only flips the data-theme attribute, which is
+        // enough on its own for anything driven by CSS custom properties, but every Black-only
+        // colour this project has added since round 3 (category avatars, budget bars, debt/goal
+        // paid-vs-pending text, progress fills...) is computed in JS and baked into a rendered
+        // element's innerHTML/inline style at the moment it was last drawn - it does not react to
+        // the data-theme attribute changing underneath it. Before this fix, only renderAllRings()
+        // and renderTrendChart() (both canvas-drawn, so they have to be redrawn explicitly anyway)
+        // re-ran here - every other already-rendered card (Active Debts/Receivables text being the
+        // reported case, but really any themed JS-rendered element) kept whatever colour markup it
+        // was last drawn with under the PREVIOUS theme until something else happened to trigger a
+        // re-render. A device that opens the app with data already loaded and switches theme via
+        // Settings - not the fresh-login-with-theme-preset flow every automated test in this
+        // project has used so far - hits this every time. refreshAll() re-runs every render
+        // function in the app from current in-memory state (no network/data changes), which is the
+        // same sweep already used after login and after every data mutation, so this is just
+        // extending that same pattern to cover a theme change too. Superset of the two calls it
+        // replaces (both are already part of refreshAll()).
+        refreshAll();
       });
     });
 
