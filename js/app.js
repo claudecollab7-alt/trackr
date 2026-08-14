@@ -90,6 +90,14 @@
   // this is never reset on logout at all now, it just naturally starts unset for any user id that
   // has never reconciled on this device before.
   let accountsReconciledOnce = {};
+  // Same shape and reasoning as accountsReconciledOnce directly above, for the categories table -
+  // see reconcileCategoriesOnFirstContact for the merge itself. Scoped by user id, never reset on
+  // logout (hardClearAllLocalDataNoSync reseeds local `categories` back to defaultCategories() on
+  // every logout regardless - see that function's own comment - but that's harmless now: the next
+  // login for the SAME account skips straight to "already reconciled, pull the real list from the
+  // cloud" instead of re-running the merge against a set of local defaults that were never this
+  // account's actual data to begin with).
+  let categoriesReconciledOnce = {};
   // Set by dedupeAccountsById() (called from loadData(), before a user is ever attached) when it
   // finds and repairs an existing id collision in local storage - consumed once by
   // startAppForUserImpl right after attachUserAndSync, to push the corrected accounts (and any
@@ -511,6 +519,8 @@
     // exactly once more - now safe by construction (see that function's id-first rewrite), so this
     // one-time extra pass is a harmless, self-correcting side effect of the upgrade, not a bug.
     if(!accountsReconciledOnce || typeof accountsReconciledOnce !== 'object' || Array.isArray(accountsReconciledOnce)) accountsReconciledOnce = {};
+    try{ const cro = await window.storage.get('categoriesReconciledOnce'); categoriesReconciledOnce = cro ? JSON.parse(cro.value) : {}; } catch(e){ categoriesReconciledOnce = {}; }
+    if(!categoriesReconciledOnce || typeof categoriesReconciledOnce !== 'object' || Array.isArray(categoriesReconciledOnce)) categoriesReconciledOnce = {};
     try{ const btc = await window.storage.get('budgetsTruncationCheckedOnce'); budgetsTruncationCheckedOnce = btc ? JSON.parse(btc.value) : {}; } catch(e){ budgetsTruncationCheckedOnce = {}; }
     if(!budgetsTruncationCheckedOnce || typeof budgetsTruncationCheckedOnce !== 'object' || Array.isArray(budgetsTruncationCheckedOnce)) budgetsTruncationCheckedOnce = {};
     // Defensive shape checks — guards against corrupted/legacy storage causing crashes downstream
@@ -631,7 +641,10 @@
     } catch(e){ console.error(e); alert('Could not save your entry. Please check your connection and try again.'); }
     if(currentUser) window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
   }
-  async function saveCategories(){ try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); } }
+  async function saveCategories(){
+    try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); }
+    if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories);
+  }
   async function saveSettings(){ try{ await window.storage.set('settings', JSON.stringify(settings)); } catch(e){ console.error(e); } }
   async function saveRecurring(){ try{ await window.storage.set('recurring', JSON.stringify(recurring)); } catch(e){ console.error(e); } }
   async function saveReminders(){ try{ await window.storage.set('reminders', JSON.stringify(reminders)); } catch(e){ console.error(e); } }
@@ -3114,6 +3127,15 @@
           await window.trackrSync.syncUpsertTransactions(currentUser.id, transactions);
           window.trackrSync.syncUpsertGoals(currentUser.id, goals);
           window.trackrSync.syncBudgets(currentUser.id, budgets);
+          // This screen's own confirm() text (above) promises categories are replaced "in your
+          // account" too, same as every other data type here - deleteAllCloudDataForUser above
+          // already wiped the account's old cloud categories, so this uploads the restored set
+          // as the account's new one. categoriesReconciledOnce is left as-is (untouched, same as
+          // every other flag in this function) - it's already true for a signed-in account
+          // restoring a backup, and the cloud now genuinely holds this exact restored list, so a
+          // later cloud pull correctly takes the "already reconciled, replace with cloud" branch
+          // rather than re-running a merge against data that no longer needs merging.
+          window.trackrSync.syncUpsertCategories(currentUser.id, categories);
         }
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
@@ -3456,6 +3478,10 @@
   function deleteCategory(type, name){
     if(!confirm(`Remove "${name}" from ${type} categories? Past entries will keep this category label.`)) return;
     categories[type] = categories[type].filter(c=>c!==name); saveCategories();
+    // An upsert batch (saveCategories, above) can never remove a row just by omitting it - this
+    // explicit delete is what actually removes it server-side, same shape as deleteAccount's own
+    // saveAccounts()-then-syncDeleteAccount() pair.
+    if(currentUser) window.trackrSync.syncDeleteCategory(currentUser.id, name, type==='income' ? 'credit' : 'debit');
     if(type==='expense' && budgets[name]!==undefined){ delete budgets[name]; saveBudgets(); }
     populateEntryCategorySelect(document.getElementById('entry-type').value);
     populateFilterCategorySelect(document.getElementById('filter-type').value);
@@ -3612,6 +3638,44 @@
     window.trackrSync.syncUpsertAccounts(userId, accounts);
     accountsReconciledOnce[userId] = true;
     try{ await window.storage.set('accountsReconciledOnce', JSON.stringify(accountsReconciledOnce)); }catch(e){}
+  }
+  // One-time-per-account reconciliation for categories, same shape as
+  // reconcileAccountsOnFirstContact directly above and for the same reason: categories are newer
+  // than the app's other synced tables (in fact newer than accounts too), so any account logging
+  // in for the first time after this table exists has local categories that were never pushed up.
+  //
+  // Merge rule (Issue 1c): UNION by (name, type), case-insensitive. A name already present in the
+  // cloud (case-insensitively) is not duplicated - the cloud's own casing wins for that entry. A
+  // local-only name (no case-insensitive match in the cloud) is genuinely new and gets added.
+  // Nothing is ever deleted by this merge, on either side. There is no id-first pass the way
+  // accounts has, because a category has no id of its own on the client at all - name+type (via
+  // the addCategory guard's own existing case-insensitive-duplicate check) is already this app's
+  // only notion of category identity, on every device, before this table ever existed.
+  //
+  // Also doubles as the "seed defaults for a genuinely fresh account" path (Issue 1d), with no
+  // special-casing needed: `categories` in memory is ALWAYS populated by loadData() - with this
+  // account's real local categories if it has ever set any, or with defaultCategories() if it
+  // hasn't (a device that's never touched categories is indistinguishable, at this point, from one
+  // that has only ever seen the defaults - which is exactly correct, since both cases should
+  // upload defaults). When the cloud is genuinely empty (a brand-new account), the merge below
+  // reduces to "every local entry is genuinely new to the cloud", so whatever's currently in
+  // `categories` - real customizations or plain defaults - becomes the account's first-ever
+  // server-side category list, uploaded once, right here. The defaults seeder never runs as a
+  // separate step keyed off "local storage is empty", the exact shape of the original bug -
+  // it runs (indirectly, as this merge's natural outcome) only when the ACCOUNT genuinely has
+  // nothing server-side yet.
+  async function reconcileCategoriesOnFirstContact(userId, cloudCategories){
+    const cloudIncomeLower = new Set(cloudCategories.income.map(n=> n.trim().toLowerCase()));
+    const cloudExpenseLower = new Set(cloudCategories.expense.map(n=> n.trim().toLowerCase()));
+    const mergedIncome = [...cloudCategories.income];
+    const mergedExpense = [...cloudCategories.expense];
+    categories.income.forEach(name=>{ if(!cloudIncomeLower.has(name.trim().toLowerCase())) mergedIncome.push(name); });
+    categories.expense.forEach(name=>{ if(!cloudExpenseLower.has(name.trim().toLowerCase())) mergedExpense.push(name); });
+    categories = { income: mergedIncome, expense: mergedExpense };
+    try{ await window.storage.set('categories', JSON.stringify(categories)); }catch(e){ console.error(e); }
+    window.trackrSync.syncUpsertCategories(userId, categories);
+    categoriesReconciledOnce[userId] = true;
+    try{ await window.storage.set('categoriesReconciledOnce', JSON.stringify(categoriesReconciledOnce)); }catch(e){}
   }
 
   function renderMoreSubState(name){
@@ -4667,12 +4731,17 @@
       const bucket = duplicateDismissals[duplicateDismissalScopeKey()];
       return !!(bucket && bucket[match.group_key]);
     }
+    if(table==='categories'){
+      const list = match.type==='credit' ? categories.income : categories.expense;
+      return list.includes(match.name);
+    }
     return false;
   }
   async function findUnsyncableRecords(){
     if(currentUser){
       await retryPermanentlyRejectedOnce();
       await retryPermanentlyRejectedDismissalsOnce();
+      await retryPermanentlyRejectedCategoriesOnce();
       if(window.trackrSync.retryPermanentlyRejectedDeletesOnce) await window.trackrSync.retryPermanentlyRejectedDeletesOnce(localRecordExistsForDelete);
     }
     const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
@@ -4766,6 +4835,42 @@
       }catch(e){}
     })();
     try{ await retryPermanentlyRejectedDismissalsInFlight; } finally { retryPermanentlyRejectedDismissalsInFlight = null; }
+  }
+  // Companion to retryPermanentlyRejectedDismissalsOnce above, for categories - same reason (no
+  // per-record id to fit REJECTABLE_TABLES' id-keyed shape, and the exact same "table didn't exist
+  // yet" failure mode is anticipated here too: the first category upsert attempted before this
+  // round's migration is applied will get a resolved-but-rejected response (PGRST205, "relation
+  // does not exist"), same as dismissed_duplicates' own confirmed production incident, and without
+  // this would stay permanently stranded even after the migration is applied and the table becomes
+  // reachable). entry.id here is the composite "name|type" key syncedRowKeyOf('categories')
+  // produces (js/supabase.js) - split back apart to look the category up locally.
+  let retryPermanentlyRejectedCategoriesInFlight = null;
+  async function retryPermanentlyRejectedCategoriesOnce(){
+    if(!currentUser || !navigator.onLine) return;
+    if(retryPermanentlyRejectedCategoriesInFlight) return retryPermanentlyRejectedCategoriesInFlight;
+    retryPermanentlyRejectedCategoriesInFlight = (async ()=>{
+      try{
+        const store = (window.trackrSync.getPermanentlyRejectedRecords ? await window.trackrSync.getPermanentlyRejectedRecords() : {}) || {};
+        const entries = Array.isArray(store['categories']) ? store['categories'] : [];
+        if(!entries.length) return;
+        for(const entry of entries){
+          const sepIdx = entry.id.lastIndexOf('|');
+          const name = entry.id.slice(0, sepIdx), type = entry.id.slice(sepIdx+1);
+          const list = type==='credit' ? categories.income : categories.expense;
+          if(!list.includes(name)){
+            // No longer present locally (deleted, or renamed, since) - nothing left to retry.
+            if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
+            continue;
+          }
+          const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type }, currentUser.id);
+          if(result && result.ok){
+            diagLogPage('page:permanently-rejected-recovered', { table:'categories', id: entry.id });
+            if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
+          }
+        }
+      }catch(e){}
+    })();
+    try{ await retryPermanentlyRejectedCategoriesInFlight; } finally { retryPermanentlyRejectedCategoriesInFlight = null; }
   }
   // Local-only, deliberately - reverted from a previous round's attempt to also issue a remote
   // delete here. That change assumed a record only ever reaches this list for one of two
@@ -5615,6 +5720,28 @@
         // toast below, which is reserved for a genuine failure of the four tables that already
         // work today. Local accounts stay exactly as they are.
         diagLogPage('page:accounts-pull-failed', cloud.accountsError);
+      }
+      if(cloud.categories!==null){
+        // Same shape as accounts directly above, for the same reason - categories is newer still.
+        if(!categoriesReconciledOnce[currentUser.id]){
+          // See reconcileCategoriesOnFirstContact's own comment. Persists and pushes internally,
+          // so deliberately NOT added to toPersist below (would just redundantly re-write the same
+          // key with the same value).
+          await reconcileCategoriesOnFirstContact(currentUser.id, cloud.categories);
+        } else {
+          // Falls back to defaults rather than leaving the Add Entry category picker with
+          // literally nothing selectable - shouldn't normally happen once reconciled, but a
+          // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
+          categories = (cloud.categories.income.length || cloud.categories.expense.length) ? cloud.categories : defaultCategories();
+          toPersist.push(['categories', categories]);
+        }
+      }
+      else if(cloud.categoriesError){
+        // Expected, anticipated state until the categories table + RLS exist in the real Supabase
+        // project (see the migration SQL in this round's PR description) - logged for
+        // traceability, deliberately not surfaced as the generic "couldn't reach the cloud" toast
+        // below. Local categories stay exactly as they are.
+        diagLogPage('page:categories-pull-failed', cloud.categoriesError);
       }
       if(cloud.dismissedDuplicates!==null){
         // A pure UNION with whatever's already local, never an authoritative replace like the

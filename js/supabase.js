@@ -118,6 +118,28 @@
   function toDismissedDuplicateRow(userId, groupKey){
     return { user_id: userId, group_key: groupKey };
   }
+  // Categories table, round "categories sync" - see the migration SQL in this round's PR
+  // description. id is omitted from every payload, same reasoning as accounts' created_at above:
+  // the column has its own `default gen_random_uuid()`, so leaving it out lets a fresh insert get
+  // a real id while a later upsert of the SAME (user_id, name, type) leaves the existing row's id
+  // untouched (Supabase's upsert only SETs the columns actually present in the payload). position
+  // and color are deliberately never sent this round either - both columns exist for a future
+  // round (drag ordering / a colour picker) and must stay genuinely unused until then, not quietly
+  // populated with a value nothing yet reads. The local model has no id of its own for a category
+  // (categories.income/.expense are still plain name-string arrays, unchanged) - (name, type) is
+  // the only identity a category has on either side of the sync, matching the merge rule.
+  function toCategoryRow(name, type, userId){
+    return { user_id: userId, name, type };
+  }
+  function toCategoryRows(categoriesObj, userId){
+    const rows = [];
+    (categoriesObj.income||[]).forEach(name=> rows.push(toCategoryRow(name, 'credit', userId)));
+    (categoriesObj.expense||[]).forEach(name=> rows.push(toCategoryRow(name, 'debit', userId)));
+    return rows;
+  }
+  function fromCategoryRow(r){
+    return { name: r.name, type: r.type };
+  }
 
   /* ---------- Offline pending-write queue ----------
      Every background sync call goes through here. On failure (offline, or any
@@ -164,6 +186,10 @@
   function syncedRowKeyOf(table){
     if(table==='dismissed_duplicates') return r=>r.group_key;
     if(table==='budgets') return r=>r.category;
+    // Categories has no client-known id either (see toCategoryRow's own comment) - (name, type)
+    // is its whole identity, so the dedupe/error-logging key below is a composite of both, same
+    // shape as budgets' single-field key just for two fields instead of one.
+    if(table==='categories') return r=>r.name+'|'+r.type;
     return r=>r.id;
   }
   // Every error object this file captures eventually lands in one of two places: the IndexedDB
@@ -479,7 +505,7 @@
       // evaluated as an update of a row they don't own rather than an insert. The table's PK is
       // now composite (user_id, id) (see the accompanying SQL migration), the same shape budgets
       // already used for exactly this reason - so the conflict target here must match.
-      const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : op.table==='dismissed_duplicates' ? 'user_id,group_key' : 'id';
+      const conflictCol = op.table==='budgets' ? 'user_id,category' : op.table==='accounts' ? 'user_id,id' : op.table==='dismissed_duplicates' ? 'user_id,group_key' : op.table==='categories' ? 'user_id,name,type' : 'id';
       const rows = dedupeRowsById(op.table, op.rows);
       let { error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol });
       if(error && error.code===JWT_CLOCK_SKEW_CODE){
@@ -556,6 +582,7 @@
     else if(table==='goals'){ row = toGoalRow(localRow, userId); conflictCol = 'id'; recordKey = localRow.id; }
     else if(table==='debts'){ row = toDebtRow(localRow, userId, listName==='receivables'); conflictCol = 'id'; recordKey = localRow.id; }
     else if(table==='dismissed_duplicates'){ row = toDismissedDuplicateRow(userId, localRow); conflictCol = 'user_id,group_key'; recordKey = localRow; }
+    else if(table==='categories'){ row = toCategoryRow(localRow.name, localRow.type, userId); conflictCol = 'user_id,name,type'; recordKey = localRow.name+'|'+localRow.type; }
     else return { ok:false };
     try{
       const { error } = await supabaseClient.from(table).upsert([row], { onConflict: conflictCol });
@@ -651,6 +678,14 @@
   // future, genuinely different group that happens to reuse the same group_key shape.
   function syncUpsertDismissedDuplicate(userId, groupKey){ return syncOrQueue({ kind:'upsert', table:'dismissed_duplicates', rows: [toDismissedDuplicateRow(userId, groupKey)] }); }
   function syncDeleteDismissedDuplicate(userId, groupKey){ return syncOrQueue({ kind:'delete', table:'dismissed_duplicates', match:{ user_id:userId, group_key:groupKey } }); }
+  // Resends the WHOLE current local category list on every save (add or remove), same shape as
+  // every other table's saveX() -> syncUpsertX(currentUser.id, wholeLocalArray) pattern in
+  // app.js - upsert is idempotent, so re-sending unchanged rows costs a little bandwidth but keeps
+  // this identical to how transactions/debts/goals/accounts already work, rather than a bespoke
+  // single-row path just for this table. A removal still needs its own explicit delete (an upsert
+  // batch can never remove a row simply by omitting it), matching accounts' add/delete pair.
+  function syncUpsertCategories(userId, categoriesObj){ return syncOrQueue({ kind:'upsert', table:'categories', rows: toCategoryRows(categoriesObj, userId) }); }
+  function syncDeleteCategory(userId, name, type){ return syncOrQueue({ kind:'delete', table:'categories', match:{ user_id:userId, name, type } }); }
   async function syncBudgets(userId, budgetsObj){
     // Budgets have no local id/delete-tracking of their own (it's a plain
     // {category: limit} map) — reconcile against whatever's on the server
@@ -686,7 +721,7 @@
     throw error;
   }
   async function pullCloudData(userId){
-    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null, dismissedDuplicates:null, dismissedDuplicatesError:null };
+    const result = { transactions:null, debts:null, receivables:null, goals:null, budgets:null, accounts:null, error:null, accountsError:null, dismissedDuplicates:null, dismissedDuplicatesError:null, categories:null, categoriesError:null };
     // Each table tagged with its own name so a thrown error can be traced back to which one
     // actually failed - Promise.all itself only ever surfaces the FIRST rejection it sees, with
     // no indication of which of the 4 concurrent requests that was.
@@ -708,6 +743,20 @@
     const dismissedDuplicatesPromise = pullTable('dismissed_duplicates', userId)
       .then(rows => { result.dismissedDuplicates = rows.map(r=>r.group_key); })
       .catch(e => { result.dismissedDuplicatesError = { table:'dismissed_duplicates', code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine }; });
+    // Same isolation as accounts/dismissed_duplicates above - categories is the newest table of
+    // all, may not exist yet until the migration in this round's PR description is applied, and
+    // must never be able to poison the four core tables' Promise.all below. Converted to the same
+    // {income:[...], expense:[...]} shape app.js's `categories` variable already uses (mirrors how
+    // budgetRows -> budgetsObj is reshaped below), rather than handing back raw rows.
+    const categoriesPromise = pullTable('categories', userId)
+      .then(rows => {
+        const mapped = rows.map(fromCategoryRow);
+        result.categories = {
+          income: mapped.filter(c=>c.type==='credit').map(c=>c.name),
+          expense: mapped.filter(c=>c.type==='debit').map(c=>c.name)
+        };
+      })
+      .catch(e => { result.categoriesError = { table:'categories', code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine }; });
     try{
       const [txRows, debtRows, goalRows, budgetRows] = await Promise.all([
         tag(pullTable('transactions', userId), 'transactions'), tag(pullTable('debts', userId), 'debts'),
@@ -742,6 +791,7 @@
     }
     await accountsPromise;
     await dismissedDuplicatesPromise;
+    await categoriesPromise;
     return result;
   }
 
@@ -795,7 +845,10 @@
   // retry, leaving the caller wrongly believing the cloud copy is gone.
   async function deleteAllCloudDataForUser(userId){
     const results = {};
-    for(const table of ['transactions','debts','goals','budgets','accounts','dismissed_duplicates']){
+    // Reset Everything's own confirm() text already promises categories are deleted "on this
+    // device and in your account" - 'categories' added here so that promise is actually true now
+    // that the table exists, matching the same list Restore Backup's confirm text uses too.
+    for(const table of ['transactions','debts','goals','budgets','accounts','dismissed_duplicates','categories']){
       try{
         await runOp({ kind:'delete', table, match:{ user_id:userId } });
         results[table] = true;
@@ -816,6 +869,7 @@
     syncUpsertGoals, syncDeleteGoal,
     syncUpsertAccounts, syncDeleteAccount,
     syncUpsertDismissedDuplicate, syncDeleteDismissedDuplicate,
+    syncUpsertCategories, syncDeleteCategory,
     syncBudgets,
     pullCloudData,
     migrateLocalDataToCloudIfNeeded,
