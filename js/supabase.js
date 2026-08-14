@@ -497,6 +497,14 @@
       req.onerror = () => {};
     }catch(e){}
   }
+  // Returns {ok:boolean} - added for reconcileCategoriesOnFirstContact (js/app.js), which needs a
+  // real success/failure signal before it's safe to mark an account "reconciled" (setting that
+  // flag on an upload that was actually queued or permanently rejected would let a later,
+  // already-reconciled login treat an empty/partial cloud as authoritative and fall back to
+  // defaultCategories(), silently discarding real local data - the same shape as the earlier
+  // wallet-reseed bug). Purely additive: every existing caller (saveTransactions, saveAccounts,
+  // saveBudgets, etc.) already calls syncUpsertX()/syncDeleteX() without awaiting or inspecting a
+  // return value, so returning a real object here instead of undefined changes nothing for them.
   async function runOp(op){
     if(op.kind==='upsert'){
       // accounts' id alone used to be the primary key - every user's default wallets
@@ -512,7 +520,7 @@
         await refreshSessionOnce();
         ({ error } = await supabaseClient.from(op.table).upsert(rows, { onConflict: conflictCol }));
       }
-      if(!error) return;
+      if(!error) return { ok:true };
       logSyncError({ ...op, rows }, error);
       // See PERMANENT_FAILURE_CODES' own comment above - ANY error resolved here (not just
       // 42501/23503) means the server responded and rejected this exact payload, so it's isolated
@@ -528,10 +536,13 @@
           if(rowErr) rejectedIds.push(keyOf(row));
         }
         if(rejectedIds.length) await recordPermanentlyRejected(op.table, rejectedIds, error);
-        return;
+        // ok only when EVERY row in the batch ultimately landed - a partial success still leaves
+        // at least one row invisible to a later "replace local with cloud" read, which is exactly
+        // the gap a caller checking this return value is trying to avoid.
+        return { ok: rejectedIds.length===0 };
       }
       await recordPermanentlyRejected(op.table, [keyOf(rows[0])], error);
-      return; // Not thrown - the caller would otherwise queue this for a pointless retry.
+      return { ok:false }; // Not thrown - the caller would otherwise queue this for a pointless retry.
     } else if(op.kind==='delete'){
       const buildDeleteQuery = () => {
         let q = supabaseClient.from(op.table).delete();
@@ -543,7 +554,7 @@
         await refreshSessionOnce();
         ({ error } = await buildDeleteQuery());
       }
-      if(!error) return;
+      if(!error) return { ok:true };
       logSyncError(op, error);
       // A resolved error here is the server's word on this exact delete right now - but unlike
       // an upsert (which usually fails because of something about the ROW itself, e.g. an
@@ -555,13 +566,13 @@
       // instead of the delete being silently lost forever after just one attempt (confirmed in
       // production: a dismissal's auto-clear delete never reached the cloud this way).
       await recordPermanentlyRejectedDelete(op.table, op.match, error);
-      return;
+      return { ok:false };
     }
   }
   async function syncOrQueue(op){
-    if(!navigator.onLine){ await queuePendingWrite(op); return; }
-    try{ await runOp(op); }
-    catch(e){ await queuePendingWrite(op); }
+    if(!navigator.onLine){ await queuePendingWrite(op); return { ok:false, queued:true }; }
+    try{ return await runOp(op); }
+    catch(e){ await queuePendingWrite(op); return { ok:false, queued:true }; }
   }
   // Re-attempts the write for a single record the server previously refused permanently
   // (RLS/FK, see PERMANENT_FAILURE_CODES above) instead of leaving it flagged forever. A 42501

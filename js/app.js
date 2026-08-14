@@ -3672,10 +3672,25 @@
     categories.income.forEach(name=>{ if(!cloudIncomeLower.has(name.trim().toLowerCase())) mergedIncome.push(name); });
     categories.expense.forEach(name=>{ if(!cloudExpenseLower.has(name.trim().toLowerCase())) mergedExpense.push(name); });
     categories = { income: mergedIncome, expense: mergedExpense };
+    // Persisted locally regardless of upload outcome below - this device's own merged view is
+    // correct either way, and re-computing the same merge on a retry is what keeps a failed
+    // upload's eventual retry idempotent (see the ok-gate immediately below).
     try{ await window.storage.set('categories', JSON.stringify(categories)); }catch(e){ console.error(e); }
-    window.trackrSync.syncUpsertCategories(userId, categories);
-    categoriesReconciledOnce[userId] = true;
-    try{ await window.storage.set('categoriesReconciledOnce', JSON.stringify(categoriesReconciledOnce)); }catch(e){}
+    // The flag is only set on a CONFIRMED successful upsert - awaiting and checking .ok, not
+    // fire-and-forget. syncUpsertCategories resolves {ok:true} regardless of whether the upload
+    // was queued (offline) or permanently rejected (migration not yet applied, RLS/GRANT wrong) -
+    // setting the flag on either of those would let a LATER, already-reconciled login treat an
+    // empty/partial cloud as authoritative and fall back to defaultCategories() (js/app.js's other
+    // branch, in attachUserAndSync), silently discarding real local data - the same shape as the
+    // earlier wallet-reseed bug. Leaving the flag unset on failure means the next contact simply
+    // retries this same merge - safe and idempotent, since `categories` in memory/local storage
+    // already reflects the merged result computed above, so a retry re-attempts the same upload
+    // rather than re-deriving a different merge.
+    const result = await window.trackrSync.syncUpsertCategories(userId, categories);
+    if(result && result.ok){
+      categoriesReconciledOnce[userId] = true;
+      try{ await window.storage.set('categoriesReconciledOnce', JSON.stringify(categoriesReconciledOnce)); }catch(e){}
+    }
   }
 
   function renderMoreSubState(name){
