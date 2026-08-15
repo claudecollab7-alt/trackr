@@ -44,6 +44,7 @@
     eyeOff: '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.4 21.4 0 0 1 5.06-6.06M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 8 11 8a21.4 21.4 0 0 1-3.22 4.36M14.12 14.12a3.2 3.2 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    check: '<polyline points="4 12 9 17 20 6"/>',
     grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>'
   };
   function icon(name, size){
@@ -68,14 +69,15 @@
 
   let transactions = [];
   let categories = defaultCategories();
-  // Per-category position (round "category ordering"). Keyed by the same `name|type` composite
-  // the sync layer already uses (type here is the DB value, 'credit'/'debit', not 'income'/
-  // 'expense' - see syncedRowKeyOf('categories') in js/supabase.js), value is `{position?}` -
-  // absent means "not yet set", never "explicitly cleared" (see orderedCategoryNames, which treats
-  // an absent field as alphabetical-fallback territory). Kept as a separate map rather than
-  // folding position onto categories.income/.expense themselves so every existing call site that
-  // treats those as plain name-string arrays (addCategory's .includes() check, budgets[cat]
-  // lookups, the merge in reconcileCategoriesOnFirstContact, ...) stays untouched.
+  // Per-category position/colour, round "category ordering + colour". Keyed by the same
+  // `name|type` composite the sync layer already uses (type here is the DB value, 'credit'/
+  // 'debit', not 'income'/'expense' - see syncedRowKeyOf('categories') in js/supabase.js), value
+  // is `{position?, color?}` - either field may be absent (see orderedCategoryNames/categoryColor,
+  // which both treat an absent field as "not yet set", never as "explicitly cleared"). Kept as a
+  // separate map rather than folding position/color onto categories.income/.expense themselves so
+  // every existing call site that treats those as plain name-string arrays (addCategory's
+  // .includes() check, budgets[cat] lookups, the merge in reconcileCategoriesOnFirstContact, ...)
+  // stays untouched.
   let categoryMeta = {};
   let settings = { currency: '₹' };
   let budgets = {};
@@ -148,56 +150,48 @@
   let recentlyDeletedDebtIds = new Set();
   let recentlyDeletedReceivableIds = new Set();
 
-  const CAT_PALETTE = ['#16A34A','#DC2626','#F59E0B','#2563EB','#14B8A6','#9333EA','#0EA5E9','#F97316','#84CC16','#EC4899','#DC4018','#DC7E18','#CBCB16','#31DC18','#18DC96','#18C5DC','#1881DC','#2618DC','#DC18DB','#DC1849'];
-  // Chosen for legibility as small badges/chips against Crimson's dark navy/charcoal surfaces
-  // (mid-tone, moderately saturated - unlike Mounty's muted earth tones, which existed
-  // specifically to not clash with that theme's photo background; Crimson has no such background).
-  // Deliberately avoids the theme's own accent/debit/credit hues at high saturation so category
-  // chips never get mistaken for the crimson CTA accent or a credit/debit indicator.
-  const CAT_PALETTE_CRIMSON = ['#a74444','#40bf65','#9546ce','#c1a758','#3b9cb0','#c93686','#71bb58','#635ec9','#b95f31','#4ab58d','#bb4fc4','#a8c256','#4475a7','#bf405a','#46ce51','#8967c1','#b0893b','#36c9c4','#bb58a2','#8fc95e','#3148b9','#b5584a','#4fc480','#ae56d2','#a6a744','#409abf','#ce467e','#72c167','#4f3bb0','#c97a36'];
-  // Black theme, round 3: round 2's HSL ramp looked like 24 distinct hues on paper but wasn't -
-  // HSL is not perceptually uniform, so e.g. hues 15/25/45 (all "orange" to the eye at this
-  // saturation/lightness) and 210/255/280 (all "blue-purple") rendered as 2-3 visually repeated
-  // colour families, not 10 independent ones. Rebuilt in OKLCH instead - equal L actually looks
-  // equally light across hues.
+  // Unified category colour system (round "category ordering + colour"). Previously there were
+  // THREE separate palettes: CAT_PALETTE (hex, Light+Dark), CAT_PALETTE_CRIMSON (hex, Crimson),
+  // and a 24-slot OKLCH hue-major ramp (Black only - see the preserved round 3-5 history below for
+  // how that one was built up). This round adds a manual per-category colour picker, and a
+  // manually-picked colour has to look the same no matter which theme is active - switching theme
+  // must never silently change a colour the user chose - which only holds if there's one shared
+  // palette instead of three theme-scoped ones. So this round retires CAT_PALETTE/
+  // CAT_PALETTE_CRIMSON and promotes the OKLCH approach (already proven across rounds 3-5) to run
+  // under every theme, expanded from 24 to 36 swatches: 18 hues at 20 degrees apart, each at two
+  // lightness tiers, oklch(0.72 0.13 H) and oklch(0.60 0.13 H) - the exact swatch set the colour
+  // picker's grid shows (see renderColorPickerGrid). Every existing Light/Dark/Crimson category
+  // will visibly get a new colour as a result - expected and accepted, not a bug; only a
+  // MANUALLY-picked colour is required to never shift (see assignAutoCategorySlots below).
   //
-  // Round 5 CORRECTION (twice over). First: rounds 3-4 both ordered the 24 slots as TWO BLOCKS -
-  // 12 hues at L=0.72 (slots 0-11), then the same 12 hues again at L=0.65 (slots 12-23). Round 4's
-  // even-distribution formula (i*floor(24/N)) used an even stride for every N<=12, which lands
-  // exactly on both copies of the same hue (e.g. slot 3 and slot 15 are both hue 90, just a
-  // different tier) - confirmed live on a real device: Business/Other Income, Freelance/Rental
-  // Income, and Gift-Bonus/Salary each shared a hue, distinguished only by lightness. Fixed by
-  // re-ordering the ramp itself so hue is the ONLY thing that changes between adjacent slots:
-  // slot k has hue = k*15 degrees (24 slots x 15 degrees = the full circle, each hue appearing
-  // exactly once), and lightness alternates per slot (even k = 0.72, odd k = 0.65) rather than
-  // being split into two contiguous halves. There is no longer any pair of slots that share a hue.
-  //
-  // Second: rounds 3-4 also ran credit and debit categories through completely SEPARATE
-  // assignment passes, each free to start back at slot 0 - a colour clash between "Rent" (expense)
-  // and "Rental Income" (income) was reasoned to never matter because they don't share a
-  // legend... but they DO share the History screen, which mixes credit and debit rows in one
-  // list. Confirmed live: Healthcare/Gift-Bonus/Salary all the same teal, Food & Groceries/
-  // Shopping both olive, Other Income/Other Expense both pink. Fixed by combining every credit
-  // and debit category into ONE alphabetically sorted pool (still alphabetical, never display/
-  // creation order, so the planned drag-to-reorder feature still can't change anyone's colour) and
-  // assigning slot = round(i * 24/N) mod 24 against that single combined list - cross-list
-  // collisions are now structurally impossible, not just unlikely.
-  //
-  //   Even k (0,2,4...22): oklch(0.72 0.13 H) - the brief's own tier-1 value, unchanged.
-  //   Odd k (1,3,5...23): oklch(0.65 0.13 H) - the brief specified 0.60 (round 3), sampling found
-  //     a worst-case contrast of only 4.65:1 against the fixed near-black avatar letter (#0B0B0B),
-  //     too thin a margin - raised to 0.65 for 5.68:1 (round 3's tier-only ramp) / 5.70:1 (round
-  //     4's redistribution) / see the PR for this round's recomputed number against the new
-  //     hue-major ramp.
+  // Preserved history (round 3-5 reasoning for OKLCH-over-HSL, hue-major slot ordering, and the
+  // single shared credit+debit pool, all of which still apply unchanged to the 36-swatch version
+  // below):
+  // - HSL is not perceptually uniform (round 3): hues 15/25/45 all read "orange" at this
+  //   saturation/lightness, hues 210/255/280 all read "blue-purple" - equal-L OKLCH actually looks
+  //   equally light across hues, which is why this whole system is OKLCH-based rather than HSL.
+  // - Round 5 fixed two real collisions found on a real device: (1) ordering slots as two
+  //   contiguous lightness blocks let an even stride land on both copies of the same hue - fixed by
+  //   interleaving lightness by slot instead, so no two slots ever share a hue; (2) assigning
+  //   credit and debit categories through separate passes let e.g. "Rent" (expense) and "Rental
+  //   Income" (income) collide, which matters because History mixes both in one list - fixed by
+  //   assigning from one shared, alphabetically-sorted pool spanning both lists.
   // Verified real canvas fillStyle AND real SVG fill-attribute both accept raw oklch() strings in
   // sandbox Chromium (a pixel read back after assignment matched this conversion function exactly)
   // AND, as of round 5, a real donut chart rendering in colour on a real Android device's Chrome -
-  // still converted to sRGB hex in JS at generation time below rather than trusting oklch()
-  // strings to reach every renderer (Chart.js's own internal colour parser, used for hover/opacity
-  // variants rather than plain fills, remains untested - see the PR).
-  const CAT_OKLCH_CHROMA = 0.13;
-  const CAT_OKLCH_TIER_HIGH = 0.72;
-  const CAT_OKLCH_TIER_LOW = 0.65;
+  // still converted to sRGB hex in JS at generation time below rather than trusting oklch() strings
+  // to reach every renderer.
+  const CAT_SWATCH_CHROMA = 0.13;
+  const CAT_SWATCH_TIER_HIGH = 0.72;
+  // Round 3 tried this exact low-tier value (0.60) and moved it to 0.65 after sampling found only
+  // 4.65:1 worst-case contrast against the fixed near-black avatar letter (#0B0B0B) - too thin a
+  // margin at the time. This round's brief specifies 0.60 explicitly again (a picker grid needs its
+  // two tiers to read as visibly different lightness side by side), so it's implemented exactly as
+  // specified - recomputed worst-case contrast against #0B0B0B this round is 4.64:1 (see the PR),
+  // which clears WCAG AA's 4.5:1 floor for normal-size text but only just. Flagged here and in the
+  // PR rather than silently re-raised back to 0.65, since the brief's own formula is explicit and
+  // this is the number that formula actually produces.
+  const CAT_SWATCH_TIER_LOW = 0.60;
   // Standard OKLCH -> OKLab -> linear sRGB -> sRGB conversion (Björn Ottosson's reference
   // matrices, the same ones the CSS Color 4 spec and every browser's native oklch() parser use -
   // confirmed to match this browser's own conversion pixel-for-pixel, see above).
@@ -215,55 +209,76 @@
     const toHex = (c)=> Math.round(Math.max(0,Math.min(1,gam(c)))*255).toString(16).padStart(2,'0');
     return '#'+toHex(r)+toHex(g)+toHex(bl);
   }
-  // 24 slots, hue-major: slot k = hue k*15deg, lightness alternates by parity. Computed once at
-  // load rather than per-render.
-  const CAT_OKLCH_SLOTS = Array.from({ length: 24 }, (_, k) =>
-    oklchToHex(k % 2 === 0 ? CAT_OKLCH_TIER_HIGH : CAT_OKLCH_TIER_LOW, CAT_OKLCH_CHROMA, k * 15)
-  );
+  // 36 swatches, hue-major with tiers paired per hue: index 2*i is hue i*20deg at the high tier,
+  // index 2*i+1 is the SAME hue at the low tier - exactly the grid the colour picker renders (see
+  // renderColorPickerGrid), and the pool assignAutoCategorySlots below spreads names across.
+  // Computed once at load rather than per-render.
+  const CAT_SWATCHES = [];
+  for(let catSwatchI=0; catSwatchI<18; catSwatchI++){
+    const hue = catSwatchI*20;
+    CAT_SWATCHES.push({ hex: oklchToHex(CAT_SWATCH_TIER_HIGH, CAT_SWATCH_CHROMA, hue), hue, tier:'high' });
+    CAT_SWATCHES.push({ hex: oklchToHex(CAT_SWATCH_TIER_LOW, CAT_SWATCH_CHROMA, hue), hue, tier:'low' });
+  }
   function hashString(name){
     let hash = 0; const s = name || '?';
     for(let i=0;i<s.length;i++){ hash = s.charCodeAt(i) + ((hash<<5)-hash); }
     return Math.abs(hash);
   }
-  // Assigns from a SINGLE shared pool (see the round 5 comment above for why this replaced two
-  // separate per-list passes): sort names alphabetically, then assign slot = round(i*24/N) mod 24.
-  // Spreads N names across the 24-slot ring at the most even spacing that ring can offer, and
-  // since every slot is now a genuinely distinct hue (unlike rounds 3-4's two-block ramp), no
-  // stride can ever land two names on the same hue. Recomputed on every call rather than cached,
-  // since `categories` is mutable app state - trivial cost at these list sizes.
+  // Every category anywhere (income+expense) that currently has a manually-picked colour (see
+  // categoryMeta above) - used both to grey out taken swatches in the picker grid and to exclude
+  // those swatches from the auto-assignment pool below, so an auto colour can never land on one a
+  // user deliberately chose.
+  function manuallyClaimedSwatchHexes(){
+    const set = new Set();
+    Object.values(categoryMeta).forEach(m=>{ if(m && m.color) set.add(m.color); });
+    return set;
+  }
+  // Looks up name's own manual colour, if it has one. A name can only appear in categoryMeta under
+  // the type it actually belongs to (income -> 'credit', expense -> 'debit') - a name present in
+  // BOTH lists (the same rare edge case the shared-pool logic below already tolerates) resolves to
+  // whichever the income side says, arbitrarily but consistently.
+  function manualCategoryColor(name){
+    const inIncome = (categories && Array.isArray(categories.income)) ? categories.income.includes(name) : false;
+    const inExpense = (categories && Array.isArray(categories.expense)) ? categories.expense.includes(name) : false;
+    const dbType = inIncome ? 'credit' : (inExpense ? 'debit' : null);
+    if(!dbType) return null;
+    const meta = categoryMeta[name+'|'+dbType];
+    return (meta && meta.color) ? meta.color : null;
+  }
+  // Assigns from a SINGLE shared pool spanning credit+debit (see the round 5 history above),
+  // restricted to names that DON'T already have a manual colour, and restricted to swatches that
+  // aren't already manually claimed by someone else (2e: "auto-assignment must skip any swatch
+  // already claimed manually"). Sorts alphabetically, then spreads across whatever swatches remain
+  // at slot = round(i*available/n) - the same even-spread formula rounds 4-5 used against the full
+  // 24/36-slot ring, just against a possibly-smaller "available" set. Recomputed on every call
+  // rather than cached, since `categories`/categoryMeta are mutable app state - trivial cost at
+  // these list sizes.
   //
-  // TRADE-OFF, accepted deliberately (per the brief, same as round 4): adding or removing ANY
-  // category - credit or debit - changes N for the whole shared pool, which can reassign colours
-  // across BOTH lists, not just the one the category was added to. Colour here is pure decoration
-  // with no data meaning, so this is fine; alphabetical order still means the planned
-  // drag-to-reorder feature can never change anyone's colour by itself.
-  function assignCategorySlots(names){
+  // TRADE-OFF, accepted deliberately (per the brief, same as round 4-5): adding, removing, or
+  // manually recolouring ANY category can reassign AUTO colours across both lists, not just the one
+  // that changed. Colour here is otherwise pure decoration, so this is fine - a MANUAL pick is a
+  // direct lookup (manualCategoryColor above), never touched by this recompute, so it can never
+  // shift.
+  function assignAutoCategorySlots(names){
+    const claimed = manuallyClaimedSwatchHexes();
+    const availableSlots = CAT_SWATCHES.map((s,i)=>i).filter(i=> !claimed.has(CAT_SWATCHES[i].hex));
     const sorted = [...names].sort((a,b)=> a.localeCompare(b));
-    const total = CAT_OKLCH_SLOTS.length;
     const n = sorted.length;
+    const pool = availableSlots.length ? availableSlots : CAT_SWATCHES.map((s,i)=>i);
     const assignment = new Map();
-    sorted.forEach((name,i)=>{ assignment.set(name, n>0 ? Math.round(i*total/n) % total : 0); });
+    sorted.forEach((name,i)=>{
+      const slot = pool[n>0 ? Math.round(i*pool.length/n) % pool.length : 0];
+      assignment.set(name, CAT_SWATCHES[slot].hex);
+    });
     return assignment;
   }
-  // Combines categories.income and categories.expense into ONE pool before assigning (see round 5
-  // comment above - the History screen mixes credit and debit rows, so they must be assigned
-  // together to make cross-list collisions structurally impossible, not just per-list collisions).
-  // A Set dedupes the rare case of the same name existing in both lists, so it only ever consumes
-  // one slot rather than being assigned twice. Names in neither list (an account name, or a
-  // category since removed from categories.income/.expense but still referenced by an old
-  // transaction) have no pool to guarantee uniqueness against, so they fall back to a plain
-  // per-name hash pick against the same 24-slot set.
-  function categoryColorBlack(name){
-    const incomeList = (categories && Array.isArray(categories.income)) ? categories.income : [];
-    const expenseList = (categories && Array.isArray(categories.expense)) ? categories.expense : [];
-    const combined = [...new Set([...incomeList, ...expenseList])];
-    if(combined.includes(name)) return CAT_OKLCH_SLOTS[assignCategorySlots(combined).get(name)];
-    return CAT_OKLCH_SLOTS[hashString(name) % CAT_OKLCH_SLOTS.length];
-  }
-  // Income avatars used to bypass categoryColor() entirely (a hardcoded green in Light/Dark/
-  // Crimson, a hardcoded white in Black v1) - exactly the "two systems" bug above. Under Black
-  // now, income rows get the SAME category-derived colour as any other row (the ↑ glyph still
-  // marks it as income); every other theme's existing hardcoded-green behaviour is untouched.
+  // Income avatars used to bypass categoryColor() entirely in Light/Dark/Crimson (a hardcoded
+  // green) - a deliberate, pre-existing design from round 5 unrelated to this round's brief, left
+  // untouched: a manually-picked colour on an income category still has no visible effect here,
+  // same as its auto colour never did. Under Black, income rows already got the category-derived
+  // colour (the ↑ glyph still marks it as income); every theme's Categories-page avatar for an
+  // income row already used categoryColor() directly regardless (see renderCatList), so this
+  // asymmetry is exactly as wide as it was before this round, not wider.
   function incomeAvatarColor(name){
     return document.body.getAttribute('data-theme')==='black' ? categoryColor(name) : '#16A34A';
   }
@@ -273,15 +288,15 @@
   // three income-avatar call sites pass incomeAvatarColor(name) instead). The letter colour
   // itself is written as the literal string "var(--avatar-letter)", not a resolved hex - this is
   // an inline HTML style attribute, so the browser's own cascade resolves the custom property at
-  // render time; no JS-held copy of #0B0B0B exists anywhere. --avatar-letter is defined once, in
-  // css/styles.css's body[data-theme="black"] block - every Black category swatch sits at OKLCH
-  // chroma 0.13 and lightness >=0.65 (see CAT_OKLCH_TIERS above), sampled and confirmed legible
-  // at its worst case, so one fixed near-black glyph colour works on every slot without needing
-  // a per-swatch luminance branch.
+  // render time; no JS-held copy of #0B0B0B exists anywhere. Previously Black-only (every other
+  // theme's badge fell back to the CSS default, white) - now every swatch in CAT_SWATCHES sits at
+  // chroma 0.13 and lightness >=0.60, sampled and confirmed legible at its worst case (see
+  // CAT_SWATCH_TIER_LOW's own comment) against the same fixed near-black glyph colour, so
+  // --avatar-letter is promoted to a global token (css/styles.css's :root block) and used
+  // unconditionally here, for every theme.
   function catBadgeStyle(name, bgOverride){
     const bg = bgOverride || categoryColor(name);
-    const isBlack = document.body.getAttribute('data-theme')==='black';
-    return 'background:' + bg + ';' + (isBlack ? ' color:var(--avatar-letter);' : '');
+    return 'background:' + bg + '; color:var(--avatar-letter);';
   }
 
   function defaultCategories(){
@@ -434,31 +449,36 @@
     if(window.trackrSync.syncBudgets) window.trackrSync.syncBudgets(userId, repaired);
     return repaired;
   }
+  // Theme-independent now (see the unified-palette comment above CAT_SWATCH_CHROMA) - a manual
+  // pick is a direct lookup, unaffected by which theme is active or by anyone else's colour. An
+  // auto colour still comes from the shared credit+debit pool, same as Black's already did.
   function categoryColor(name){
-    const themeNow3 = document.body.getAttribute('data-theme');
-    // Black assigns by hashing the NAME directly (categoryColorBlack, above) rather than the
-    // array-index lookup every other theme uses below - see that function's own comment for why:
-    // stability across category reordering and across devices, independent of array position.
-    if(themeNow3==='black') return categoryColorBlack(name);
-    const palette = themeNow3==='crimson' ? CAT_PALETTE_CRIMSON : CAT_PALETTE;
-    const allCats = [...(categories && categories.income || []), ...(categories && categories.expense || [])];
-    const idx = allCats.indexOf(name);
-    if(idx !== -1) return palette[idx % palette.length];
-    const hash = hashString(name);
-    return palette[hash % palette.length];
+    const manual = manualCategoryColor(name);
+    if(manual) return manual;
+    const incomeList = (categories && Array.isArray(categories.income)) ? categories.income : [];
+    const expenseList = (categories && Array.isArray(categories.expense)) ? categories.expense : [];
+    const combined = [...new Set([...incomeList, ...expenseList])];
+    // Only names that still need an auto colour compete for the shared pool - a manually-coloured
+    // sibling doesn't consume a slot in the even-spread calculation, matching
+    // assignAutoCategorySlots' own comment.
+    const autoNames = combined.filter(n=> !manualCategoryColor(n));
+    if(autoNames.includes(name)) return assignAutoCategorySlots(autoNames).get(name);
+    // Name isn't in either list at all (an account name, or a category since removed from
+    // categories.income/.expense but still referenced by an old transaction) - no pool to
+    // guarantee uniqueness against, so it falls back to a plain per-name hash pick.
+    return CAT_SWATCHES[hashString(name) % CAT_SWATCHES.length].hex;
   }
   function categoryInitial(name){ const s=(name||'?').trim(); return (s.charAt(0)||'?').toUpperCase(); }
-  // Display order for a category list (round "category ordering"). Categories carrying an
-  // explicit position (see categoryMeta above) sort by it; anything without one - which today
-  // means EVERY existing row, since position was unused before this round - falls back to
-  // alphabetical rather than raw array/insertion order, so a table SELECT with no ORDER BY (or a
-  // device that simply hasn't dragged anything yet) never surfaces as "random database order".
-  // Positioned rows always sort before unpositioned ones: the only way a list ends up with a MIX
-  // of the two is a genuinely stale device (one that reordered on another device, hasn't pulled
-  // since, and then adds a new category locally - see toCategoryRow's own comment in
-  // js/supabase.js on why that device's upload can't safely assign a position for names it has no
-  // opinion on) - putting the stragglers at the end keeps them visible and immediately draggable,
-  // rather than lost or jumbled mid-list.
+  // Display order for a category list (round "category ordering + colour"). Categories carrying an
+  // explicit position (see categoryMeta above) sort by it; anything without one - which today means
+  // EVERY existing row, since position was unused before this round - falls back to alphabetical
+  // rather than raw array/insertion order, so a table SELECT with no ORDER BY (or a device that
+  // simply hasn't dragged anything yet) never surfaces as "random database order". Positioned rows
+  // always sort before unpositioned ones: the only way a list ends up with a MIX of the two is a
+  // genuinely stale device (one that reordered on another device, hasn't pulled since, and then
+  // adds a new category locally - see toCategoryRow's own comment on why that device's upload
+  // can't safely assign a position for names it has no opinion on) - putting the stragglers at the
+  // end keeps them visible and immediately draggable, rather than lost or jumbled mid-list.
   function orderedCategoryNames(type){
     const dbType = type==='income' ? 'credit' : 'debit';
     const names = (categories && Array.isArray(categories[type])) ? categories[type] : [];
@@ -682,9 +702,9 @@
   async function saveCategories(){
     try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); }
     try{ await window.storage.set('categoryMeta', JSON.stringify(categoryMeta)); } catch(e){ console.error(e); }
-    // Same machinery as every other categories write (add/delete) - reordering just mutates
-    // categoryMeta then calls this same function, so it inherits the offline queue/retry behaviour
-    // for free rather than needing a second sync path.
+    // Same machinery as every other categories write (add/delete) - reorder and colour-pick both
+    // just mutate categoryMeta then call this same function, so they inherit the offline queue/
+    // retry behaviour for free rather than needing a second sync path.
     if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMeta);
   }
   async function saveSettings(){ try{ await window.storage.set('settings', JSON.stringify(settings)); } catch(e){ console.error(e); } }
@@ -988,7 +1008,7 @@
     });
     return row;
   }
-  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen','diagLogOpen'];
+  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen','diagLogOpen','colorPickerOpen'];
   function closeAllOverlaysThenRun(action, stepsLeft){
     stepsLeft = stepsLeft===undefined ? OVERLAY_STATE_FLAGS.length : stepsLeft;
     const state = history.state;
@@ -3131,9 +3151,9 @@
 
         transactions = data.transactions || []; categories = data.categories || defaultCategories();
         // A backup taken before this round won't have categoryMeta at all - defaults to {}, same
-        // as a fresh install, meaning every category simply falls back to alphabetical order until
-        // re-dragged. Not a data loss: position was never anything but decoration this round adds
-        // meaning to.
+        // as a fresh install, meaning every category simply falls back to auto colour/alphabetical
+        // order until re-dragged/re-picked. Not a data loss: position/colour were never anything
+        // but decoration this round adds meaning to.
         categoryMeta = (data.categoryMeta && typeof data.categoryMeta==='object' && !Array.isArray(data.categoryMeta)) ? data.categoryMeta : {};
         settings = data.settings || { currency:'₹' }; budgets = data.budgets || {}; debts = Array.isArray(data.debts) ? data.debts : [];
         receivables = Array.isArray(data.receivables) ? data.receivables : [];
@@ -3505,10 +3525,16 @@
     orderedCategoryNames(type).forEach(c=>{
       const color = categoryColor(c);
       const row = document.createElement('div'); row.className='cat-row'; row.dataset.type=type; row.dataset.cat=c;
-      row.innerHTML = `<span class="cat-drag-handle" role="button" tabindex="0" aria-label="Drag to reorder ${escapeHtml(c)}">${icon('grip',16)}</span><span class="cat-row-left"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
+      row.innerHTML = `<span class="cat-drag-handle" role="button" tabindex="0" aria-label="Drag to reorder ${escapeHtml(c)}">${icon('grip',16)}</span><span class="cat-row-left cat-row-pick-color" role="button" tabindex="0" aria-label="Change colour for ${escapeHtml(c)}"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-cat-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteCategory(btn.dataset.type, btn.dataset.cat)));
+    container.querySelectorAll('.cat-row-pick-color').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const row = el.closest('.cat-row');
+        openColorPicker(row.dataset.type, row.dataset.cat);
+      });
+    });
     // Per-row pointerdown (rebound fresh on every render, same pattern as .del-cat-btn above -
     // the row elements themselves are destroyed/recreated by innerHTML='' each render, so there's
     // nothing to leak). pointermove/pointerup are added to `document` only for the duration of an
@@ -3598,6 +3624,65 @@
     populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
     if(type==='expense') renderBudgetSetList();
   }
+
+  // Colour picker (Issue 2). categoryColorPickerCurrent tracks which (type, name) the open picker
+  // is for, so selectCategoryColor doesn't need it threaded through the DOM.
+  let categoryColorPickerCurrent = null;
+  // hex -> {type, name} for every category that currently has a MANUAL colour, excluding
+  // excludeKey (the category the picker is currently open for - its own current colour must show
+  // as "selected", never as "taken by someone else"). Checked across BOTH lists, not per-list (2c:
+  // History mixes credit and debit, which is where a collision would actually be seen).
+  function categoryColorTakenMap(excludeKey){
+    const map = new Map();
+    ['income','expense'].forEach(t=>{
+      const dbType = t==='income' ? 'credit' : 'debit';
+      (categories[t]||[]).forEach(name=>{
+        const key = name+'|'+dbType;
+        if(key===excludeKey) return;
+        const meta = categoryMeta[key];
+        if(meta && meta.color) map.set(meta.color, { type:t, name });
+      });
+    });
+    return map;
+  }
+  function renderColorPickerGrid(type, name){
+    const dbType = type==='income' ? 'credit' : 'debit';
+    const key = name+'|'+dbType;
+    const currentColor = categoryMeta[key] && categoryMeta[key].color;
+    const taken = categoryColorTakenMap(key);
+    const grid = document.getElementById('color-picker-grid'); grid.innerHTML='';
+    CAT_SWATCHES.forEach(sw=>{
+      const owner = taken.get(sw.hex);
+      const isCurrent = currentColor===sw.hex;
+      const btn = document.createElement('button');
+      btn.type='button';
+      btn.className = 'swatch-btn' + (owner?' swatch-taken':'') + (isCurrent?' swatch-current':'');
+      btn.style.background = sw.hex;
+      if(owner) btn.disabled = true;
+      btn.setAttribute('aria-label', owner ? `Taken by ${owner.name}` : (isCurrent ? 'Current colour' : `Choose this colour for ${name}`));
+      if(owner) btn.title = `Used by ${owner.name}`;
+      btn.innerHTML = owner ? icon('lock',13) : (isCurrent ? icon('check',15) : '');
+      if(!owner) btn.addEventListener('click', ()=> selectCategoryColor(type, name, sw.hex));
+      grid.appendChild(btn);
+    });
+  }
+  function openColorPicker(type, name){
+    categoryColorPickerCurrent = { type, name };
+    setText('color-picker-title', `Colour for "${name}"`);
+    renderColorPickerGrid(type, name);
+    showOverlay('color-picker-overlay');
+    if(!(history.state && history.state.colorPickerOpen)) history.pushState({ colorPickerOpen:true }, '', '');
+  }
+  function closeColorPicker(){ categoryColorPickerCurrent = null; hideOverlay('color-picker-overlay'); }
+  async function selectCategoryColor(type, name, hex){
+    const dbType = type==='income' ? 'credit' : 'debit';
+    const key = name+'|'+dbType;
+    categoryMeta[key] = { ...(categoryMeta[key]||{}), color: hex };
+    await saveCategories();
+    renderCatList(type);
+    refreshAll();
+    closeColorPicker();
+  }
   function addCategory(type, name){
     name = (name||'').trim(); if(!name) return;
     const exists = categories[type].some(c=>c.toLowerCase()===name.toLowerCase());
@@ -3612,10 +3697,11 @@
   function deleteCategory(type, name){
     if(!confirm(`Remove "${name}" from ${type} categories? Past entries will keep this category label.`)) return;
     categories[type] = categories[type].filter(c=>c!==name);
-    // Drops any stale position this category held - harmless either way (orderedCategoryNames
-    // only ever reads an entry for a name still present in categories[type]), but avoids a
-    // re-added category of the same name silently inheriting an old position from before it was
-    // deleted.
+    // Frees this category's position/colour immediately - a manually-picked swatch must return to
+    // the available pool the instant its category is deleted (not just once some other device
+    // happens to pull the delete), and since this map is purely local metadata about a row that's
+    // about to stop existing server-side too (see syncDeleteCategory below), there's nothing to
+    // separately "un-sync" here.
     delete categoryMeta[name+'|'+(type==='income' ? 'credit' : 'debit')];
     saveCategories();
     // An upsert batch (saveCategories, above) can never remove a row just by omitting it - this
@@ -3812,12 +3898,12 @@
     categories.income.forEach(name=>{ if(!cloudIncomeLower.has(name.trim().toLowerCase())) mergedIncome.push(name); });
     categories.expense.forEach(name=>{ if(!cloudExpenseLower.has(name.trim().toLowerCase())) mergedExpense.push(name); });
     categories = { income: mergedIncome, expense: mergedExpense };
-    // Folds the cloud's position into local BEFORE this device's own upload below - critical for
-    // toCategoryRow's omit-don't-null discipline (see its own comment in js/supabase.js): if this
-    // device uploaded without first learning whatever position another device already set, its
-    // payload would simply omit that field for every row it has no local opinion on, which is
-    // safe... but only IF this merge has already folded the cloud's real values in first. Local
-    // values win on an actual key collision (shouldn't happen - this device's own categoryMeta
+    // Folds the cloud's position/color into local BEFORE this device's own upload below - critical
+    // for toCategoryRow's omit-don't-null discipline (see its own comment in js/supabase.js): if
+    // this device uploaded without first learning whatever position/colour another device already
+    // set, its payload would simply omit those fields for every row it has no local opinion on,
+    // which is safe... but only IF this merge has already folded the cloud's real values in first.
+    // Local values win on an actual key collision (shouldn't happen - this device's own categoryMeta
     // entries only exist for names IT already knows about) purely as a deterministic tie-break.
     categoryMeta = { ...(cloudCategoryMeta||{}), ...categoryMeta };
     // Persisted locally regardless of upload outcome below - this device's own merged view is
@@ -5026,10 +5112,10 @@
             if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
             continue;
           }
-          // Merges in position from local categoryMeta - retryPermanentWrite's categories branch
-          // reads it straight off this object (see its own comment in js/supabase.js).
+          // Merges in position/color from local categoryMeta - retryPermanentWrite's categories
+          // branch reads them straight off this object (see its own comment in js/supabase.js).
           const meta = categoryMeta[name+'|'+type] || {};
-          const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type, position: meta.position }, currentUser.id);
+          const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type, position: meta.position, color: meta.color }, currentUser.id);
           if(result && result.ok){
             diagLogPage('page:permanently-rejected-recovered', { table:'categories', id: entry.id });
             if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
@@ -5474,11 +5560,14 @@
       else if(document.getElementById('schedule-overlay').classList.contains('open')) history.back();
       else if(document.getElementById('category-detail-overlay').classList.contains('open')) history.back();
       else if(document.getElementById('txdetail-overlay').classList.contains('open')) history.back();
+      else if(document.getElementById('color-picker-overlay').classList.contains('open')) history.back();
     });
     document.getElementById('close-schedule-btn').addEventListener('click', ()=> history.back());
     document.getElementById('schedule-overlay').addEventListener('click', (e)=>{ if(e.target.id==='schedule-overlay') history.back(); });
     document.getElementById('close-catdetail-btn').addEventListener('click', ()=> history.back());
     document.getElementById('category-detail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='category-detail-overlay') history.back(); });
+    document.getElementById('close-color-picker-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('color-picker-overlay').addEventListener('click', (e)=>{ if(e.target.id==='color-picker-overlay') history.back(); });
     document.getElementById('close-txdetail-btn').addEventListener('click', ()=> history.back());
     document.getElementById('txdetail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='txdetail-overlay') history.back(); });
     document.getElementById('txdetail-edit-btn').addEventListener('click', ()=>{
@@ -5901,9 +5990,10 @@
           // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
           categories = (cloud.categories.income.length || cloud.categories.expense.length) ? cloud.categories : defaultCategories();
           // Cloud replaces local outright, same as `categories` itself on this branch - once
-          // reconciled, the cloud is authoritative for position too, so a stale local categoryMeta
-          // (e.g. left over from hardClearAllLocalDataNoSync's logout reset, which doesn't touch
-          // this map) never lingers past the next real login.
+          // reconciled, the cloud is authoritative for position/colour too, so a stale local
+          // categoryMeta (e.g. left over from hardClearAllLocalDataNoSync's logout reset, which
+          // doesn't touch this map - see its own file-level disclosure) never lingers past the
+          // next real login.
           categoryMeta = cloud.categoryMeta || {};
           toPersist.push(['categories', categories]);
           toPersist.push(['categoryMeta', categoryMeta]);
@@ -6088,6 +6178,7 @@
       if(!state.debtDetailOpen){ closeDebtDetail(); }
       if(!state.goalDetailOpen){ closeGoalDetail(); }
       if(!state.diagLogOpen){ closeDiagLogOverlay(); }
+      if(!state.colorPickerOpen){ closeColorPicker(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){

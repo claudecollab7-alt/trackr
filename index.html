@@ -748,7 +748,7 @@
       <div id="more-sub-categories" class="more-sub">
         <button class="back-btn" data-back><span data-icon="chevronLeft" data-icon-size="15"></span> Back</button>
         <h2>Categories</h2>
-        <p class="period-hint" style="margin:-8px 0 14px;">Drag the handle to reorder categories.</p>
+        <p class="period-hint" style="margin:-8px 0 14px;">Drag the handle to reorder. Tap a category's colour to change it.</p>
         <div class="cat-columns">
           <div class="card cat-col">
             <h3>Credit Categories</h3>
@@ -1024,6 +1024,16 @@
       <button class="icon-btn-sm" id="close-catdetail-btn" aria-label="Close category detail"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="catdetail-list"></div></div>
+  </div>
+</div>
+
+<div class="search-overlay" id="color-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose category colour">
+  <div class="search-overlay-inner">
+    <div class="search-overlay-header">
+      <div style="flex:1;"><strong id="color-picker-title">Choose a colour</strong></div>
+      <button class="icon-btn-sm" id="close-color-picker-btn" aria-label="Close colour picker"><span data-icon="x" data-icon-size="16"></span></button>
+    </div>
+    <div class="search-overlay-body"><div id="color-picker-grid" class="swatch-grid"></div></div>
   </div>
 </div>
 

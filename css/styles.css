@@ -23,6 +23,12 @@
        on lower-end devices. */
     --anim-duration:260ms;
     --anim-ease:cubic-bezier(.16,1,.3,1);
+    /* Round "category ordering + colour": every theme now draws category avatars/swatches from the
+       same 36-swatch OKLCH palette (js/app.js's CAT_SWATCHES), which sits at lightness >=0.60 -
+       too light for legible white text (previously every non-Black theme's .cat-badge default).
+       Promoted from body[data-theme="black"]'s own block (still there, harmless duplicate of the
+       same value) to a global token so catBadgeStyle() can apply it unconditionally. */
+    --avatar-letter:#0B0B0B;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; tap-highlight-color:transparent; letter-spacing:normal; word-spacing:normal; text-justify:none; text-align-last:auto;}
   /* overflow-x was hidden here, not auto - deliberately changed. Every previously-fixed
@@ -345,7 +351,7 @@
   .activity-row:last-child{ border-bottom:none; }
   .activity-left{ display:flex; align-items:center; gap:11px; min-width:0; flex:1 1 auto; overflow:hidden; }
   .activity-left > div{ min-width:0; flex:1 1 auto; overflow:hidden; }
-  .cat-badge{ width:36px; height:36px; border-radius:50%; color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .cat-badge{ width:36px; height:36px; border-radius:50%; color:var(--avatar-letter); font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
   .activity-name{ font-size:13.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* Note and date are separate flex children, not one truncating string (see buildActivityRow
      in js/app.js) - the date has flex-shrink:0 and white-space:nowrap so it can never be the
@@ -635,14 +641,14 @@
   .cat-columns{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
   .cat-col{ flex:1; min-width:260px; }
   .cat-col h3{ font-size:14.5px; margin-top:0; margin-bottom:14px; font-weight:800; }
-  /* Round "category ordering": a third child (.cat-drag-handle) joins .cat-row-left and the
-     delete button - space-between with a middle child that doesn't grow would leave uneven gaps
-     either side of it, so .cat-row-left instead takes flex:1 to fill the remaining width, keeping
-     the handle pinned left and the delete button pinned right without needing justify-content at
-     all. */
+  /* Round "category ordering + colour": a third child (.cat-drag-handle) joins .cat-row-left and
+     the delete button - space-between with a middle child that doesn't grow would leave uneven
+     gaps either side of it, so .cat-row-left instead takes flex:1 to fill the remaining width,
+     keeping the handle pinned left and the delete button pinned right without needing
+     justify-content at all. */
   .cat-row{ display:flex; align-items:center; gap:6px; padding:9px 0; border-bottom:1px solid var(--bg); font-size:13.5px; position:relative; }
   .cat-row.cat-row-dragging{ position:relative; z-index:5; background:var(--card); box-shadow:var(--shadow-sm); border-radius:10px; }
-  .cat-row-left{ display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+  .cat-row-left{ display:flex; align-items:center; gap:10px; flex:1; min-width:0; cursor:pointer; }
   /* touch-action:none is what actually solves the brief's "long-press competes with page
      scrolling" complaint: the browser only ever hands a touch gesture to its own scroll handling
      OR to this element's pointer events, decided the instant the gesture starts on this element -
@@ -652,6 +658,16 @@
   .cat-col form{ display:flex; gap:8px; margin-top:14px; }
   .cat-col form input{ flex:1; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); }
   .cat-col form button{ background:var(--binder); color:#FFFFFF; border:none; padding:9px 16px; border-radius:10px; font-weight:700; font-size:13px; }
+
+  /* Colour picker grid (round "category ordering + colour") - 36 swatches from js/app.js's
+     CAT_SWATCHES, rendered inside #color-picker-overlay's .search-overlay-body. 6 columns keeps
+     each swatch a comfortable touch target down to a 320px screen without the grid needing its
+     own horizontal scroll. */
+  .swatch-grid{ display:grid; grid-template-columns:repeat(6, 1fr); gap:10px; padding:2px 0 8px; }
+  .swatch-btn{ position:relative; aspect-ratio:1; border-radius:50%; border:2.5px solid transparent; padding:0; display:flex; align-items:center; justify-content:center; color:var(--avatar-letter); }
+  .swatch-btn.swatch-current{ border-color:var(--ink); }
+  .swatch-btn.swatch-taken{ opacity:.32; cursor:not-allowed; }
+  .swatch-btn:disabled{ cursor:not-allowed; }
 
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
   .settings-row label{ font-size:13px; color:var(--ink-soft); font-weight:700; }
@@ -1172,7 +1188,7 @@
   /* ---------- Recurring quick-add ---------- */
   .recurring-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .recurring-chip{ display:flex; align-items:center; gap:7px; background:var(--bg); border:1.5px solid var(--line); border-radius:999px; padding:8px 10px 8px 6px; font-size:12.5px; font-weight:600; color:var(--ink); }
-  .recurring-chip .chip-badge{ width:22px; height:22px; border-radius:50%; color:#fff; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .recurring-chip .chip-badge{ width:22px; height:22px; border-radius:50%; color:var(--avatar-letter); font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
   .recurring-chip .chip-del{ color:var(--ink-soft); font-weight:800; padding:0 2px; border-radius:50%; }
   .recurring-chip .chip-del:hover{ color:var(--debit); }
   .save-recurring-row{ display:flex; align-items:center; gap:8px; margin:-6px 0 16px; font-size:12.5px; color:var(--ink-soft); font-weight:600; }

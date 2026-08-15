@@ -118,7 +118,7 @@
   function toDismissedDuplicateRow(userId, groupKey){
     return { user_id: userId, group_key: groupKey };
   }
-  // Categories table, round "categories sync" - see the migration SQL from that round's PR
+  // Categories table, round "categories sync" - see the migration SQL in this round's PR
   // description. id is omitted from every payload, same reasoning as accounts' created_at above:
   // the column has its own `default gen_random_uuid()`, so leaving it out lets a fresh insert get
   // a real id while a later upsert of the SAME (user_id, name, type) leaves the existing row's id
@@ -127,21 +127,21 @@
   // name-string arrays, unchanged) - (name, type) is the only identity a category has on either
   // side of the sync, matching the merge rule.
   //
-  // position, round "category ordering" - meta is app.js's categoryMeta map (keyed the same
-  // `name|type` composite as syncedRowKeyOf('categories') below), looked up per row here rather
-  // than threaded through as a third parameter to every call site. Omitted from the payload
-  // (rather than sent as an explicit null) when this device has no local opinion on it, for the
-  // same reason id/created_at are omitted above, but for a different failure mode: THIS device's
+  // position/color, round "category ordering + colour" - meta is app.js's categoryMeta map
+  // (keyed the same `name|type` composite as syncedRowKeyOf('categories') below), looked up per
+  // row here rather than threaded through as a third parameter to every call site. Same
+  // omit-don't-null discipline as id/created_at above, but for a different reason: THIS device's
   // categoryMeta can genuinely be stale relative to the cloud (no realtime subscription - only
-  // pulled on login), e.g. device A reorders, device B is still mid-session and later adds an
-  // unrelated category, triggering its own full-list upsert. If device B's payload sent
-  // position:null for every row it doesn't have local meta for, that upload would wipe device A's
-  // already-synced order the instant it lands. Omitting the field instead leaves Postgres to
-  // preserve whatever's already there for a row this device has no opinion on - correct for
-  // genuine staleness, and a no-op when the field really is unset both sides.
+  // pulled on login), e.g. device A reorders/recolours, device B is still mid-session and later
+  // adds an unrelated category, triggering its own full-list upsert. If device B's payload sent
+  // position:null/color:null for every row it doesn't have local meta for, that upload would wipe
+  // device A's already-synced values the instant it lands. Omitting the field instead leaves
+  // Postgres to preserve whatever's already there for a row this device has no opinion on -
+  // correct for genuine staleness, and a no-op when the field really is unset both sides.
   function toCategoryRow(name, type, userId, meta){
     const row = { user_id: userId, name, type };
     if(meta && typeof meta.position==='number') row.position = meta.position;
+    if(meta && meta.color) row.color = meta.color;
     return row;
   }
   function toCategoryRows(categoriesObj, userId, categoryMeta){
@@ -152,7 +152,7 @@
     return rows;
   }
   function fromCategoryRow(r){
-    return { name: r.name, type: r.type, position: r.position };
+    return { name: r.name, type: r.type, position: r.position, color: r.color };
   }
 
   /* ---------- Offline pending-write queue ----------
@@ -607,10 +607,10 @@
     else if(table==='goals'){ row = toGoalRow(localRow, userId); conflictCol = 'id'; recordKey = localRow.id; }
     else if(table==='debts'){ row = toDebtRow(localRow, userId, listName==='receivables'); conflictCol = 'id'; recordKey = localRow.id; }
     else if(table==='dismissed_duplicates'){ row = toDismissedDuplicateRow(userId, localRow); conflictCol = 'user_id,group_key'; recordKey = localRow; }
-    // localRow carries position directly (the caller merges it in from categoryMeta before
-    // calling) rather than this function taking a separate meta parameter - toCategoryRow only
-    // reads .position off whatever object it's handed, so this localRow shape already satisfies
-    // it with no change to toCategoryRow itself.
+    // localRow carries position/color directly (the caller merges them in from categoryMeta
+    // before calling) rather than this function taking a separate meta parameter - toCategoryRow
+    // only reads .position/.color off whatever object it's handed, so this localRow shape already
+    // satisfies it with no change to toCategoryRow itself.
     else if(table==='categories'){ row = toCategoryRow(localRow.name, localRow.type, userId, localRow); conflictCol = 'user_id,name,type'; recordKey = localRow.name+'|'+localRow.type; }
     else return { ok:false };
     try{
@@ -713,9 +713,9 @@
   // this identical to how transactions/debts/goals/accounts already work, rather than a bespoke
   // single-row path just for this table. A removal still needs its own explicit delete (an upsert
   // batch can never remove a row simply by omitting it), matching accounts' add/delete pair.
-  // categoryMeta (position per name|type - see toCategoryRow's own comment) is optional so this
-  // stays a purely additive signature change: no pre-existing caller needs updating just to keep
-  // compiling, though app.js's saveCategories() now always passes it.
+  // categoryMeta (position/color per name|type - see toCategoryRow's own comment) is optional so
+  // this stays a purely additive signature change: no pre-existing caller needs updating just to
+  // keep compiling, though app.js's saveCategories() now always passes it.
   function syncUpsertCategories(userId, categoriesObj, categoryMeta){ return syncOrQueue({ kind:'upsert', table:'categories', rows: toCategoryRows(categoriesObj, userId, categoryMeta) }); }
   function syncDeleteCategory(userId, name, type){ return syncOrQueue({ kind:'delete', table:'categories', match:{ user_id:userId, name, type } }); }
   async function syncBudgets(userId, budgetsObj){
@@ -788,12 +788,15 @@
           expense: mapped.filter(c=>c.type==='debit').map(c=>c.name)
         };
         // Same name|type composite key as app.js's categoryMeta / syncedRowKeyOf('categories') -
-        // only ever set when the row actually carries a position, so a category nobody has ever
-        // reordered simply has no entry here (matching how it never had one locally either),
-        // rather than an entry full of undefined fields.
+        // only ever set when the row actually carries a value, so a category nobody has ever
+        // reordered/recoloured simply has no entry here (matching how it never had one locally
+        // either), rather than an entry full of undefined fields.
         result.categoryMeta = {};
         mapped.forEach(c=>{
-          if(typeof c.position==='number') result.categoryMeta[c.name+'|'+c.type] = { position: c.position };
+          const meta = {};
+          if(typeof c.position==='number') meta.position = c.position;
+          if(c.color) meta.color = c.color;
+          if(Object.keys(meta).length) result.categoryMeta[c.name+'|'+c.type] = meta;
         });
       })
       .catch(e => { result.categoriesError = { table:'categories', code: e.code || null, message: capMessageStr(e.message || String(e)), name: e.name || null, online: navigator.onLine }; });
