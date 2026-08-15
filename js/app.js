@@ -43,7 +43,8 @@
     eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3.2"/>',
     eyeOff: '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.4 21.4 0 0 1 5.06-6.06M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 8 11 8a21.4 21.4 0 0 1-3.22 4.36M14.12 14.12a3.2 3.2 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-    user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
+    user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>'
   };
   function icon(name, size){
     size = size || 18;
@@ -67,6 +68,15 @@
 
   let transactions = [];
   let categories = defaultCategories();
+  // Per-category position (round "category ordering"). Keyed by the same `name|type` composite
+  // the sync layer already uses (type here is the DB value, 'credit'/'debit', not 'income'/
+  // 'expense' - see syncedRowKeyOf('categories') in js/supabase.js), value is `{position?}` -
+  // absent means "not yet set", never "explicitly cleared" (see orderedCategoryNames, which treats
+  // an absent field as alphabetical-fallback territory). Kept as a separate map rather than
+  // folding position onto categories.income/.expense themselves so every existing call site that
+  // treats those as plain name-string arrays (addCategory's .includes() check, budgets[cat]
+  // lookups, the merge in reconcileCategoriesOnFirstContact, ...) stays untouched.
+  let categoryMeta = {};
   let settings = { currency: '₹' };
   let budgets = {};
   // Kept OUTSIDE settings deliberately, and OUTSIDE the permanently-rejected-records marker store
@@ -438,6 +448,32 @@
     return palette[hash % palette.length];
   }
   function categoryInitial(name){ const s=(name||'?').trim(); return (s.charAt(0)||'?').toUpperCase(); }
+  // Display order for a category list (round "category ordering"). Categories carrying an
+  // explicit position (see categoryMeta above) sort by it; anything without one - which today
+  // means EVERY existing row, since position was unused before this round - falls back to
+  // alphabetical rather than raw array/insertion order, so a table SELECT with no ORDER BY (or a
+  // device that simply hasn't dragged anything yet) never surfaces as "random database order".
+  // Positioned rows always sort before unpositioned ones: the only way a list ends up with a MIX
+  // of the two is a genuinely stale device (one that reordered on another device, hasn't pulled
+  // since, and then adds a new category locally - see toCategoryRow's own comment in
+  // js/supabase.js on why that device's upload can't safely assign a position for names it has no
+  // opinion on) - putting the stragglers at the end keeps them visible and immediately draggable,
+  // rather than lost or jumbled mid-list.
+  function orderedCategoryNames(type){
+    const dbType = type==='income' ? 'credit' : 'debit';
+    const names = (categories && Array.isArray(categories[type])) ? categories[type] : [];
+    const positioned = [], unpositioned = [];
+    names.forEach(name=>{
+      const meta = categoryMeta[name+'|'+dbType];
+      if(meta && typeof meta.position==='number') positioned.push(name); else unpositioned.push(name);
+    });
+    positioned.sort((a,b)=>{
+      const pa = categoryMeta[a+'|'+dbType].position, pb = categoryMeta[b+'|'+dbType].position;
+      return (pa-pb) || a.localeCompare(b);
+    });
+    unpositioned.sort((a,b)=> a.localeCompare(b));
+    return [...positioned, ...unpositioned];
+  }
 
   // toLocalDateStr lives in money-math.js, loaded before this file.
   function formatHuman(dateStr){
@@ -501,6 +537,8 @@
   async function loadData(){
     try{ const t = await window.storage.get('transactions'); transactions = t ? JSON.parse(t.value) : []; } catch(e){ transactions = []; }
     try{ const c = await window.storage.get('categories'); categories = c ? JSON.parse(c.value) : defaultCategories(); } catch(e){ categories = defaultCategories(); }
+    try{ const cm = await window.storage.get('categoryMeta'); categoryMeta = cm ? JSON.parse(cm.value) : {}; } catch(e){ categoryMeta = {}; }
+    if(!categoryMeta || typeof categoryMeta !== 'object' || Array.isArray(categoryMeta)) categoryMeta = {};
     try{ const s = await window.storage.get('settings'); settings = s ? JSON.parse(s.value) : { currency:'₹' }; } catch(e){ settings = { currency:'₹' }; }
     try{ const b = await window.storage.get('budgets'); budgets = b ? JSON.parse(b.value) : {}; } catch(e){ budgets = {}; }
     try{ const dbt = await window.storage.get('debts'); debts = dbt ? JSON.parse(dbt.value) : []; } catch(e){ debts = []; }
@@ -643,7 +681,11 @@
   }
   async function saveCategories(){
     try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); }
-    if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories);
+    try{ await window.storage.set('categoryMeta', JSON.stringify(categoryMeta)); } catch(e){ console.error(e); }
+    // Same machinery as every other categories write (add/delete) - reordering just mutates
+    // categoryMeta then calls this same function, so it inherits the offline queue/retry behaviour
+    // for free rather than needing a second sync path.
+    if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMeta);
   }
   async function saveSettings(){ try{ await window.storage.set('settings', JSON.stringify(settings)); } catch(e){ console.error(e); } }
   async function saveRecurring(){ try{ await window.storage.set('recurring', JSON.stringify(recurring)); } catch(e){ console.error(e); } }
@@ -1545,7 +1587,7 @@
 
   function populateEntryCategorySelect(type){
     const sel = document.getElementById('entry-category'); sel.innerHTML='';
-    categories[type].filter(c=> !NON_MANUAL_CATEGORIES.includes(c)).forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
+    orderedCategoryNames(type).filter(c=> !NON_MANUAL_CATEGORIES.includes(c)).forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
   }
   function populateEntryAccountSelect(){
     const sel = document.getElementById('entry-account'); if(!sel) return;
@@ -1771,8 +1813,8 @@
     const sel = document.getElementById('filter-category'); const prev = sel.value;
     sel.innerHTML = '<option value="all">All Categories</option>';
     let list = [];
-    if(type==='income') list = categories.income; else if(type==='expense') list = categories.expense;
-    else list = [...categories.income, ...categories.expense];
+    if(type==='income') list = orderedCategoryNames('income'); else if(type==='expense') list = orderedCategoryNames('expense');
+    else list = [...orderedCategoryNames('income'), ...orderedCategoryNames('expense')];
     list.forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
     if(list.includes(prev)) sel.value = prev;
   }
@@ -1868,8 +1910,8 @@
     const sel = document.getElementById('history-filter-category'); const prev = sel.value;
     sel.innerHTML = '<option value="all">All Categories</option>';
     let list = [];
-    if(type==='income') list = categories.income; else if(type==='expense') list = categories.expense;
-    else list = [...categories.income, ...categories.expense];
+    if(type==='income') list = orderedCategoryNames('income'); else if(type==='expense') list = orderedCategoryNames('expense');
+    else list = [...orderedCategoryNames('income'), ...orderedCategoryNames('expense')];
     list.forEach(c=>{ const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt); });
     if(list.includes(prev)) sel.value = prev;
   }
@@ -2055,7 +2097,7 @@
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
     // Same reasoning as renderBudgetWatchInsights() above - --warning is Black-only.
     const isBlackTheme2 = document.body.getAttribute('data-theme')==='black';
-    categories.expense.forEach(cat=>{
+    orderedCategoryNames('expense').forEach(cat=>{
       const limit = budgets[cat] || 0; const spent = spentMap[cat] || 0;
       const pct = limit>0 ? Math.min(100, spent/limit*100) : 0;
       const over = limit>0 && spent>limit;
@@ -2994,7 +3036,7 @@
   function downloadBackup(){
     settings.lastBackupAt = new Date().toISOString();
     saveSettings();
-    const data = { transactions, categories, settings, budgets, debts, receivables, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
+    const data = { transactions, categories, categoryMeta, settings, budgets, debts, receivables, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
     triggerDownload(JSON.stringify(data, null, 2), `trackr_backup_${toLocalDateStr(new Date())}.json`, 'application/json');
     renderLastBackupNote();
     renderBackupNag();
@@ -3088,6 +3130,11 @@
         }
 
         transactions = data.transactions || []; categories = data.categories || defaultCategories();
+        // A backup taken before this round won't have categoryMeta at all - defaults to {}, same
+        // as a fresh install, meaning every category simply falls back to alphabetical order until
+        // re-dragged. Not a data loss: position was never anything but decoration this round adds
+        // meaning to.
+        categoryMeta = (data.categoryMeta && typeof data.categoryMeta==='object' && !Array.isArray(data.categoryMeta)) ? data.categoryMeta : {};
         settings = data.settings || { currency:'₹' }; budgets = data.budgets || {}; debts = Array.isArray(data.debts) ? data.debts : [];
         receivables = Array.isArray(data.receivables) ? data.receivables : [];
         recurring = Array.isArray(data.recurring) ? data.recurring : []; reminders = Array.isArray(data.reminders) ? data.reminders : [];
@@ -3110,7 +3157,7 @@
         // in this function already does.
         await persistLocalKeys([
           ['transactions', transactions], ['debts', debts], ['receivables', receivables],
-          ['goals', goals], ['budgets', budgets], ['categories', categories], ['settings', settings],
+          ['goals', goals], ['budgets', budgets], ['categories', categories], ['categoryMeta', categoryMeta], ['settings', settings],
           ['recurring', recurring], ['reminders', reminders], ['accounts', accounts],
           ['duplicateDismissals', duplicateDismissals]
         ]);
@@ -3135,7 +3182,7 @@
           // restoring a backup, and the cloud now genuinely holds this exact restored list, so a
           // later cloud pull correctly takes the "already reconciled, replace with cloud" branch
           // rather than re-running a merge against data that no longer needs merging.
-          window.trackrSync.syncUpsertCategories(currentUser.id, categories);
+          window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMeta);
         }
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
@@ -3455,15 +3502,102 @@
 
   function renderCatList(type){
     const container = document.getElementById(type+'-cat-list'); container.innerHTML='';
-    categories[type].forEach(c=>{
+    orderedCategoryNames(type).forEach(c=>{
       const color = categoryColor(c);
-      const row = document.createElement('div'); row.className='cat-row';
-      row.innerHTML = `<span class="cat-row-left"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
+      const row = document.createElement('div'); row.className='cat-row'; row.dataset.type=type; row.dataset.cat=c;
+      row.innerHTML = `<span class="cat-drag-handle" role="button" tabindex="0" aria-label="Drag to reorder ${escapeHtml(c)}">${icon('grip',16)}</span><span class="cat-row-left"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-cat-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteCategory(btn.dataset.type, btn.dataset.cat)));
+    // Per-row pointerdown (rebound fresh on every render, same pattern as .del-cat-btn above -
+    // the row elements themselves are destroyed/recreated by innerHTML='' each render, so there's
+    // nothing to leak). pointermove/pointerup are added to `document` only for the duration of an
+    // actual drag (see onCategoryDragStart) - not bound here - so they survive the pointer moving
+    // outside the handle/container's bounds, which WILL happen mid-drag.
+    container.querySelectorAll('.cat-drag-handle').forEach(handle=> handle.addEventListener('pointerdown', onCategoryDragStart));
   }
   function renderCategoriesView(){ renderCatList('income'); renderCatList('expense'); document.getElementById('currency-input').value = settings.currency; }
+
+  // Drag-to-reorder (Issue 1). Vanilla Pointer Events, not HTML5 drag-and-drop (which has no
+  // built-in touch support) and not long-press-anywhere (the brief explicitly rules this out - on
+  // a 354px touch screen it competes with page scrolling and misfires). Dragging can only START
+  // from .cat-drag-handle, which carries touch-action:none in CSS - once the browser sees the
+  // gesture begin there and the pointer gets captured to it, the browser's own scroll gesture
+  // never engages for the rest of that same touch, even as the finger moves outside the handle's
+  // original screen position. Classic "swap-with-neighbour, compensate the offset" sortable-list
+  // algorithm: the dragged row is visually translateY'd by the running pointer delta, and the
+  // instant its (transform-adjusted) midpoint crosses an immediate neighbour's midpoint, that
+  // neighbour is swapped in the DOM and the translateY is reduced by exactly the neighbour's
+  // height, so the row's ON-SCREEN position never jumps even though its DOM position just changed.
+  let categoryDragState = null;
+  function onCategoryDragStart(e){
+    const handle = e.currentTarget;
+    const row = handle.closest('.cat-row'); if(!row) return;
+    const container = row.parentElement; if(!container) return;
+    e.preventDefault();
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    row.classList.add('cat-row-dragging');
+    categoryDragState = { row, container, type: row.dataset.type, pointerId: e.pointerId, lastY: e.clientY, offsetY: 0 };
+    document.addEventListener('pointermove', onCategoryDragMove);
+    document.addEventListener('pointerup', onCategoryDragEnd);
+    document.addEventListener('pointercancel', onCategoryDragEnd);
+  }
+  function onCategoryDragMove(e){
+    const st = categoryDragState;
+    if(!st || e.pointerId!==st.pointerId) return;
+    const dy = e.clientY - st.lastY; st.lastY = e.clientY; st.offsetY += dy;
+    st.row.style.transform = `translateY(${st.offsetY}px)`;
+    let sib = st.offsetY>0 ? st.row.nextElementSibling : st.row.previousElementSibling;
+    while(sib){
+      const sibRect = sib.getBoundingClientRect();
+      const dragRect = st.row.getBoundingClientRect();
+      const dragMid = dragRect.top + dragRect.height/2;
+      const sibMid = sibRect.top + sibRect.height/2;
+      if(st.offsetY>0 && dragMid > sibMid){
+        st.container.insertBefore(st.row, sib.nextElementSibling);
+        st.offsetY -= sibRect.height;
+        st.row.style.transform = `translateY(${st.offsetY}px)`;
+        sib = st.row.nextElementSibling;
+      } else if(st.offsetY<0 && dragMid < sibMid){
+        st.container.insertBefore(st.row, sib);
+        st.offsetY += sibRect.height;
+        st.row.style.transform = `translateY(${st.offsetY}px)`;
+        sib = st.row.previousElementSibling;
+      } else break;
+    }
+  }
+  function onCategoryDragEnd(e){
+    const st = categoryDragState;
+    if(!st || e.pointerId!==st.pointerId) return;
+    st.row.classList.remove('cat-row-dragging');
+    st.row.style.transform = '';
+    document.removeEventListener('pointermove', onCategoryDragMove);
+    document.removeEventListener('pointerup', onCategoryDragEnd);
+    document.removeEventListener('pointercancel', onCategoryDragEnd);
+    categoryDragState = null;
+    const orderedNames = [...st.container.querySelectorAll('.cat-row')].map(r=>r.dataset.cat);
+    persistCategoryOrder(st.type, orderedNames);
+  }
+  // Assigns fresh sequential positions (0..n-1) to the WHOLE list in its new order, credit and
+  // debit numbered independently - this is also how the very FIRST reorder for a list is handled:
+  // before this call every row in that list is "unpositioned" (orderedCategoryNames's alphabetical
+  // fallback), and this one call transitions the entire list straight to "fully positioned" in a
+  // single step, seeded from whatever order the user just dropped it in - not from the alphabetical
+  // order it displayed a moment before. No incremental diffing needed since every row's position is
+  // rewritten unconditionally.
+  async function persistCategoryOrder(type, orderedNames){
+    const dbType = type==='income' ? 'credit' : 'debit';
+    orderedNames.forEach((name, i)=>{
+      const key = name+'|'+dbType;
+      categoryMeta[key] = { ...(categoryMeta[key]||{}), position: i };
+    });
+    await saveCategories();
+    renderCatList(type);
+    populateEntryCategorySelect(document.getElementById('entry-type').value);
+    populateFilterCategorySelect(document.getElementById('filter-type').value);
+    populateHistoryFilterCategorySelect(document.getElementById('history-filter-type').value);
+    if(type==='expense') renderBudgetSetList();
+  }
   function addCategory(type, name){
     name = (name||'').trim(); if(!name) return;
     const exists = categories[type].some(c=>c.toLowerCase()===name.toLowerCase());
@@ -3477,7 +3611,13 @@
   }
   function deleteCategory(type, name){
     if(!confirm(`Remove "${name}" from ${type} categories? Past entries will keep this category label.`)) return;
-    categories[type] = categories[type].filter(c=>c!==name); saveCategories();
+    categories[type] = categories[type].filter(c=>c!==name);
+    // Drops any stale position this category held - harmless either way (orderedCategoryNames
+    // only ever reads an entry for a name still present in categories[type]), but avoids a
+    // re-added category of the same name silently inheriting an old position from before it was
+    // deleted.
+    delete categoryMeta[name+'|'+(type==='income' ? 'credit' : 'debit')];
+    saveCategories();
     // An upsert batch (saveCategories, above) can never remove a row just by omitting it - this
     // explicit delete is what actually removes it server-side, same shape as deleteAccount's own
     // saveAccounts()-then-syncDeleteAccount() pair.
@@ -3664,7 +3804,7 @@
   // separate step keyed off "local storage is empty", the exact shape of the original bug -
   // it runs (indirectly, as this merge's natural outcome) only when the ACCOUNT genuinely has
   // nothing server-side yet.
-  async function reconcileCategoriesOnFirstContact(userId, cloudCategories){
+  async function reconcileCategoriesOnFirstContact(userId, cloudCategories, cloudCategoryMeta){
     const cloudIncomeLower = new Set(cloudCategories.income.map(n=> n.trim().toLowerCase()));
     const cloudExpenseLower = new Set(cloudCategories.expense.map(n=> n.trim().toLowerCase()));
     const mergedIncome = [...cloudCategories.income];
@@ -3672,10 +3812,19 @@
     categories.income.forEach(name=>{ if(!cloudIncomeLower.has(name.trim().toLowerCase())) mergedIncome.push(name); });
     categories.expense.forEach(name=>{ if(!cloudExpenseLower.has(name.trim().toLowerCase())) mergedExpense.push(name); });
     categories = { income: mergedIncome, expense: mergedExpense };
+    // Folds the cloud's position into local BEFORE this device's own upload below - critical for
+    // toCategoryRow's omit-don't-null discipline (see its own comment in js/supabase.js): if this
+    // device uploaded without first learning whatever position another device already set, its
+    // payload would simply omit that field for every row it has no local opinion on, which is
+    // safe... but only IF this merge has already folded the cloud's real values in first. Local
+    // values win on an actual key collision (shouldn't happen - this device's own categoryMeta
+    // entries only exist for names IT already knows about) purely as a deterministic tie-break.
+    categoryMeta = { ...(cloudCategoryMeta||{}), ...categoryMeta };
     // Persisted locally regardless of upload outcome below - this device's own merged view is
     // correct either way, and re-computing the same merge on a retry is what keeps a failed
     // upload's eventual retry idempotent (see the ok-gate immediately below).
     try{ await window.storage.set('categories', JSON.stringify(categories)); }catch(e){ console.error(e); }
+    try{ await window.storage.set('categoryMeta', JSON.stringify(categoryMeta)); }catch(e){ console.error(e); }
     // The flag is only set on a CONFIRMED successful upsert - awaiting and checking .ok, not
     // fire-and-forget. syncUpsertCategories resolves {ok:true} regardless of whether the upload
     // was queued (offline) or permanently rejected (migration not yet applied, RLS/GRANT wrong) -
@@ -3686,7 +3835,7 @@
     // retries this same merge - safe and idempotent, since `categories` in memory/local storage
     // already reflects the merged result computed above, so a retry re-attempts the same upload
     // rather than re-deriving a different merge.
-    const result = await window.trackrSync.syncUpsertCategories(userId, categories);
+    const result = await window.trackrSync.syncUpsertCategories(userId, categories, categoryMeta);
     if(result && result.ok){
       categoriesReconciledOnce[userId] = true;
       try{ await window.storage.set('categoriesReconciledOnce', JSON.stringify(categoriesReconciledOnce)); }catch(e){}
@@ -4877,7 +5026,10 @@
             if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
             continue;
           }
-          const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type }, currentUser.id);
+          // Merges in position from local categoryMeta - retryPermanentWrite's categories branch
+          // reads it straight off this object (see its own comment in js/supabase.js).
+          const meta = categoryMeta[name+'|'+type] || {};
+          const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type, position: meta.position }, currentUser.id);
           if(result && result.ok){
             diagLogPage('page:permanently-rejected-recovered', { table:'categories', id: entry.id });
             if(window.trackrSync.clearPermanentlyRejectedRecord) await window.trackrSync.clearPermanentlyRejectedRecord('categories', entry.id);
@@ -5742,13 +5894,19 @@
           // See reconcileCategoriesOnFirstContact's own comment. Persists and pushes internally,
           // so deliberately NOT added to toPersist below (would just redundantly re-write the same
           // key with the same value).
-          await reconcileCategoriesOnFirstContact(currentUser.id, cloud.categories);
+          await reconcileCategoriesOnFirstContact(currentUser.id, cloud.categories, cloud.categoryMeta);
         } else {
           // Falls back to defaults rather than leaving the Add Entry category picker with
           // literally nothing selectable - shouldn't normally happen once reconciled, but a
           // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
           categories = (cloud.categories.income.length || cloud.categories.expense.length) ? cloud.categories : defaultCategories();
+          // Cloud replaces local outright, same as `categories` itself on this branch - once
+          // reconciled, the cloud is authoritative for position too, so a stale local categoryMeta
+          // (e.g. left over from hardClearAllLocalDataNoSync's logout reset, which doesn't touch
+          // this map) never lingers past the next real login.
+          categoryMeta = cloud.categoryMeta || {};
           toPersist.push(['categories', categories]);
+          toPersist.push(['categoryMeta', categoryMeta]);
         }
       }
       else if(cloud.categoriesError){

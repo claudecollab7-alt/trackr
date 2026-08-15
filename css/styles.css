@@ -635,8 +635,20 @@
   .cat-columns{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
   .cat-col{ flex:1; min-width:260px; }
   .cat-col h3{ font-size:14.5px; margin-top:0; margin-bottom:14px; font-weight:800; }
-  .cat-row{ display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--bg); font-size:13.5px; }
-  .cat-row-left{ display:flex; align-items:center; gap:10px; }
+  /* Round "category ordering": a third child (.cat-drag-handle) joins .cat-row-left and the
+     delete button - space-between with a middle child that doesn't grow would leave uneven gaps
+     either side of it, so .cat-row-left instead takes flex:1 to fill the remaining width, keeping
+     the handle pinned left and the delete button pinned right without needing justify-content at
+     all. */
+  .cat-row{ display:flex; align-items:center; gap:6px; padding:9px 0; border-bottom:1px solid var(--bg); font-size:13.5px; position:relative; }
+  .cat-row.cat-row-dragging{ position:relative; z-index:5; background:var(--card); box-shadow:var(--shadow-sm); border-radius:10px; }
+  .cat-row-left{ display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+  /* touch-action:none is what actually solves the brief's "long-press competes with page
+     scrolling" complaint: the browser only ever hands a touch gesture to its own scroll handling
+     OR to this element's pointer events, decided the instant the gesture starts on this element -
+     dragging can only ever begin here, never from a long-press anywhere else on the row. */
+  .cat-drag-handle{ display:flex; align-items:center; justify-content:center; width:32px; height:32px; flex-shrink:0; color:var(--ink-soft); cursor:grab; touch-action:none; -webkit-user-select:none; user-select:none; }
+  .cat-drag-handle:active{ cursor:grabbing; }
   .cat-col form{ display:flex; gap:8px; margin-top:14px; }
   .cat-col form input{ flex:1; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); }
   .cat-col form button{ background:var(--binder); color:#FFFFFF; border:none; padding:9px 16px; border-radius:10px; font-weight:700; font-size:13px; }
