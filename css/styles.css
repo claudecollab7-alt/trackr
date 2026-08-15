@@ -74,6 +74,15 @@
     font-family:'Inter',system-ui,sans-serif;
     color:var(--ink);
     background:var(--bg);
+    /* Issue 2 (round 6): tells the browser which palette its OWN native controls should render
+       in - the number input's up/down spinner, a date input's calendar icon/text, a <select>'s
+       dropdown panel, and scrollbars are all drawn by the browser/OS, not by this app's CSS, and
+       default to assuming a light page unless told otherwise. Light IS light, so this is the
+       explicit default; Dark/Crimson/Black each override it to `dark` in their own theme block
+       below (light-on-dark instead of light-on-light for those same native widgets). Deliberately
+       the ONLY property this round's Issue 2 touches - no positioning/overflow/safe-area rule
+       anywhere is affected by it. */
+    color-scheme:light;
     display:flex;
     /* 100vh is a well-documented iOS Safari trap: it resolves to the LARGEST possible viewport -
        chrome (address bar/toolbar) fully collapsed - not the currently-visible one. Since the
@@ -644,6 +653,7 @@
 
   /* ---------- Dark mode ---------- */
   body[data-theme="dark"]{
+    color-scheme:dark;
     --bg:#0B1220;
     --card:#141B2D;
     --ink:#E8ECF6;
@@ -716,6 +726,7 @@
        .spine/.bottom-nav/.topbar, .icon-circle, and the handful of .card-glass hero cards) rather
        than spreading blur across scrollable list content. */
   body[data-theme="crimson"]{
+    color-scheme:dark;
     --bg:#1E1E27;
     --card:#28242A;
     --ink:#E2E2E2;
@@ -811,6 +822,7 @@
      when the token's lightness flips" pattern Dark/Crimson already use for .btn-debit (see line
      ~695/767 above), just applied to the primary-button token instead of the debit one. */
   body[data-theme="black"]{
+    color-scheme:dark;
     --bg:#000000;
     --card:#121212;
     --ink:#FFFFFF;
