@@ -669,6 +669,32 @@
   .swatch-btn.swatch-taken{ opacity:.32; cursor:not-allowed; }
   .swatch-btn:disabled{ cursor:not-allowed; }
 
+  /* Desktop-only scrollbar treatment for the colour picker, same breakpoint and pattern
+     #schedule-overlay's own desktop block already uses further down this file. Mobile's overlay
+     scroll (touch, ephemeral, non-reserving-width) never showed either problem this fixes, so
+     both rules are scoped inside this same min-width:781px block and nothing changes below it.
+     a) padding-right on the scroll container - not on .swatch-grid itself - opens a gap between
+        the swatches and the track/thumb without needing to also compensate the grid's own width
+        (padding on the SCROLLING element shifts its content box, .swatch-grid included, without
+        the grid needing any size math of its own).
+     b) color-scheme:dark (set globally per theme in an earlier round, and staying) makes Dark/
+        Black/Crimson's browser-default scrollbar draw a visible track - Light's color-scheme:light
+        default track already renders invisible, which is the look this matches everywhere.
+        scrollbar-color's track keyword and ::-webkit-scrollbar-track are both set to transparent
+        for the same reason #schedule-overlay's desktop block already sets both: which one
+        actually paints depends on the engine, and setting only one leaves the other browser
+        family showing the unwanted track. */
+  @media (min-width:781px){
+    #color-picker-overlay .search-overlay-body{
+      padding-right:10px;
+      scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+    }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar{ width:8px; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
+  }
+
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
   .settings-row label{ font-size:13px; color:var(--ink-soft); font-weight:700; }
   .settings-row input{ margin-left:8px; padding:7px 9px; border:1.5px solid var(--line); border-radius:8px; width:3.5em; background:var(--bg); }
