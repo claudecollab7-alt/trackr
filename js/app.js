@@ -159,7 +159,7 @@
   // palette instead of three theme-scoped ones. So this round retires CAT_PALETTE/
   // CAT_PALETTE_CRIMSON and promotes the OKLCH approach (already proven across rounds 3-5) to run
   // under every theme, expanded from 24 to 36 swatches: 18 hues at 20 degrees apart, each at two
-  // lightness tiers, oklch(0.72 0.13 H) and oklch(0.60 0.13 H) - the exact swatch set the colour
+  // lightness tiers, oklch(0.72 0.13 H) and oklch(0.65 0.13 H) - the exact swatch set the colour
   // picker's grid shows (see renderColorPickerGrid). Every existing Light/Dark/Crimson category
   // will visibly get a new colour as a result - expected and accepted, not a bug; only a
   // MANUALLY-picked colour is required to never shift (see assignAutoCategorySlots below).
@@ -183,15 +183,17 @@
   // to reach every renderer.
   const CAT_SWATCH_CHROMA = 0.13;
   const CAT_SWATCH_TIER_HIGH = 0.72;
-  // Round 3 tried this exact low-tier value (0.60) and moved it to 0.65 after sampling found only
-  // 4.65:1 worst-case contrast against the fixed near-black avatar letter (#0B0B0B) - too thin a
-  // margin at the time. This round's brief specifies 0.60 explicitly again (a picker grid needs its
-  // two tiers to read as visibly different lightness side by side), so it's implemented exactly as
-  // specified - recomputed worst-case contrast against #0B0B0B this round is 4.64:1 (see the PR),
-  // which clears WCAG AA's 4.5:1 floor for normal-size text but only just. Flagged here and in the
-  // PR rather than silently re-raised back to 0.65, since the brief's own formula is explicit and
-  // this is the number that formula actually produces.
-  const CAT_SWATCH_TIER_LOW = 0.60;
+  // FIX (post-review): the brief originally specified 0.60 here, which Round 3 had already tried
+  // and moved away from for the same 36/24-swatch-set reason - 0.60 recomputes to 4.64:1 worst-case
+  // contrast against the fixed near-black avatar letter (#0B0B0B), clearing WCAG AA's 4.5:1 floor
+  // by under 3%. Restored to 0.65, the exact value Round 3 settled on, which recomputes to 5.68:1
+  // against this round's 18-hue/36-swatch set - real margin, not a hair above the floor. Sampled
+  // 0.68/0.70 too: both push the number higher still (6.39:1 / 6.93:1) but shrink the SAME-HUE
+  // high/low tier's own visual gap - minimum relative-luminance delta between a hue's two tiers
+  // drops from 0.093 at 0.65 to 0.056 at 0.68 and 0.028 at 0.70, i.e. the two tiers at the same hue
+  // start reading as one colour rather than two. 0.65 was picked specifically to avoid trading the
+  // contrast problem for a tier-distinguishability one.
+  const CAT_SWATCH_TIER_LOW = 0.65;
   // Standard OKLCH -> OKLab -> linear sRGB -> sRGB conversion (Björn Ottosson's reference
   // matrices, the same ones the CSS Color 4 spec and every browser's native oklch() parser use -
   // confirmed to match this browser's own conversion pixel-for-pixel, see above).
@@ -290,7 +292,7 @@
   // an inline HTML style attribute, so the browser's own cascade resolves the custom property at
   // render time; no JS-held copy of #0B0B0B exists anywhere. Previously Black-only (every other
   // theme's badge fell back to the CSS default, white) - now every swatch in CAT_SWATCHES sits at
-  // chroma 0.13 and lightness >=0.60, sampled and confirmed legible at its worst case (see
+  // chroma 0.13 and lightness >=0.65, sampled and confirmed legible at its worst case (see
   // CAT_SWATCH_TIER_LOW's own comment) against the same fixed near-black glyph colour, so
   // --avatar-letter is promoted to a global token (css/styles.css's :root block) and used
   // unconditionally here, for every theme.
