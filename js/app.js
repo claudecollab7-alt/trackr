@@ -69,16 +69,36 @@
 
   let transactions = [];
   let categories = defaultCategories();
-  // Per-category position/colour, round "category ordering + colour". Keyed by the same
-  // `name|type` composite the sync layer already uses (type here is the DB value, 'credit'/
-  // 'debit', not 'income'/'expense' - see syncedRowKeyOf('categories') in js/supabase.js), value
-  // is `{position?, color?}` - either field may be absent (see orderedCategoryNames/categoryColor,
-  // which both treat an absent field as "not yet set", never as "explicitly cleared"). Kept as a
-  // separate map rather than folding position/color onto categories.income/.expense themselves so
-  // every existing call site that treats those as plain name-string arrays (addCategory's
-  // .includes() check, budgets[cat] lookups, the merge in reconcileCategoriesOnFirstContact, ...)
-  // stays untouched.
+  // Per-category position/colour, round "category ordering + colour". FIX (post-review): this
+  // must be scoped per account, the same way duplicateDismissals already is (see
+  // duplicateDismissalScopeKey below) - categories itself resets to defaultCategories() on logout
+  // (hardClearAllLocalDataNoSync), which is what stops a previous account's customized category
+  // NAMES leaking into whoever logs in next on the same device, but categoryMeta was never added
+  // to that reset, and this round's constraints explicitly rule out touching
+  // hardClearAllLocalDataNoSync() to fix that a second way. Scoping the data itself instead means
+  // a device that goes user A -> logout -> user B (first login ever on this device) genuinely
+  // cannot read user A's leftover positions/colours: user B's own reconcile only ever looks at
+  // categoryMeta['__local__'] (this device's own pre-login/guest edits, if any) and
+  // categoryMeta[userB.id] (initially empty), never categoryMeta[userA.id] - a completely
+  // different top-level key it has no reason to touch. Shape is now
+  // `{ [accountIdOrLocal]: { 'name|type': {position?, color?} } }` - the in-memory variable holds
+  // EVERY scope at once (mirrors duplicateDismissals precisely), and every read/write site below
+  // goes through categoryMetaBucket()/ensureCategoryMetaBucket() for the CURRENT scope only, never
+  // touching the object directly.
   let categoryMeta = {};
+  // Mirrors duplicateDismissalScopeKey's own reasoning exactly (see that function) - '__local__'
+  // for guest/offline use, the signed-in account's id otherwise.
+  function categoryMetaScopeKey(){ return currentUser ? currentUser.id : '__local__'; }
+  // Read-only - returns the current scope's bucket, or {} if it doesn't exist yet, WITHOUT
+  // creating it (so a read in a hot render path can never leave behind a stray empty bucket).
+  function categoryMetaBucket(){ return categoryMeta[categoryMetaScopeKey()] || {}; }
+  // For writes only - creates the current scope's bucket on first use, same as duplicateDismissals'
+  // own write sites do (`if(!duplicateDismissals[scope]) duplicateDismissals[scope] = {};`).
+  function ensureCategoryMetaBucket(){
+    const scope = categoryMetaScopeKey();
+    if(!categoryMeta[scope]) categoryMeta[scope] = {};
+    return categoryMeta[scope];
+  }
   let settings = { currency: '₹' };
   let budgets = {};
   // Kept OUTSIDE settings deliberately, and OUTSIDE the permanently-rejected-records marker store
@@ -232,7 +252,7 @@
   // user deliberately chose.
   function manuallyClaimedSwatchHexes(){
     const set = new Set();
-    Object.values(categoryMeta).forEach(m=>{ if(m && m.color) set.add(m.color); });
+    Object.values(categoryMetaBucket()).forEach(m=>{ if(m && m.color) set.add(m.color); });
     return set;
   }
   // Looks up name's own manual colour, if it has one. A name can only appear in categoryMeta under
@@ -244,7 +264,7 @@
     const inExpense = (categories && Array.isArray(categories.expense)) ? categories.expense.includes(name) : false;
     const dbType = inIncome ? 'credit' : (inExpense ? 'debit' : null);
     if(!dbType) return null;
-    const meta = categoryMeta[name+'|'+dbType];
+    const meta = categoryMetaBucket()[name+'|'+dbType];
     return (meta && meta.color) ? meta.color : null;
   }
   // Assigns from a SINGLE shared pool spanning credit+debit (see the round 5 history above),
@@ -484,13 +504,14 @@
   function orderedCategoryNames(type){
     const dbType = type==='income' ? 'credit' : 'debit';
     const names = (categories && Array.isArray(categories[type])) ? categories[type] : [];
+    const bucket = categoryMetaBucket();
     const positioned = [], unpositioned = [];
     names.forEach(name=>{
-      const meta = categoryMeta[name+'|'+dbType];
+      const meta = bucket[name+'|'+dbType];
       if(meta && typeof meta.position==='number') positioned.push(name); else unpositioned.push(name);
     });
     positioned.sort((a,b)=>{
-      const pa = categoryMeta[a+'|'+dbType].position, pb = categoryMeta[b+'|'+dbType].position;
+      const pa = bucket[a+'|'+dbType].position, pb = bucket[b+'|'+dbType].position;
       return (pa-pb) || a.localeCompare(b);
     });
     unpositioned.sort((a,b)=> a.localeCompare(b));
@@ -703,11 +724,14 @@
   }
   async function saveCategories(){
     try{ await window.storage.set('categories', JSON.stringify(categories)); } catch(e){ console.error(e); }
+    // Persists every scope's bucket (harmless - a scope this device isn't currently signed in as
+    // just sits there inert, exactly like duplicateDismissals already does), but only ever
+    // SYNCS the current scope's own bucket below - never another account's.
     try{ await window.storage.set('categoryMeta', JSON.stringify(categoryMeta)); } catch(e){ console.error(e); }
     // Same machinery as every other categories write (add/delete) - reorder and colour-pick both
     // just mutate categoryMeta then call this same function, so they inherit the offline queue/
     // retry behaviour for free rather than needing a second sync path.
-    if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMeta);
+    if(currentUser) window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMetaBucket());
   }
   async function saveSettings(){ try{ await window.storage.set('settings', JSON.stringify(settings)); } catch(e){ console.error(e); } }
   async function saveRecurring(){ try{ await window.storage.set('recurring', JSON.stringify(recurring)); } catch(e){ console.error(e); } }
@@ -3058,7 +3082,10 @@
   function downloadBackup(){
     settings.lastBackupAt = new Date().toISOString();
     saveSettings();
-    const data = { transactions, categories, categoryMeta, settings, budgets, debts, receivables, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
+    // Only the CURRENT scope's own bucket, never the whole multi-account categoryMeta object - a
+    // backup file is this account's data; it must not carry another account's leftover
+    // positions/colours that might still be sitting inert in this device's storage.
+    const data = { transactions, categories, categoryMeta: categoryMetaBucket(), settings, budgets, debts, receivables, recurring, reminders, goals, accounts, exportedAt: new Date().toISOString() };
     triggerDownload(JSON.stringify(data, null, 2), `trackr_backup_${toLocalDateStr(new Date())}.json`, 'application/json');
     renderLastBackupNote();
     renderBackupNag();
@@ -3156,7 +3183,13 @@
         // as a fresh install, meaning every category simply falls back to auto colour/alphabetical
         // order until re-dragged/re-picked. Not a data loss: position/colour were never anything
         // but decoration this round adds meaning to.
-        categoryMeta = (data.categoryMeta && typeof data.categoryMeta==='object' && !Array.isArray(data.categoryMeta)) ? data.categoryMeta : {};
+        //
+        // Written into ONLY this account's own scope (see categoryMetaScopeKey's own comment) -
+        // never a wholesale replace of the whole categoryMeta object, which would blow away any
+        // OTHER account's bucket that happens to still be sitting inert in this device's storage.
+        // A backup file's categoryMeta is already flat (just the exporting account's own bucket -
+        // see downloadBackup), so it's written straight in with no unwrapping needed.
+        categoryMeta[categoryMetaScopeKey()] = (data.categoryMeta && typeof data.categoryMeta==='object' && !Array.isArray(data.categoryMeta)) ? data.categoryMeta : {};
         settings = data.settings || { currency:'₹' }; budgets = data.budgets || {}; debts = Array.isArray(data.debts) ? data.debts : [];
         receivables = Array.isArray(data.receivables) ? data.receivables : [];
         recurring = Array.isArray(data.recurring) ? data.recurring : []; reminders = Array.isArray(data.reminders) ? data.reminders : [];
@@ -3204,7 +3237,7 @@
           // restoring a backup, and the cloud now genuinely holds this exact restored list, so a
           // later cloud pull correctly takes the "already reconciled, replace with cloud" branch
           // rather than re-running a merge against data that no longer needs merging.
-          window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMeta);
+          window.trackrSync.syncUpsertCategories(currentUser.id, categories, categoryMetaBucket());
         }
         populateEntryCategorySelect(document.getElementById('entry-type').value);
         populateEntryAccountSelect();
@@ -3615,9 +3648,10 @@
   // rewritten unconditionally.
   async function persistCategoryOrder(type, orderedNames){
     const dbType = type==='income' ? 'credit' : 'debit';
+    const bucket = ensureCategoryMetaBucket();
     orderedNames.forEach((name, i)=>{
       const key = name+'|'+dbType;
-      categoryMeta[key] = { ...(categoryMeta[key]||{}), position: i };
+      bucket[key] = { ...(bucket[key]||{}), position: i };
     });
     await saveCategories();
     renderCatList(type);
@@ -3636,12 +3670,13 @@
   // History mixes credit and debit, which is where a collision would actually be seen).
   function categoryColorTakenMap(excludeKey){
     const map = new Map();
+    const bucket = categoryMetaBucket();
     ['income','expense'].forEach(t=>{
       const dbType = t==='income' ? 'credit' : 'debit';
       (categories[t]||[]).forEach(name=>{
         const key = name+'|'+dbType;
         if(key===excludeKey) return;
-        const meta = categoryMeta[key];
+        const meta = bucket[key];
         if(meta && meta.color) map.set(meta.color, { type:t, name });
       });
     });
@@ -3650,7 +3685,8 @@
   function renderColorPickerGrid(type, name){
     const dbType = type==='income' ? 'credit' : 'debit';
     const key = name+'|'+dbType;
-    const currentColor = categoryMeta[key] && categoryMeta[key].color;
+    const currentMeta = categoryMetaBucket()[key];
+    const currentColor = currentMeta && currentMeta.color;
     const taken = categoryColorTakenMap(key);
     const grid = document.getElementById('color-picker-grid'); grid.innerHTML='';
     CAT_SWATCHES.forEach(sw=>{
@@ -3679,7 +3715,8 @@
   async function selectCategoryColor(type, name, hex){
     const dbType = type==='income' ? 'credit' : 'debit';
     const key = name+'|'+dbType;
-    categoryMeta[key] = { ...(categoryMeta[key]||{}), color: hex };
+    const bucket = ensureCategoryMetaBucket();
+    bucket[key] = { ...(bucket[key]||{}), color: hex };
     await saveCategories();
     renderCatList(type);
     refreshAll();
@@ -3704,7 +3741,7 @@
     // happens to pull the delete), and since this map is purely local metadata about a row that's
     // about to stop existing server-side too (see syncDeleteCategory below), there's nothing to
     // separately "un-sync" here.
-    delete categoryMeta[name+'|'+(type==='income' ? 'credit' : 'debit')];
+    delete ensureCategoryMetaBucket()[name+'|'+(type==='income' ? 'credit' : 'debit')];
     saveCategories();
     // An upsert batch (saveCategories, above) can never remove a row just by omitting it - this
     // explicit delete is what actually removes it server-side, same shape as deleteAccount's own
@@ -3900,14 +3937,21 @@
     categories.income.forEach(name=>{ if(!cloudIncomeLower.has(name.trim().toLowerCase())) mergedIncome.push(name); });
     categories.expense.forEach(name=>{ if(!cloudExpenseLower.has(name.trim().toLowerCase())) mergedExpense.push(name); });
     categories = { income: mergedIncome, expense: mergedExpense };
-    // Folds the cloud's position/color into local BEFORE this device's own upload below - critical
-    // for toCategoryRow's omit-don't-null discipline (see its own comment in js/supabase.js): if
-    // this device uploaded without first learning whatever position/colour another device already
-    // set, its payload would simply omit those fields for every row it has no local opinion on,
-    // which is safe... but only IF this merge has already folded the cloud's real values in first.
-    // Local values win on an actual key collision (shouldn't happen - this device's own categoryMeta
-    // entries only exist for names IT already knows about) purely as a deterministic tie-break.
-    categoryMeta = { ...(cloudCategoryMeta||{}), ...categoryMeta };
+    // FIX (post-review): only this device's own '__local__' scope (pre-login/guest-mode edits, if
+    // any) is eligible to fold into a fresh account's first sync - NEVER the bare shared variable,
+    // which on a device previously used by a DIFFERENT account could still be holding that other
+    // account's own bucket. categoryMeta is scoped per account now (see categoryMetaScopeKey's own
+    // comment on why: a device that goes account A -> logout -> account B, first login ever, must
+    // not let B's reconcile read A's positions/colours at all - not "usually doesn't", genuinely
+    // cannot, since they live under different top-level keys). The merged result is written into
+    // categoryMeta[userId] specifically, same as `categories` above conceptually becoming "this
+    // account's own" - cloud values win on any key collision (mirrors how the category-NAME merge
+    // above already lets the cloud's own casing win for a name it already has); local only fills in
+    // keys the cloud doesn't have an opinion on yet, i.e. genuinely new local-only entries.
+    const localGuestMeta = categoryMeta['__local__'] || {};
+    const mergedMeta = { ...(cloudCategoryMeta||{}) };
+    Object.keys(localGuestMeta).forEach(key=>{ if(!(key in mergedMeta)) mergedMeta[key] = localGuestMeta[key]; });
+    categoryMeta[userId] = mergedMeta;
     // Persisted locally regardless of upload outcome below - this device's own merged view is
     // correct either way, and re-computing the same merge on a retry is what keeps a failed
     // upload's eventual retry idempotent (see the ok-gate immediately below).
@@ -3922,8 +3966,10 @@
     // earlier wallet-reseed bug. Leaving the flag unset on failure means the next contact simply
     // retries this same merge - safe and idempotent, since `categories` in memory/local storage
     // already reflects the merged result computed above, so a retry re-attempts the same upload
-    // rather than re-deriving a different merge.
-    const result = await window.trackrSync.syncUpsertCategories(userId, categories, categoryMeta);
+    // rather than re-deriving a different merge (categoryMeta[userId] is likewise recomputed the
+    // same way each retry, purely from cloudCategoryMeta + '__local__', so it reproduces
+    // identically rather than drifting).
+    const result = await window.trackrSync.syncUpsertCategories(userId, categories, categoryMeta[userId]);
     if(result && result.ok){
       categoriesReconciledOnce[userId] = true;
       try{ await window.storage.set('categoriesReconciledOnce', JSON.stringify(categoriesReconciledOnce)); }catch(e){}
@@ -5116,7 +5162,7 @@
           }
           // Merges in position/color from local categoryMeta - retryPermanentWrite's categories
           // branch reads them straight off this object (see its own comment in js/supabase.js).
-          const meta = categoryMeta[name+'|'+type] || {};
+          const meta = categoryMetaBucket()[name+'|'+type] || {};
           const result = await window.trackrSync.retryPermanentWrite('categories', null, { name, type, position: meta.position, color: meta.color }, currentUser.id);
           if(result && result.ok){
             diagLogPage('page:permanently-rejected-recovered', { table:'categories', id: entry.id });
@@ -5991,12 +6037,12 @@
           // literally nothing selectable - shouldn't normally happen once reconciled, but a
           // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
           categories = (cloud.categories.income.length || cloud.categories.expense.length) ? cloud.categories : defaultCategories();
-          // Cloud replaces local outright, same as `categories` itself on this branch - once
-          // reconciled, the cloud is authoritative for position/colour too, so a stale local
-          // categoryMeta (e.g. left over from hardClearAllLocalDataNoSync's logout reset, which
-          // doesn't touch this map - see its own file-level disclosure) never lingers past the
-          // next real login.
-          categoryMeta = cloud.categoryMeta || {};
+          // Cloud replaces THIS ACCOUNT'S OWN scope outright, same as `categories` itself on this
+          // branch - once reconciled, the cloud is authoritative for position/colour too. Only
+          // categoryMeta[currentUser.id] is touched - any other account's bucket that might still
+          // be sitting in this device's storage (see categoryMetaScopeKey's own comment) is left
+          // completely alone, never read or overwritten by this login.
+          categoryMeta[currentUser.id] = cloud.categoryMeta || {};
           toPersist.push(['categories', categories]);
           toPersist.push(['categoryMeta', categoryMeta]);
         }
