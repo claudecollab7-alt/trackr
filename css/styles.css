@@ -369,7 +369,22 @@
      within (materially wider than being squeezed alongside a full-width date), and the date
      ALWAYS renders in full, on whichever line it ends up on. */
   .activity-sub{ display:flex; flex-wrap:wrap; align-items:baseline; column-gap:5px; font-size:11.5px; color:var(--ink-soft); margin-top:1px; max-width:100%; min-width:0; }
-  .activity-sub-note{ flex:1 1 90px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* flex-grow was 1 here until this round - it let the note's box stretch to fill all remaining
+     space in its flex container whenever the note's own text was short (most visibly the "Debit"/
+     "Credit" type-label fallback for a note-less entry), dragging the "·" separator and the date
+     span after it far to the right without ever triggering flex-wrap (the row's total content
+     still nominally fit one line, so nothing wrapped - it just left a large invisible gap). Fixed
+     at the source (flex:0 1 auto) rather than per-view: this exact defect, exact cause, and exact
+     fix value were already found and proven correct once before, but scoped narrowly to Black
+     theme's History rows only (see the removed body[data-theme="black"] .history-row override
+     this replaces) "consistent with every round's convention of never touching Light/Dark/Crimson
+     even where the bug is arguably universal" - which is exactly how the same defect went
+     unnoticed in Light/Dark/Crimson's History, and separately in the category-detail popup and
+     global search, for another two rounds. flex-shrink:1 is unchanged, and .activity-sub's own
+     flex-wrap:wrap (unchanged) is still what actually prevents an unreadably-crushed note on a
+     narrow container - auto basis only changes how much space the note claims when there IS
+     enough room, never removes the wrap safety net for when there isn't. */
+  .activity-sub-note{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .activity-sub-date{ flex-shrink:0; white-space:nowrap; }
   /* Two dates are rendered per row (see buildActivityRow in app.js), only one ever visible -
      mobile shows day+short-month, omitting the year when it's the current year (freeing ~5
@@ -381,6 +396,31 @@
   @media (min-width:781px){
     .activity-sub-date-short{ display:none; }
     .activity-sub-date-full{ display:inline; }
+  }
+  /* Category-detail popup and global search: short/full date picked by the OVERLAY's own width,
+     not the viewport's. Both sit inside a .search-overlay-inner capped at max-width:560px - on a
+     genuinely narrow (mobile) viewport that cap never engages and the popup tracks the viewport
+     like everything else, but on any desktop-class window it reaches its fixed ~524px content
+     width regardless of how much wider the window itself is, which is exactly the "viewport says
+     wide, container isn't actually" mismatch the min-width:781px rule above can't see. container-
+     type:inline-size here is otherwise inert - it only takes visible effect where a @container
+     rule below actually queries it. Threshold (400px) sits with real margin on both sides of what
+     was measured directly: ~524px on any real desktop window (comfortably over), ~286px at a
+     354px mobile viewport (comfortably under) - see the PR for both measurements. Unconditional
+     reset first (not inside any query) is what makes this WIN over the plain min-width:781px rule
+     above regardless of which one the browser would otherwise apply last; the @container rule
+     then reinstates full/short exactly like the viewport version did, just keyed to the right
+     signal. */
+  #catdetail-list, #global-search-results{ container-type:inline-size; }
+  #catdetail-list .activity-sub-date-short,
+  #global-search-results .activity-sub-date-short{ display:inline; }
+  #catdetail-list .activity-sub-date-full,
+  #global-search-results .activity-sub-date-full{ display:none; }
+  @container (min-width:400px){
+    #catdetail-list .activity-sub-date-short,
+    #global-search-results .activity-sub-date-short{ display:none; }
+    #catdetail-list .activity-sub-date-full,
+    #global-search-results .activity-sub-date-full{ display:inline; }
   }
   .activity-sub-note:not(:last-child)::after{ content:'·'; margin-left:5px; }
   /* History-only mobile row rebuild (see buildActivityRow's historyMode param in js/app.js).
@@ -668,6 +708,32 @@
   .swatch-btn.swatch-current{ border-color:var(--ink); }
   .swatch-btn.swatch-taken{ opacity:.32; cursor:not-allowed; }
   .swatch-btn:disabled{ cursor:not-allowed; }
+
+  /* Desktop-only scrollbar treatment for the colour picker, same breakpoint and pattern
+     #schedule-overlay's own desktop block already uses further down this file. Mobile's overlay
+     scroll (touch, ephemeral, non-reserving-width) never showed either problem this fixes, so
+     both rules are scoped inside this same min-width:781px block and nothing changes below it.
+     a) padding-right on the scroll container - not on .swatch-grid itself - opens a gap between
+        the swatches and the track/thumb without needing to also compensate the grid's own width
+        (padding on the SCROLLING element shifts its content box, .swatch-grid included, without
+        the grid needing any size math of its own).
+     b) color-scheme:dark (set globally per theme in an earlier round, and staying) makes Dark/
+        Black/Crimson's browser-default scrollbar draw a visible track - Light's color-scheme:light
+        default track already renders invisible, which is the look this matches everywhere.
+        scrollbar-color's track keyword and ::-webkit-scrollbar-track are both set to transparent
+        for the same reason #schedule-overlay's desktop block already sets both: which one
+        actually paints depends on the engine, and setting only one leaves the other browser
+        family showing the unwanted track. */
+  @media (min-width:781px){
+    #color-picker-overlay .search-overlay-body{
+      padding-right:10px;
+      scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+    }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar{ width:8px; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
+    #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
+  }
 
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
   .settings-row label{ font-size:13px; color:var(--ink-soft); font-weight:700; }
@@ -968,25 +1034,12 @@
   body[data-theme="black"] #report-net.negative{
     color:var(--ink);
   }
-  /* Issue 1 (round 4). History row layout is otherwise a do-not-touch area (it has broken before -
-     see the comments around .history-row in the base stylesheet), so this is deliberately the
-     narrowest possible fix: the shared .activity-sub-note rule (used by every view's activity row,
-     not just History's) is flex:1 1 90px, which grows to fill all available space in its flex
-     container. On a narrow mobile card that's invisible, but History's desktop row is a
-     full-width list, so the note grows across nearly the whole row width and drags the "·"
-     separator plus the full date after it far over toward the amount column - a dangling
-     separator with nothing visibly next to it, and a date stranded away from the row it
-     describes. Un-growing the note (flex:0 1 auto - still free to shrink if it ever needs to)
-     keeps note + "·" + date sitting together right after the type label, matching how mobile's
-     own two-line stacked layout already keeps its note and date close together. Scoped to
-     .history-row specifically (Home/Add Entry/category detail/global search all share
-     .activity-sub-note too and are untouched) and to the existing >=781px breakpoint only -
-     .history-row's mobile CSS below is not touched at all. Also scoped to Black only, consistent
-     with every other round's convention of never touching Light/Dark/Crimson even where the
-     underlying layout bug is arguably universal. */
-  @media (min-width:781px){
-    body[data-theme="black"] .history-row .activity-sub-note{ flex:0 1 auto; }
-  }
+  /* Issue 1 (round 4) used to override .activity-sub-note's flex-grow here, scoped to Black theme's
+     History rows only. That scoping is what let the identical defect keep recurring elsewhere
+     (Light/Dark/Crimson's own History, the category-detail popup, global search) for another two
+     rounds - the base .activity-sub-note rule itself now carries this fix unconditionally (see its
+     own comment), so this override is redundant and removed rather than left as dead, misleading
+     weight. */
   body[data-theme="black"] .ledger-form input, body[data-theme="black"] .ledger-form select,
   body[data-theme="black"] .filter-row select, body[data-theme="black"] .search-input,
   body[data-theme="black"] .period-inputs input, body[data-theme="black"] .budget-limit-input input,
