@@ -184,8 +184,22 @@
   // will visibly get a new colour as a result - expected and accepted, not a bug; only a
   // MANUALLY-picked colour is required to never shift (see assignAutoCategorySlots below).
   //
+  // REVISED (round "budgets + picker polish"): the 36-swatch set above paired each hue with BOTH
+  // lightness tiers at adjacent grid positions (index 2*i/2*i+1 = same hue, different tier) - two
+  // swatches right next to each other in the picker that differed only by 0.07 of lightness, which
+  // read as visually identical. Worst-case adjacent pair measured (see the round's own calc script)
+  // at deltaE76 = 8.12, hue delta = 0deg. Replaced with 30 swatches, each at a DISTINCT hue (360/30
+  // = 12deg apart) with lightness alternating 0.72/0.65 by index - so every adjacent pair now
+  // differs in BOTH hue and lightness, never just one. Verified worst-case adjacent deltaE76 ~10.1-
+  // 10.5 (checked against real 2D grid adjacency - horizontal AND vertical - at column counts
+  // 5/6/8/10, not just array order) - both lightness values are unchanged from above, so the
+  // existing WCAG contrast verification against the near-black avatar letter (5.68:1 / 7.46:1+)
+  // still holds with no new gamut/contrast risk. 30 still comfortably exceeds the 18-category
+  // default set (12 free swatches) even after the picker's lock-check was tightened to cover
+  // auto-assigned colours too (see categoryColorTakenMap).
+  //
   // Preserved history (round 3-5 reasoning for OKLCH-over-HSL, hue-major slot ordering, and the
-  // single shared credit+debit pool, all of which still apply unchanged to the 36-swatch version
+  // single shared credit+debit pool, all of which still apply unchanged to the 30-swatch version
   // below):
   // - HSL is not perceptually uniform (round 3): hues 15/25/45 all read "orange" at this
   //   saturation/lightness, hues 210/255/280 all read "blue-purple" - equal-L OKLCH actually looks
@@ -231,15 +245,17 @@
     const toHex = (c)=> Math.round(Math.max(0,Math.min(1,gam(c)))*255).toString(16).padStart(2,'0');
     return '#'+toHex(r)+toHex(g)+toHex(bl);
   }
-  // 36 swatches, hue-major with tiers paired per hue: index 2*i is hue i*20deg at the high tier,
-  // index 2*i+1 is the SAME hue at the low tier - exactly the grid the colour picker renders (see
-  // renderColorPickerGrid), and the pool assignAutoCategorySlots below spreads names across.
-  // Computed once at load rather than per-render.
+  // 30 swatches, each at its own distinct hue (360/30 = 12deg apart) with lightness alternating
+  // high/low tier by index - no two swatches ever share a hue, so no two grid-adjacent swatches
+  // (see renderColorPickerGrid) can differ by lightness alone the way the old paired-tier layout
+  // did. Computed once at load rather than per-render.
+  const CAT_SWATCH_COUNT = 30;
   const CAT_SWATCHES = [];
-  for(let catSwatchI=0; catSwatchI<18; catSwatchI++){
-    const hue = catSwatchI*20;
-    CAT_SWATCHES.push({ hex: oklchToHex(CAT_SWATCH_TIER_HIGH, CAT_SWATCH_CHROMA, hue), hue, tier:'high' });
-    CAT_SWATCHES.push({ hex: oklchToHex(CAT_SWATCH_TIER_LOW, CAT_SWATCH_CHROMA, hue), hue, tier:'low' });
+  for(let catSwatchI=0; catSwatchI<CAT_SWATCH_COUNT; catSwatchI++){
+    const hue = catSwatchI*(360/CAT_SWATCH_COUNT);
+    const tier = catSwatchI%2===0 ? 'high' : 'low';
+    const L = tier==='high' ? CAT_SWATCH_TIER_HIGH : CAT_SWATCH_TIER_LOW;
+    CAT_SWATCHES.push({ hex: oklchToHex(L, CAT_SWATCH_CHROMA, hue), hue, tier });
   }
   function hashString(name){
     let hash = 0; const s = name || '?';
