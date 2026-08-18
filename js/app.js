@@ -879,6 +879,39 @@
     }
     return true;
   }
+  // Shared by both the reset-data-btn click handler and resumeInterruptedResetIfAny - the two
+  // places that ever learn, first-hand, that performCloudResetDelete just confirmed every table
+  // (including accounts and categories) genuinely empty for this account. Only called from those
+  // two call sites, both gated behind that CONFIRMED-success return - never from attachUserAndSync
+  // merely observing an empty pull, which is the exact failure mode that caused the earlier
+  // silent-reseed bug this fix must not reopen.
+  //
+  // Wipes local data to defaults (as before), then re-seeds this account as if it were a brand
+  // new signup: accountsReconciledOnce/categoriesReconciledOnce are never explicitly cleared here
+  // (nothing in the codebase clears them - see the report this fix was designed from) - instead,
+  // reconcileAccountsOnFirstContact/reconcileCategoriesOnFirstContact are called directly, the
+  // exact functions a genuine first-ever login already calls, with an empty cloud state (accurate,
+  // since performCloudResetDelete just confirmed it). They read the just-reset local
+  // categories/accounts (now defaultCategories()/defaultAccounts(), courtesy of
+  // hardClearAllLocalDataNoSync above), upload that as this account's fresh baseline, and set the
+  // reconciled flags back to true themselves once that upload is actually confirmed - so there's
+  // no window where the flag is false while the cloud still looks empty to a later, unrelated
+  // contact. Called synchronously here (not left for some future contact to discover) because nothing
+  // in this app currently re-triggers a cloud pull on simply foregrounding a backgrounded tab -
+  // deferring this would leave the app blank until the next full reload/login rather than fixing
+  // it for the reset that's happening right now.
+  async function finishConfirmedReset(userId){
+    // No-sync clear - saveBudgets() in particular reconciles cloud budgets by diffing against
+    // local state, which would delete every cloud budget category the instant local budgets
+    // becomes {}, redundant with (and racing) the delete this function's caller already confirmed.
+    await hardClearAllLocalDataNoSync();
+    settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
+    try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
+    delete duplicateDismissals[duplicateDismissalScopeKey()];
+    try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
+    await reconcileAccountsOnFirstContact(userId, []);
+    await reconcileCategoriesOnFirstContact(userId, { income:[], expense:[] }, {});
+  }
   // Detects a Reset Everything whose cloud delete never got to finish - the tab was backgrounded/
   // killed/reloaded between performCloudResetDelete writing its marker and clearing it - and
   // finishes it. Safe to auto-resume without asking again: the user already gave both confirm()
@@ -897,11 +930,10 @@
       showAppToast("Your previous reset didn't finish and still hasn't completed — try again when you have a connection");
       return;
     }
-    await hardClearAllLocalDataNoSync();
-    settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
-    try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
-    delete duplicateDismissals[duplicateDismissalScopeKey()];
-    try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
+    // A resumed reset is functionally identical to an uninterrupted one at this point - the same
+    // two confirmations were already given before the interruption, and the cloud is now equally
+    // confirmed empty - so it finishes (and re-seeds) exactly the same way.
+    await finishConfirmedReset(userId);
   }
 
   function renderTabUI(tabName){
@@ -5929,19 +5961,24 @@
       if(alsoDeleteCloud && currentUser){
         const cloudDeleteConfirmed = await performCloudResetDelete(currentUser.id);
         if(!cloudDeleteConfirmed) return;
+        // Cloud is now CONFIRMED empty for this account - re-seed it as a fresh signup would,
+        // rather than leaving it (and this device) genuinely blank. See finishConfirmedReset's
+        // own comment for why this is safe and why it can't reopen the earlier silent-reseed bug.
+        await finishConfirmedReset(currentUser.id);
+      } else {
+        // Local-only reset (declined the cloud prompt, or not logged in at all) - the cloud copy,
+        // if any, was never touched, so there's nothing to treat as "confirmed empty" here. Just
+        // the local wipe, same as before this round's fix.
+        await hardClearAllLocalDataNoSync();
+        settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
+        try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
+        // Reset Everything is a full wipe of this account's data on this device, unlike an
+        // ordinary logout - duplicateDismissals stays intentionally untouched by logout (see its
+        // own declaration), but this deliberately-more-aggressive action clears this account's
+        // own dismissal scope too, same as everything else here.
+        delete duplicateDismissals[duplicateDismissalScopeKey()];
+        try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
       }
-      // No-sync clear - saveBudgets() in particular reconciles cloud budgets by diffing against
-      // local state, which would delete every cloud budget category the instant local budgets
-      // becomes {} regardless of whether cloud deletion was actually opted into just above.
-      await hardClearAllLocalDataNoSync();
-      settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
-      try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
-      // Reset Everything is a full wipe of this account's data on this device, unlike an ordinary
-      // logout - duplicateDismissals stays intentionally untouched by logout (see its own
-      // declaration), but this deliberately-more-aggressive action clears this account's own
-      // dismissal scope too, same as everything else here.
-      delete duplicateDismissals[duplicateDismissalScopeKey()];
-      try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
       populateEntryCategorySelect(document.getElementById('entry-type').value);
       populateEntryAccountSelect();
       if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
