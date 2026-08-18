@@ -852,6 +852,57 @@
     if(window.trackrSync.clearAllPermanentlyRejectedRecords) await window.trackrSync.clearAllPermanentlyRejectedRecords();
     if(window.trackrSync.clearAllPermanentlyRejectedDeletes) await window.trackrSync.clearAllPermanentlyRejectedDeletes();
   }
+  // Every table Reset Everything's cloud-delete step targets - kept as one list so
+  // performCloudResetDelete's purge-before-delete step can never drift out of sync with what it's
+  // about to delete (a previous version of this purge only covered 4 of these 7 tables, which let
+  // a queued write for categories/accounts/dismissed_duplicates survive and replay afterward).
+  const RESET_CLOUD_TABLES = ['transactions','debts','goals','budgets','accounts','categories','dismissed_duplicates'];
+  // Performs the cloud-delete half of Reset Everything, and is also how resumeInterruptedResetIfAny
+  // finishes one that got interrupted. Writes a durable "resetInProgress" marker (window.storage,
+  // not an in-memory variable - it must survive the tab being killed) before starting, so an
+  // interruption mid-delete is detectable the next time this account is opened, then purges any
+  // stale queued write for every table about to be deleted before actually deleting them. Only
+  // clears the marker once the delete attempt has resolved one way or the other - if this function
+  // never gets to that line, the marker is exactly the "did this actually finish?" signal
+  // resumeInterruptedResetIfAny needs. Returns true only once every table is CONFIRMED clear;
+  // callers must not treat the reset as done, or touch local data, until this resolves true.
+  async function performCloudResetDelete(userId, opts){
+    const silent = !!(opts && opts.silent);
+    try{ await window.storage.set('resetInProgress', JSON.stringify({ userId, startedAt: Date.now() })); }catch(e){}
+    if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(RESET_CLOUD_TABLES);
+    const results = await window.trackrSync.deleteAllCloudDataForUser(userId);
+    try{ await window.storage.delete('resetInProgress'); }catch(e){}
+    const failed = Object.keys(results).filter(t=> !results[t]);
+    if(failed.length>0){
+      if(!silent) showAppToast(`Couldn't delete cloud ${failed.join(', ')} — check your connection and try Reset Everything again`);
+      return false;
+    }
+    return true;
+  }
+  // Detects a Reset Everything whose cloud delete never got to finish - the tab was backgrounded/
+  // killed/reloaded between performCloudResetDelete writing its marker and clearing it - and
+  // finishes it. Safe to auto-resume without asking again: the user already gave both confirm()
+  // answers before the interruption, local data was never touched (the click handler only wipes it
+  // AFTER the cloud delete is confirmed), and deleteAllCloudDataForUser is idempotent (deleting
+  // rows that are already gone is a no-op). Told explicitly either way, though - silently finishing
+  // or silently failing again would leave someone who already knows something went wrong even more
+  // in the dark about whether their data is actually safe now.
+  async function resumeInterruptedResetIfAny(userId){
+    let marker = null;
+    try{ const raw = await window.storage.get('resetInProgress'); marker = raw ? JSON.parse(raw.value) : null; }catch(e){ marker = null; }
+    if(!marker || marker.userId !== userId) return;
+    showAppToast('Your previous Reset Everything was interrupted — finishing it now');
+    const ok = await performCloudResetDelete(userId, { silent:true });
+    if(!ok){
+      showAppToast("Your previous reset didn't finish and still hasn't completed — try again when you have a connection");
+      return;
+    }
+    await hardClearAllLocalDataNoSync();
+    settings = { currency:'₹', theme:'light', dismissedBudgetAlerts:{} };
+    try{ await window.storage.set('settings', JSON.stringify(settings)); }catch(e){}
+    delete duplicateDismissals[duplicateDismissalScopeKey()];
+    try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
+  }
 
   function renderTabUI(tabName){
     document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.dataset.tab===tabName));
@@ -5870,6 +5921,15 @@
         "Also permanently delete this data from your account in the cloud?\n\n" +
         "If you cancel, only this device is cleared — your account keeps its cloud copy."
       ) : false;
+      // The cloud delete must be CONFIRMED complete before any local data is touched - not the
+      // other way around. If it fails, or this tab is backgrounded/killed before it resolves,
+      // local data must still be exactly as it was, not wiped ahead of a cloud copy that was
+      // never actually confirmed gone (see performCloudResetDelete's own comment, and
+      // resumeInterruptedResetIfAny for what happens if this app is reopened mid-delete).
+      if(alsoDeleteCloud && currentUser){
+        const cloudDeleteConfirmed = await performCloudResetDelete(currentUser.id);
+        if(!cloudDeleteConfirmed) return;
+      }
       // No-sync clear - saveBudgets() in particular reconciles cloud budgets by diffing against
       // local state, which would delete every cloud budget category the instant local budgets
       // becomes {} regardless of whether cloud deletion was actually opted into just above.
@@ -5882,17 +5942,6 @@
       // dismissal scope too, same as everything else here.
       delete duplicateDismissals[duplicateDismissalScopeKey()];
       try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
-      if(alsoDeleteCloud && currentUser){
-        // Drop any older queued write for these tables first - a stale queued upsert flushing
-        // (e.g. via the 'online' listener) after the delete below runs could otherwise
-        // resurrect a row this action just removed.
-        if(window.trackrSync.purgeQueuedTables) await window.trackrSync.purgeQueuedTables(['transactions','debts','goals','budgets']);
-        const results = await window.trackrSync.deleteAllCloudDataForUser(currentUser.id);
-        const failed = Object.keys(results).filter(t=> !results[t]);
-        if(failed.length>0){
-          showAppToast(`Couldn't delete cloud ${failed.join(', ')} — check your connection and try Reset Everything again`);
-        }
-      }
       populateEntryCategorySelect(document.getElementById('entry-type').value);
       populateEntryAccountSelect();
       if(typeof populateHistoryFilterAccountSelect==='function') populateHistoryFilterAccountSelect();
@@ -5965,6 +6014,11 @@
     syncAccountStatusUI();
     if(!currentUser) return;
     try{
+      // Must run before maybeOfferLocalDataMerge/the pull below - if the previous session's Reset
+      // Everything was interrupted mid-cloud-delete, local data here is stale leftover from before
+      // that reset, not real data to offer merging into the cloud, and finishing the reset (which
+      // wipes it) has to happen before anything else reads or persists it.
+      await resumeInterruptedResetIfAny(currentUser.id);
       await maybeOfferLocalDataMerge(currentUser.id);
       const cloud = await window.trackrSync.pullCloudData(currentUser.id);
       // pullCloudData leaves a field null ONLY when that table's fetch actually threw (it always
@@ -6010,10 +6064,16 @@
           // same key with the same value).
           await reconcileAccountsOnFirstContact(currentUser.id, cloud.accounts);
         } else {
-          // Falls back to the default 3 wallets rather than leaving the entry-account picker
-          // with literally nothing selectable - shouldn't normally happen once reconciled, but a
-          // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
-          accounts = cloud.accounts.length ? cloud.accounts : defaultAccounts();
+          // Once reconciled, the cloud is authoritative outright - including a genuinely empty
+          // cloud (e.g. right after Reset Everything's cloud-delete really did confirm every row
+          // gone). This used to fall back to defaultAccounts() whenever cloud.accounts was empty,
+          // reasoning that an empty entry-account picker was worse - but that silently reseeded
+          // the default 3 wallets back into local storage on every single login after a real
+          // reset, with no way to tell "this account has never had wallets" apart from "this
+          // account's wallets were just deleted on purpose". renderAccountsList already has its
+          // own empty state ("No accounts yet. Add one below.") for exactly this case, so there's
+          // no picker-with-nothing-selectable problem left to guard against here.
+          accounts = cloud.accounts;
           toPersist.push(['accounts', accounts]);
         }
       }
@@ -6033,10 +6093,16 @@
           // key with the same value).
           await reconcileCategoriesOnFirstContact(currentUser.id, cloud.categories, cloud.categoryMeta);
         } else {
-          // Falls back to defaults rather than leaving the Add Entry category picker with
-          // literally nothing selectable - shouldn't normally happen once reconciled, but a
-          // genuinely empty cloud (e.g. after Reset Everything's cloud-delete) still needs one.
-          categories = (cloud.categories.income.length || cloud.categories.expense.length) ? cloud.categories : defaultCategories();
+          // Once reconciled, the cloud is authoritative outright - including a genuinely empty
+          // cloud (e.g. right after Reset Everything's cloud-delete really did confirm every row
+          // gone). This used to fall back to defaultCategories() whenever both lists came back
+          // empty, reasoning that an empty Add Entry picker was worse - but that silently reseeded
+          // the full default category list back into local storage on every single login after a
+          // real reset, with no way to tell "this account has never had categories" apart from
+          // "this account's categories were just deleted on purpose". An empty picker here
+          // degrades the same way populateEntryAccountSelect already does with zero accounts -
+          // no crash, just nothing to pick - so there's no problem left to guard against here.
+          categories = cloud.categories;
           // Cloud replaces THIS ACCOUNT'S OWN scope outright, same as `categories` itself on this
           // branch - once reconciled, the cloud is authoritative for position/colour too. Only
           // categoryMeta[currentUser.id] is touched - any other account's bucket that might still

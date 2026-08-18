@@ -893,8 +893,18 @@
     // that the table exists, matching the same list Restore Backup's confirm text uses too.
     for(const table of ['transactions','debts','goals','budgets','accounts','dismissed_duplicates','categories']){
       try{
-        await runOp({ kind:'delete', table, match:{ user_id:userId } });
-        results[table] = true;
+        // runOp's delete branch deliberately RESOLVES (never throws) for a permanent, server-side
+        // rejection (RLS, a migration not yet applied, etc - see its own comment on why that's not
+        // thrown) - it only throws for a genuine network-level failure. This used to read as
+        // `results[table] = true` unconditionally once the call merely resolved, without ever
+        // looking at the {ok:false} it actually resolved with - silently reporting a real,
+        // confirmed rejection as a success. Caught here specifically while verifying Reset
+        // Everything's "don't wipe local data unless the cloud delete is CONFIRMED complete"
+        // guarantee: with the bug, a permanently-rejected delete would report ok, and the caller
+        // would wipe local data believing the cloud copy was actually gone when it never left the
+        // server.
+        const r = await runOp({ kind:'delete', table, match:{ user_id:userId } });
+        results[table] = !!(r && r.ok);
       }catch(e){
         results[table] = false;
         console.error(`Failed to delete cloud "${table}" rows for user:`, e);
