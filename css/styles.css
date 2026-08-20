@@ -699,7 +699,7 @@
   .cat-col form input{ flex:1; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); }
   .cat-col form button{ background:var(--binder); color:#FFFFFF; border:none; padding:9px 16px; border-radius:10px; font-weight:700; font-size:13px; }
 
-  /* Colour picker grid (round "category ordering + colour") - 36 swatches from js/app.js's
+  /* Colour picker grid (round "category ordering + colour") - 30 swatches from js/app.js's
      CAT_SWATCHES, rendered inside #color-picker-overlay's .search-overlay-body. 6 columns keeps
      each swatch a comfortable touch target down to a 320px screen without the grid needing its
      own horizontal scroll. */
@@ -733,6 +733,14 @@
     #color-picker-overlay .search-overlay-body::-webkit-scrollbar-track{ background:transparent; }
     #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
     #color-picker-overlay .search-overlay-body::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
+    /* Desktop has room to lay the 30 swatches out wider and shorter instead of mobile's tall
+       6-column strip - 10 columns x 3 rows fits well within .search-overlay-inner's 78vh cap on
+       any normal desktop window (verified down to 1024x700), so the scrollbar styling just above
+       is a fallback for an unusually short window rather than the common case. Widening the modal
+       itself alongside the column count keeps each swatch a comfortable size rather than shrinking
+       them to fit more columns into the mobile-sized 560px width. */
+    #color-picker-overlay .search-overlay-inner{ max-width:640px; }
+    #color-picker-overlay .swatch-grid{ grid-template-columns:repeat(10, 1fr); }
   }
 
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
