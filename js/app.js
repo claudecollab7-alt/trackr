@@ -2242,7 +2242,12 @@
     const spentMap = {}; monthExpense.forEach(t=> spentMap[t.category]=(spentMap[t.category]||0)+t.amount);
     // Same reasoning as renderBudgetWatchInsights() above - --warning is Black-only.
     const isBlackTheme2 = document.body.getAttribute('data-theme')==='black';
-    orderedCategoryNames('expense').forEach(cat=>{
+    // Round "budgets visibility" - a category with hiddenFromBudgets=true is skipped entirely,
+    // not shown greyed-out/empty. This never touches budgets[cat] itself (see
+    // toggleCategoryBudgetVisibility's own comment) - the limit, if any, stays exactly as it was
+    // in storage, so un-hiding later has nothing to restore: this same filter just stops excluding
+    // it, and the line below already reads budgets[cat] unconditionally.
+    orderedCategoryNames('expense').filter(cat=> !categoryBudgetVisibilityMeta(cat).hiddenFromBudgets).forEach(cat=>{
       const limit = budgets[cat] || 0; const spent = spentMap[cat] || 0;
       const pct = limit>0 ? Math.min(100, spent/limit*100) : 0;
       const over = limit>0 && spent>limit;
@@ -3659,10 +3664,19 @@
     orderedCategoryNames(type).forEach(c=>{
       const color = categoryColor(c);
       const row = document.createElement('div'); row.className='cat-row'; row.dataset.type=type; row.dataset.cat=c;
-      row.innerHTML = `<span class="cat-drag-handle" role="button" tabindex="0" aria-label="Drag to reorder ${escapeHtml(c)}">${icon('grip',16)}</span><span class="cat-row-left cat-row-pick-color" role="button" tabindex="0" aria-label="Change colour for ${escapeHtml(c)}"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span><button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
+      // Visibility toggle is expense-only - Budgets never lists income categories at all, so a
+      // hide-from-Budgets control on an income row would have nothing to actually toggle.
+      const visibilityBtnHtml = type==='expense'
+        ? (()=>{
+            const hidden = !!categoryBudgetVisibilityMeta(c).hiddenFromBudgets;
+            return `<button class="icon-btn-sm budget-visibility-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="${hidden ? 'Show' : 'Hide'} ${escapeHtml(c)} on Budgets" title="${hidden ? 'Hidden from Budgets - tap to show' : 'Shown on Budgets - tap to hide'}">${icon(hidden ? 'eyeOff' : 'eye', 14)}</button>`;
+          })()
+        : '';
+      row.innerHTML = `<span class="cat-drag-handle" role="button" tabindex="0" aria-label="Drag to reorder ${escapeHtml(c)}">${icon('grip',16)}</span><span class="cat-row-left cat-row-pick-color" role="button" tabindex="0" aria-label="Change colour for ${escapeHtml(c)}"><span class="cat-badge sm" style="${catBadgeStyle(c, color)}">${categoryInitial(c)}</span>${escapeHtml(c)}</span>${visibilityBtnHtml}<button class="icon-btn-sm del-cat-btn" data-type="${type}" data-cat="${escapeHtml(c)}" aria-label="Delete category ${escapeHtml(c)}">${icon('trash',14)}</button>`;
       container.appendChild(row);
     });
     container.querySelectorAll('.del-cat-btn').forEach(btn=> btn.addEventListener('click', ()=> deleteCategory(btn.dataset.type, btn.dataset.cat)));
+    container.querySelectorAll('.budget-visibility-btn').forEach(btn=> btn.addEventListener('click', ()=> toggleCategoryBudgetVisibility(btn.dataset.type, btn.dataset.cat)));
     container.querySelectorAll('.cat-row-pick-color').forEach(el=>{
       el.addEventListener('click', ()=>{
         const row = el.closest('.cat-row');
@@ -3824,6 +3838,35 @@
     renderCatList(type);
     refreshAll();
     closeColorPicker();
+  }
+  // Read-only lookup, mirrors manualCategoryColor's own shape - expense-only in practice (Budgets
+  // visibility only calls this for expense categories) but takes no type assumption itself, just
+  // reads whatever's in the bucket for this name's OWN type (income -> 'credit', expense ->
+  // 'debit'), same dbType resolution orderedCategoryNames already uses.
+  function categoryBudgetVisibilityMeta(name){
+    const inIncome = (categories && Array.isArray(categories.income)) ? categories.income.includes(name) : false;
+    const inExpense = (categories && Array.isArray(categories.expense)) ? categories.expense.includes(name) : false;
+    const dbType = inIncome ? 'credit' : (inExpense ? 'debit' : null);
+    if(!dbType) return {};
+    return categoryMetaBucket()[name+'|'+dbType] || {};
+  }
+  // Round "budgets visibility" - toggles whether an expense category appears on the Budgets page.
+  // Always writes an EXPLICIT true/false (never deletes the key) - unlike colour, which is never
+  // meaningfully "cleared" (only reassigned or the category deleted outright), un-hiding here IS a
+  // real, common, explicit action that has to actually reach the cloud (see toCategoryRow's own
+  // comment on why the sync side needs a typeof check, not a truthy one, for exactly this reason).
+  async function toggleCategoryBudgetVisibility(type, name){
+    const dbType = type==='income' ? 'credit' : 'debit';
+    const key = name+'|'+dbType;
+    const bucket = ensureCategoryMetaBucket();
+    const currentlyHidden = !!(bucket[key] && bucket[key].hiddenFromBudgets);
+    bucket[key] = { ...(bucket[key]||{}), hiddenFromBudgets: !currentlyHidden };
+    await saveCategories();
+    renderCatList(type);
+    // budgets (the {category: limit} map) is never touched by this toggle - only what
+    // renderBudgetSetList chooses to display - so nothing else derived from budgets itself (the
+    // Home Budget Watch preview, the bell badge) has actually changed and needs re-rendering here.
+    if(type==='expense') renderBudgetSetList();
   }
   function addCategory(type, name){
     name = (name||'').trim(); if(!name) return;

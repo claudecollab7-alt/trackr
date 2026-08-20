@@ -138,10 +138,20 @@
   // device A's already-synced values the instant it lands. Omitting the field instead leaves
   // Postgres to preserve whatever's already there for a row this device has no opinion on -
   // correct for genuine staleness, and a no-op when the field really is unset both sides.
+  // hidden_from_budgets (round "budgets visibility") follows the SAME omit-don't-null discipline
+  // as position/color above, but needs the position's typeof CHECK, not color's truthy one: unlike
+  // a colour (never meaningfully "explicitly cleared", only reassigned or the whole category
+  // deleted), false is a real, common, explicit value here - the user un-hiding a category IS
+  // setting it to false on purpose. A truthy check would treat that false identically to "this
+  // device has no opinion" and silently omit it from the upload, so the un-hide would never reach
+  // the cloud and the category would stay hidden there forever. typeof===boolean distinguishes
+  // "this device's local meta explicitly has true or false" from "this device never touched the
+  // field at all", the same distinction typeof===number gives position against a legitimate 0.
   function toCategoryRow(name, type, userId, meta){
     const row = { user_id: userId, name, type };
     if(meta && typeof meta.position==='number') row.position = meta.position;
     if(meta && meta.color) row.color = meta.color;
+    if(meta && typeof meta.hiddenFromBudgets==='boolean') row.hidden_from_budgets = meta.hiddenFromBudgets;
     return row;
   }
   function toCategoryRows(categoriesObj, userId, categoryMeta){
@@ -152,7 +162,7 @@
     return rows;
   }
   function fromCategoryRow(r){
-    return { name: r.name, type: r.type, position: r.position, color: r.color };
+    return { name: r.name, type: r.type, position: r.position, color: r.color, hiddenFromBudgets: r.hidden_from_budgets };
   }
 
   /* ---------- Offline pending-write queue ----------
@@ -796,6 +806,12 @@
           const meta = {};
           if(typeof c.position==='number') meta.position = c.position;
           if(c.color) meta.color = c.color;
+          // hidden_from_budgets is NOT NULL DEFAULT false in Postgres, so this is true for every
+          // row already migrated (never the "field genuinely absent" case position/color guard
+          // against) - checked the same defensive way regardless, so this stays correct even
+          // against a row from before the migration ran, where the column simply wouldn't exist
+          // on the raw response and r.hidden_from_budgets would be undefined.
+          if(typeof c.hiddenFromBudgets==='boolean') meta.hiddenFromBudgets = c.hiddenFromBudgets;
           if(Object.keys(meta).length) result.categoryMeta[c.name+'|'+c.type] = meta;
         });
       })
