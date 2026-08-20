@@ -3763,20 +3763,23 @@
   // Colour picker (Issue 2). categoryColorPickerCurrent tracks which (type, name) the open picker
   // is for, so selectCategoryColor doesn't need it threaded through the DOM.
   let categoryColorPickerCurrent = null;
-  // hex -> {type, name} for every category that currently has a MANUAL colour, excluding
-  // excludeKey (the category the picker is currently open for - its own current colour must show
-  // as "selected", never as "taken by someone else"). Checked across BOTH lists, not per-list (2c:
-  // History mixes credit and debit, which is where a collision would actually be seen).
+  // hex -> {type, name} for every OTHER category's ACTUAL on-screen colour - auto-assigned or
+  // manual, via categoryColor() (the same function every render call uses), not just a manual
+  // categoryMeta.color. FIX (round "budgets + picker polish"): this used to only register a
+  // category that had an explicit manual colour, so an auto-coloured category's swatch showed as
+  // fully available in every other category's picker - two categories could visually land on the
+  // same or near-identical colour with no warning. Excludes excludeKey (the category the picker is
+  // currently open for - its own current colour must show as "selected", never as "taken by
+  // someone else"). Checked across BOTH lists, not per-list (2c: History mixes credit and debit,
+  // which is where a collision would actually be seen).
   function categoryColorTakenMap(excludeKey){
     const map = new Map();
-    const bucket = categoryMetaBucket();
     ['income','expense'].forEach(t=>{
       const dbType = t==='income' ? 'credit' : 'debit';
       (categories[t]||[]).forEach(name=>{
         const key = name+'|'+dbType;
         if(key===excludeKey) return;
-        const meta = bucket[key];
-        if(meta && meta.color) map.set(meta.color, { type:t, name });
+        map.set(categoryColor(name), { type:t, name });
       });
     });
     return map;
@@ -3784,8 +3787,9 @@
   function renderColorPickerGrid(type, name){
     const dbType = type==='income' ? 'credit' : 'debit';
     const key = name+'|'+dbType;
-    const currentMeta = categoryMetaBucket()[key];
-    const currentColor = currentMeta && currentMeta.color;
+    // Same fix as categoryColorTakenMap above - this category's own current swatch must highlight
+    // whether that colour came from a manual pick or an auto assignment, not just the former.
+    const currentColor = categoryColor(name);
     const taken = categoryColorTakenMap(key);
     const grid = document.getElementById('color-picker-grid'); grid.innerHTML='';
     CAT_SWATCHES.forEach(sw=>{
