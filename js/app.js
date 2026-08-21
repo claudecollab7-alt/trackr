@@ -3704,23 +3704,25 @@
   // neighbour is swapped in the DOM and the translateY is reduced by exactly the neighbour's
   // height, so the row's ON-SCREEN position never jumps even though its DOM position just changed.
   let categoryDragState = null;
-  function onCategoryDragStart(e){
-    const handle = e.currentTarget;
-    const row = handle.closest('.cat-row'); if(!row) return;
-    const container = row.parentElement; if(!container) return;
-    e.preventDefault();
-    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
-    row.classList.add('cat-row-dragging');
-    categoryDragState = { row, container, type: row.dataset.type, pointerId: e.pointerId, lastY: e.clientY, offsetY: 0 };
-    document.addEventListener('pointermove', onCategoryDragMove);
-    document.addEventListener('pointerup', onCategoryDragEnd);
-    document.addEventListener('pointercancel', onCategoryDragEnd);
+  // Nearest scrolling ancestor in the Y axis - not hardcoded to .views, so this keeps working if
+  // the Categories page's own scroll container ever changes. Walks the real DOM ancestor chain
+  // (not just closest .views) so it stays correct if the row is ever nested one level deeper.
+  // Read-only (computed style + scrollHeight/clientHeight checks) - never writes any CSS, so this
+  // doesn't touch the do-not-touch .views overflow rule itself, only its runtime scrollTop.
+  function closestScrollableY(el){
+    let node = el.parentElement;
+    while(node && node !== document.body && node !== document.documentElement){
+      const cs = getComputedStyle(node);
+      if((cs.overflowY==='auto' || cs.overflowY==='scroll') && node.scrollHeight > node.clientHeight) return node;
+      node = node.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
   }
-  function onCategoryDragMove(e){
-    const st = categoryDragState;
-    if(!st || e.pointerId!==st.pointerId) return;
-    const dy = e.clientY - st.lastY; st.lastY = e.clientY; st.offsetY += dy;
-    st.row.style.transform = `translateY(${st.offsetY}px)`;
+  // Swap-with-neighbour check, extracted from onCategoryDragMove so the auto-scroll loop can
+  // re-run the exact same logic after IT moves the row (via scroll compensation, see
+  // categoryAutoScrollTick) - a large per-frame auto-scroll jump needs the same re-check a large
+  // pointer-move delta already gets, not a separate/weaker version of it.
+  function resolveCategorySwaps(st){
     let sib = st.offsetY>0 ? st.row.nextElementSibling : st.row.previousElementSibling;
     while(sib){
       const sibRect = sib.getBoundingClientRect();
@@ -3740,9 +3742,73 @@
       } else break;
     }
   }
+  // Auto-scroll while dragging near the top/bottom edge of the scrollable area (round "drag
+  // auto-scroll" - the one gap found in real Android use: reordering past a screenful needed
+  // repeated drag-drop-drag-drop without this). EDGE_ZONE/MIN/MAX chosen so the scroll speed
+  // scales with how close the pointer is to the exact edge (barely inside the zone = slow, right
+  // at the edge = fast) rather than one fixed speed - proximity-scaled reads as more controllable
+  // in practice (a fixed speed is either too slow to be useful for a long list or too fast to stop
+  // precisely near the top/bottom), and it's the same feel most drag-list implementations already
+  // use, so it matches user expectation rather than introducing a new one.
+  const AUTOSCROLL_EDGE_ZONE = 60;
+  const AUTOSCROLL_MIN_SPEED = 4;
+  const AUTOSCROLL_MAX_SPEED = 18;
+  function categoryAutoScrollTick(){
+    const st = categoryDragState;
+    if(!st) return;
+    const rect = st.scrollEl.getBoundingClientRect();
+    const y = st.lastY;
+    let speed = 0;
+    if(y < rect.top + AUTOSCROLL_EDGE_ZONE){
+      const proximity = Math.min(AUTOSCROLL_EDGE_ZONE, Math.max(0, rect.top + AUTOSCROLL_EDGE_ZONE - y));
+      speed = -(AUTOSCROLL_MIN_SPEED + (AUTOSCROLL_MAX_SPEED-AUTOSCROLL_MIN_SPEED) * (proximity/AUTOSCROLL_EDGE_ZONE));
+    } else if(y > rect.bottom - AUTOSCROLL_EDGE_ZONE){
+      const proximity = Math.min(AUTOSCROLL_EDGE_ZONE, Math.max(0, y - (rect.bottom - AUTOSCROLL_EDGE_ZONE)));
+      speed = AUTOSCROLL_MIN_SPEED + (AUTOSCROLL_MAX_SPEED-AUTOSCROLL_MIN_SPEED) * (proximity/AUTOSCROLL_EDGE_ZONE);
+    }
+    if(speed !== 0){
+      const before = st.scrollEl.scrollTop;
+      st.scrollEl.scrollTop += speed;
+      // Actual applied delta, clamped by the browser at the top/bottom of the real scroll range -
+      // stops immediately (no residual drift past the end) since a clamped scrollTop change here
+      // is just 0, so the compensation below and the next frame's speed calc both naturally settle.
+      const applied = st.scrollEl.scrollTop - before;
+      if(applied !== 0){
+        // Compensates the row's own translateY by exactly the scroll amount - without this the
+        // row (an ordinary in-flow element) would drift away from the stationary pointer as the
+        // page scrolls beneath it, instead of staying anchored under the finger/cursor the way
+        // every reference drag-and-autoscroll implementation behaves.
+        st.offsetY += applied;
+        st.row.style.transform = `translateY(${st.offsetY}px)`;
+        resolveCategorySwaps(st);
+      }
+    }
+    st.scrollRaf = requestAnimationFrame(categoryAutoScrollTick);
+  }
+  function onCategoryDragStart(e){
+    const handle = e.currentTarget;
+    const row = handle.closest('.cat-row'); if(!row) return;
+    const container = row.parentElement; if(!container) return;
+    e.preventDefault();
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    row.classList.add('cat-row-dragging');
+    categoryDragState = { row, container, type: row.dataset.type, pointerId: e.pointerId, lastY: e.clientY, offsetY: 0, scrollEl: closestScrollableY(row), scrollRaf: null };
+    document.addEventListener('pointermove', onCategoryDragMove);
+    document.addEventListener('pointerup', onCategoryDragEnd);
+    document.addEventListener('pointercancel', onCategoryDragEnd);
+    categoryDragState.scrollRaf = requestAnimationFrame(categoryAutoScrollTick);
+  }
+  function onCategoryDragMove(e){
+    const st = categoryDragState;
+    if(!st || e.pointerId!==st.pointerId) return;
+    const dy = e.clientY - st.lastY; st.lastY = e.clientY; st.offsetY += dy;
+    st.row.style.transform = `translateY(${st.offsetY}px)`;
+    resolveCategorySwaps(st);
+  }
   function onCategoryDragEnd(e){
     const st = categoryDragState;
     if(!st || e.pointerId!==st.pointerId) return;
+    if(st.scrollRaf) cancelAnimationFrame(st.scrollRaf);
     st.row.classList.remove('cat-row-dragging');
     st.row.style.transform = '';
     document.removeEventListener('pointermove', onCategoryDragMove);
