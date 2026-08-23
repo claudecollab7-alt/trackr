@@ -759,10 +759,15 @@
   }
   #calc-fab:active{ transform:scale(.94); }
 
-  .calc-display{ font-size:34px; font-weight:800; color:var(--ink); text-align:right; padding:14px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
-  .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:18px; padding:0 4px 10px; }
-  .calc-keypad{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; }
-  .calc-key{ aspect-ratio:1.3; border:none; border-radius:12px; background:var(--bg); color:var(--ink); font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; transition:background .1s; }
+  .calc-display{ font-size:28px; font-weight:800; color:var(--ink); text-align:right; padding:4px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
+  .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:12px; padding:0 4px 2px; }
+  .calc-keypad{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:5px; }
+  /* Fixed height (not aspect-ratio) so key height stays constant regardless of the sheet's own
+     width - aspect-ratio here previously meant a wider sheet (e.g. the 420px desktop cap) made
+     every key taller too, which is exactly backwards for fitting the whole sheet on screen
+     without scrolling (Issue 1, round 2): the widest layouts need the SHORTEST keys, not the
+     tallest. 44px is the floor Issue 2 asked to stay at or above for a comfortable touch target. */
+  .calc-key{ height:44px; border:none; border-radius:12px; background:var(--bg); color:var(--ink); font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; transition:background .1s; }
   .calc-key:active{ background:var(--line); }
   .calc-key-fn{ color:var(--ink-soft); font-size:15px; }
   .calc-key-op{ background:var(--binder); color:#FFFFFF; }
@@ -771,7 +776,16 @@
   #calc-tab-emi label{ display:block; font-size:12.5px; font-weight:700; color:var(--ink-soft); margin-bottom:12px; }
   #calc-tab-emi input, #calc-tab-emi select{ display:block; width:100%; margin-top:4px; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font-size:14px; }
 
-  .calc-history-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--bg); font-size:13px; }
+  .calc-history-row{ display:flex; align-items:center; gap:10px; padding:4px 0; border-bottom:1px solid var(--bg); font-size:13px; cursor:pointer; }
+  /* Capped at ~2.3 rows with its own internal scroll (Issue 1, round 2) - the outer sheet must
+     never scroll regardless of how many calculations pile up, but "at least a couple of recent
+     rows visible without scrolling" only asked for a couple, not the full ~20-entry history. This
+     is the one intentional scroll region left: contained to the history list itself. */
+  #calc-history-list{ max-height:56px; overflow-y:auto; }
+  /* Scoped padding trim (not the shared .btn-pill rule) - Issue 1, round 2: the Quick tab's
+     display+keypad+history needed to fit one mobile screen with no internal scrollbar, and this
+     button only exists on the Add Entry-opened sheet, so it's pure overhead everywhere else. */
+  #calc-use-amount-btn{ padding-top:5px; padding-bottom:5px; }
   .calc-history-kind{ flex-shrink:0; font-size:10.5px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg); padding:3px 7px; border-radius:6px; }
   .calc-history-summary{ flex:1; min-width:0; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .calc-history-result{ flex-shrink:0; font-weight:700; color:var(--ink); }
@@ -779,6 +793,10 @@
   @media (min-width:781px){
     #calculator-overlay .search-overlay-inner{ max-width:420px; }
   }
+  /* Scoped header-margin trim (not the shared .search-overlay-header rule, same pattern as the
+     max-width override above) - part of Issue 1 (round 2)'s vertical-space budget to fit the
+     whole sheet without an internal scrollbar. */
+  #calculator-overlay .search-overlay-header{ margin-bottom:8px; }
 
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
   .settings-row label{ font-size:13px; color:var(--ink-soft); font-weight:700; }

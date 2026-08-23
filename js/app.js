@@ -5611,9 +5611,9 @@
   // distinguishes them at render time) so switching tabs never hides what was calculated a moment
   // ago in the other one, matching "visible in the sheet" (the brief's own wording, not "visible
   // per tab").
-  async function pushCalcHistoryEntry(kind, summary, result){
+  async function pushCalcHistoryEntry(kind, summary, result, meta){
     const list = calcHistoryForScope();
-    list.unshift({ id: uuid(), kind, summary, result, at: new Date().toISOString() });
+    list.unshift({ id: uuid(), kind, summary, result, meta: meta || null, at: new Date().toISOString() });
     if(list.length > CALC_HISTORY_MAX) list.length = CALC_HISTORY_MAX;
     await saveCalcHistory();
     renderCalcHistory();
@@ -5624,8 +5624,32 @@
     if(!list.length){ container.innerHTML = '<p class="empty-note">No calculations yet.</p>'; return; }
     container.innerHTML = list.map(entry=>{
       const label = entry.kind==='emi' ? 'EMI' : 'Quick';
-      return `<div class="calc-history-row"><span class="calc-history-kind">${label}</span><span class="calc-history-summary">${escapeHtml(entry.summary)}</span><span class="calc-history-result mono-num">${fmt(entry.result)}</span></div>`;
+      return `<div class="calc-history-row" data-history-id="${escapeHtml(entry.id)}"><span class="calc-history-kind">${label}</span><span class="calc-history-summary">${escapeHtml(entry.summary)}</span><span class="calc-history-result mono-num">${fmt(entry.result)}</span></div>`;
     }).join('');
+  }
+  // Issue 5 (round 2): tapping a history row repopulates the calculator with that calculation
+  // rather than just displaying it read-only. Quick entries only need their formatted summary/
+  // result (nothing there is re-editable, so there's nothing to reconstruct as raw numbers); EMI
+  // entries need the raw principal/rate/tenure back in the actual input fields, which is why
+  // pushCalcHistoryEntry's EMI call site (below) stores those in `meta` instead of making this
+  // function re-parse them back out of a currency-formatted display string.
+  function calcRestoreHistoryEntry(entryId){
+    const entry = calcHistoryForScope().find(e=> e.id===entryId);
+    if(!entry) return;
+    if(entry.kind==='emi'){
+      document.querySelector('#calc-tab-toggle .type-btn[data-calctab="emi"]').click();
+      if(entry.meta){
+        document.getElementById('calc-emi-principal').value = entry.meta.principal;
+        document.getElementById('calc-emi-rate').value = entry.meta.rate || '';
+        document.getElementById('calc-emi-tenure').value = entry.meta.tenure;
+      }
+    } else {
+      document.querySelector('#calc-tab-toggle .type-btn[data-calctab="quick"]').click();
+      calcQuickState = { display: String(entry.result), stored: null, pendingOp: null, justEvaluated: true };
+      renderCalcQuickDisplay();
+      const opRowEl = document.getElementById('calc-op-row');
+      if(opRowEl) opRowEl.textContent = `${entry.summary} =`;
+    }
   }
   async function clearCalcHistoryForCurrentScope(){
     if(!confirm("Clear the calculator's recent-calculations list? This only affects the calculator's own history, not any of your financial data.")) return;
@@ -5776,7 +5800,7 @@
         <div class="budget-row-top" style="margin-top:8px;"><span>Total Interest</span><span class="mono-num">${fmt(result.totalInterest)}</span></div>
         <div class="budget-row-top" style="margin-top:8px;"><span>Total Payment</span><span class="mono-num">${fmt(result.totalPayment)}</span></div>
       </div>`;
-    pushCalcHistoryEntry('emi', `${fmt(principal)} @ ${rate}% for ${tenure}mo`, result.monthlyPayment);
+    pushCalcHistoryEntry('emi', `${fmt(principal)} @ ${rate}% for ${tenure}mo`, result.monthlyPayment, { principal, rate, tenure });
   }
 
   function openCalculator(){
@@ -6083,6 +6107,10 @@
       await saveSettings();
     });
     document.getElementById('clear-calc-history-btn').addEventListener('click', clearCalcHistoryForCurrentScope);
+    document.getElementById('calc-history-list').addEventListener('click', (e)=>{
+      const row = e.target.closest('.calc-history-row');
+      if(row) calcRestoreHistoryEntry(row.dataset.historyId);
+    });
     document.getElementById('close-txdetail-btn').addEventListener('click', ()=> history.back());
     document.getElementById('txdetail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='txdetail-overlay') history.back(); });
     document.getElementById('txdetail-edit-btn').addEventListener('click', ()=>{
