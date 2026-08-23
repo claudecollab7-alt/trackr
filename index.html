@@ -868,6 +868,19 @@
           </div>
           <button class="btn-pill btn-outline" id="change-pin-btn" style="display:none; margin-top:14px;"><span data-icon="lock" data-icon-size="14"></span> Change PIN</button>
         </div>
+        <div class="card settings-row" style="margin-top:14px;">
+          <div><label style="display:block; margin-bottom:2px;">Calculator Button</label><span class="period-hint">Show the floating calculator button on every screen</span></div>
+          <button class="theme-toggle" id="calc-fab-toggle" role="switch" aria-checked="true" aria-label="Toggle the floating calculator button"><span class="theme-toggle-thumb"></span></button>
+        </div>
+        <div class="card settings-row" style="margin-top:14px; flex-direction:column; align-items:stretch;">
+          <label style="display:block; margin-bottom:2px;">Default EMI interest rate (%)</label>
+          <span class="period-hint" style="display:block; margin-bottom:10px;">Pre-fills the EMI Planner tab's rate field. Leave blank for no default.</span>
+          <input type="number" id="calc-default-emi-rate" min="0" step="0.01" placeholder="e.g. 8.5" style="padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink);">
+        </div>
+        <div class="card settings-row" style="margin-top:14px;">
+          <div><label style="display:block; margin-bottom:2px;">Calculator History</label><span class="period-hint">Clears only the calculator's own recent-calculations list — not Reset Everything</span></div>
+          <button class="btn-pill btn-outline" id="clear-calc-history-btn"><span data-icon="trash" data-icon-size="14"></span> Clear</button>
+        </div>
       </div>
     </section>
 
@@ -1034,6 +1047,80 @@
       <button class="icon-btn-sm" id="close-color-picker-btn" aria-label="Close colour picker"><span data-icon="x" data-icon-size="16"></span></button>
     </div>
     <div class="search-overlay-body"><div id="color-picker-grid" class="swatch-grid"></div></div>
+  </div>
+</div>
+
+<!-- Round "calculator" - floating button lives with the other fixed/floating elements near the
+     end of body (see #app-toast); its bottom position is set entirely in JS
+     (positionAboveBottomNav, the same function the toast/update-banner already use), never in
+     CSS, so it always docks above .bottom-nav on mobile or a flat margin on desktop without this
+     file ever touching .bottom-nav/.views/.topbar's own geometry. -->
+<button id="calc-fab" type="button" aria-label="Open calculator" aria-haspopup="dialog" style="display:none;">
+  <span data-icon="calculator" data-icon-size="24"></span>
+</button>
+
+<div class="search-overlay" id="calculator-overlay" role="dialog" aria-modal="true" aria-label="Calculator">
+  <div class="search-overlay-inner">
+    <div class="search-overlay-header">
+      <div style="flex:1;"><strong>Calculator</strong></div>
+      <button class="icon-btn-sm" id="close-calculator-btn" aria-label="Close calculator"><span data-icon="x" data-icon-size="16"></span></button>
+    </div>
+    <div class="type-toggle" id="calc-tab-toggle" style="margin-bottom:14px;">
+      <button type="button" class="type-btn active" data-calctab="quick">Quick</button>
+      <button type="button" class="type-btn" data-calctab="emi">EMI Planner</button>
+    </div>
+    <div class="search-overlay-body">
+      <div id="calc-tab-quick" class="calc-tab-panel">
+        <div class="calc-display" id="calc-display">0</div>
+        <div class="calc-op-row" id="calc-op-row"></div>
+        <div class="calc-keypad" id="calc-keypad">
+          <button type="button" class="calc-key calc-key-fn" data-calckey="clear">C</button>
+          <button type="button" class="calc-key calc-key-fn" data-calckey="backspace"><span data-icon="delete" data-icon-size="16"></span></button>
+          <button type="button" class="calc-key calc-key-fn" data-calckey="percent">%</button>
+          <button type="button" class="calc-key calc-key-op" data-calckey="/">&divide;</button>
+          <button type="button" class="calc-key" data-calckey="7">7</button>
+          <button type="button" class="calc-key" data-calckey="8">8</button>
+          <button type="button" class="calc-key" data-calckey="9">9</button>
+          <button type="button" class="calc-key calc-key-op" data-calckey="*">&times;</button>
+          <button type="button" class="calc-key" data-calckey="4">4</button>
+          <button type="button" class="calc-key" data-calckey="5">5</button>
+          <button type="button" class="calc-key" data-calckey="6">6</button>
+          <button type="button" class="calc-key calc-key-op" data-calckey="-">&minus;</button>
+          <button type="button" class="calc-key" data-calckey="1">1</button>
+          <button type="button" class="calc-key" data-calckey="2">2</button>
+          <button type="button" class="calc-key" data-calckey="3">3</button>
+          <button type="button" class="calc-key calc-key-op" data-calckey="+">+</button>
+          <button type="button" class="calc-key" data-calckey="0">0</button>
+          <button type="button" class="calc-key" data-calckey=".">.</button>
+          <button type="button" class="calc-key calc-key-eq" data-calckey="=" style="grid-column:span 2;">=</button>
+        </div>
+        <button type="button" class="btn-pill btn-black" id="calc-use-amount-btn" style="display:none; width:100%; justify-content:center; margin-top:12px;">Use this amount</button>
+      </div>
+      <div id="calc-tab-emi" class="calc-tab-panel" style="display:none;">
+        <label>Principal
+          <input type="number" id="calc-emi-principal" min="0" step="0.01" placeholder="0.00">
+        </label>
+        <label>Annual interest rate (%)
+          <input type="number" id="calc-emi-rate" min="0" step="0.01" placeholder="e.g. 8.5">
+        </label>
+        <label>Tenure (months)
+          <input type="number" id="calc-emi-tenure" min="1" step="1" placeholder="e.g. 24">
+        </label>
+        <label id="calc-emi-prefill-row" style="display:none;">Prefill from an existing debt (optional)
+          <select id="calc-emi-prefill-select">
+            <option value="">Don't prefill</option>
+          </select>
+        </label>
+        <button type="button" class="btn-pill btn-black" id="calc-emi-calculate-btn" style="width:100%; justify-content:center; margin-top:6px;">Calculate</button>
+        <div id="calc-emi-result" style="display:none;"></div>
+      </div>
+      <div id="calc-history-section" style="margin-top:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span class="card-label">Recent calculations</span>
+        </div>
+        <div id="calc-history-list"></div>
+      </div>
+    </div>
   </div>
 </div>
 

@@ -743,6 +743,43 @@
     #color-picker-overlay .swatch-grid{ grid-template-columns:repeat(10, 1fr); }
   }
 
+  /* Floating calculator button (round "calculator") - a NEW, separate fixed element, deliberately
+     never touching html/body/main/.views/.bottom-nav/.topbar's own geometry (see the round's own
+     overlap-survey report). Its "bottom" is set entirely at runtime by positionCalcFab() in
+     js/app.js (the same positionAboveBottomNav() the toast/update-banner already use), so this
+     rule intentionally has no bottom value of its own - only right/size/appearance, which are
+     genuinely this NEW element's own concern. Reuses --binder/--shadow-fab, the same tokens the
+     existing bottom-nav centre FAB already uses, so it reads as the same visual language in every
+     theme with no new colour work needed. */
+  #calc-fab{
+    position:fixed; right:16px; width:56px; height:56px; border-radius:50%;
+    background:var(--binder); color:#FFFFFF; border:3px solid var(--bg);
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:var(--shadow-fab); z-index:250; cursor:pointer;
+  }
+  #calc-fab:active{ transform:scale(.94); }
+
+  .calc-display{ font-size:34px; font-weight:800; color:var(--ink); text-align:right; padding:14px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
+  .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:18px; padding:0 4px 10px; }
+  .calc-keypad{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; }
+  .calc-key{ aspect-ratio:1.3; border:none; border-radius:12px; background:var(--bg); color:var(--ink); font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; transition:background .1s; }
+  .calc-key:active{ background:var(--line); }
+  .calc-key-fn{ color:var(--ink-soft); font-size:15px; }
+  .calc-key-op{ background:var(--binder); color:#FFFFFF; }
+  .calc-key-eq{ background:var(--credit); color:#FFFFFF; }
+
+  #calc-tab-emi label{ display:block; font-size:12.5px; font-weight:700; color:var(--ink-soft); margin-bottom:12px; }
+  #calc-tab-emi input, #calc-tab-emi select{ display:block; width:100%; margin-top:4px; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font-size:14px; }
+
+  .calc-history-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--bg); font-size:13px; }
+  .calc-history-kind{ flex-shrink:0; font-size:10.5px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg); padding:3px 7px; border-radius:6px; }
+  .calc-history-summary{ flex:1; min-width:0; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .calc-history-result{ flex-shrink:0; font-weight:700; color:var(--ink); }
+
+  @media (min-width:781px){
+    #calculator-overlay .search-overlay-inner{ max-width:420px; }
+  }
+
   .settings-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
   .settings-row label{ font-size:13px; color:var(--ink-soft); font-weight:700; }
   .settings-row input{ margin-left:8px; padding:7px 9px; border:1.5px solid var(--line); border-radius:8px; width:3.5em; background:var(--bg); }
@@ -1080,7 +1117,9 @@
   body[data-theme="black"] .btn-black,
   body[data-theme="black"] .spine .tab-btn.active,
   body[data-theme="black"] .bottom-nav .tab-btn.fab,
-  body[data-theme="black"] .cat-col form button{
+  body[data-theme="black"] .cat-col form button,
+  body[data-theme="black"] .calc-key-op,
+  body[data-theme="black"] #calc-fab{
     color:#000000;
   }
   /* Issue 2 (round 5): a fifth instance of the exact same background:var(--binder) + hardcoded

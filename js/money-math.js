@@ -65,3 +65,53 @@ function buildEmiSchedule(d){
 
 function goalSaved(g){ return (g.initialSaved||0) + (g.contributions||[]).reduce((s,c)=>s+c.amount,0); }
 function goalRemaining(g){ return Math.max(0, g.target - goalSaved(g)); }
+
+// In-app calculator (round "calculator"). The one shared rounding convention every stored/
+// displayed money value in this app already uses - 2 decimal places - centralized here so the
+// calculator rounds results exactly the same way a transaction amount does, rather than the UI
+// layer reimplementing its own (potentially inconsistent) rounding, and so nothing calling into
+// this file ever needs plain floating-point arithmetic or eval() for a user-facing number.
+// Number.EPSILON guards the classic float case where e.g. 1.005*100 evaluates to
+// 100.49999999999999 rather than 100.5, which would otherwise round DOWN to 1.00 instead of the
+// mathematically correct 1.01.
+function roundMoney(n){
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+// Basic arithmetic for the Quick tab. Division by zero returns null (not Infinity/NaN) so the
+// caller can show an error state instead of a garbage number. calcPercent computes "b% of a" -
+// the same "X + 10% = X plus 10% of X" convention as a standard calculator's % key, not a bare
+// division by 100 - e.g. calcPercent(200, 10) = 20, meant to be combined with a preceding +/-/
+// x// operator by the caller, matching how every physical/phone calculator's % key behaves.
+function calcApplyOp(a, op, b){
+  switch(op){
+    case '+': return roundMoney(a + b);
+    case '-': return roundMoney(a - b);
+    case '*': return roundMoney(a * b);
+    case '/': return b === 0 ? null : roundMoney(a / b);
+    default: return null;
+  }
+}
+function calcPercent(a, b){
+  return roundMoney(a * (b / 100));
+}
+// EMI Planner - standard reducing-balance (annuity) amortization formula, the same one every
+// bank/EMI calculator uses: EMI = P x r x (1+r)^n / ((1+r)^n - 1), where r is the MONTHLY interest
+// rate (annualRatePct/12/100) and n is the tenure in months. Falls back to a flat P/n split when
+// the rate is zero (the formula above divides by zero at r=0, but a 0%-interest EMI is just the
+// principal spread evenly). Returns null for invalid inputs (principal/tenure must be positive)
+// rather than NaN/Infinity, so the caller can show an error state.
+function calcEmi(principal, annualRatePct, tenureMonths){
+  if(!(principal>0) || !(tenureMonths>0) || !Number.isFinite(tenureMonths)) return null;
+  const monthlyRate = (annualRatePct||0) / 12 / 100;
+  let rawEmi;
+  if(monthlyRate <= 0){
+    rawEmi = principal / tenureMonths;
+  } else {
+    const factor = Math.pow(1+monthlyRate, tenureMonths);
+    rawEmi = principal * monthlyRate * factor / (factor - 1);
+  }
+  const monthlyPayment = roundMoney(rawEmi);
+  const totalPayment = roundMoney(monthlyPayment * tenureMonths);
+  const totalInterest = roundMoney(totalPayment - principal);
+  return { monthlyPayment, totalInterest, totalPayment };
+}
