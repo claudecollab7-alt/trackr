@@ -45,7 +45,9 @@
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     check: '<polyline points="4 12 9 17 20 6"/>',
-    grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>'
+    grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
+    calculator: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="8.01" y2="12"/><line x1="12" y1="12" x2="12.01" y2="12"/><line x1="16" y1="12" x2="16.01" y2="12"/><line x1="8" y1="16" x2="8.01" y2="16"/><line x1="12" y1="16" x2="12.01" y2="16"/><line x1="16" y1="16" x2="16.01" y2="16"/>',
+    delete: '<path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>'
   };
   function icon(name, size){
     size = size || 18;
@@ -110,6 +112,24 @@
   // having to actually wipe anything. Still device-local (not synced to Supabase) for now - see
   // dismissDuplicateGroup's own comment for what syncing this would actually take.
   let duplicateDismissals = {};
+  // Round "calculator" - last ~20 Quick/EMI Planner calculations, LOCAL STORAGE ONLY (never
+  // synced to Supabase, no migration - this is a scratchpad feature, not financial data). Scoped
+  // per-account exactly like duplicateDismissals directly above and for the identical reason: a
+  // device shared by two accounts must not leak one account's calculator history into the other's
+  // view of it.
+  let calcHistory = {};
+  const CALC_HISTORY_MAX = 20;
+  // Quick tab's running calculator state - display is the string currently shown (may have a
+  // trailing "." mid-entry, which parseFloat below tolerates); stored/pendingOp hold the
+  // chain-calculator state (e.g. after "12 +", stored=12, pendingOp='+', display resets for the
+  // next number) - the same interaction model every physical/phone calculator uses. Reset fresh
+  // every time the sheet opens (see openCalculator).
+  let calcQuickState = { display: '0', stored: null, pendingOp: null, justEvaluated: false };
+  // Captured at the moment the sheet is opened (see openCalculator) - which screen it was opened
+  // FROM, not which screen is active right now, since the sheet is a modal overlay and the
+  // underlying screen can't change while it's open anyway. Drives whether "Use this amount" is
+  // shown at all (Issue 4: only from Add Entry, standalone everywhere else).
+  let calcOpenedFromAddEntry = false;
   // Per-account, exactly like duplicateDismissals above - keyed by user id so a genuinely
   // different person logging into this same device still gets their own first-contact
   // reconciliation (see reconcileAccountsOnFirstContact), without the SAME account re-triggering
@@ -608,6 +628,9 @@
     try{ const a = await window.storage.get('accounts'); accounts = a ? JSON.parse(a.value) : defaultAccounts(); } catch(e){ accounts = defaultAccounts(); }
     try{ const dd = await window.storage.get('duplicateDismissals'); duplicateDismissals = dd ? JSON.parse(dd.value) : {}; } catch(e){ duplicateDismissals = {}; }
     if(!duplicateDismissals || typeof duplicateDismissals !== 'object' || Array.isArray(duplicateDismissals)) duplicateDismissals = {};
+    // Round "calculator" - local-storage-only, same load pattern as duplicateDismissals above.
+    try{ const ch = await window.storage.get('calcHistory'); calcHistory = ch ? JSON.parse(ch.value) : {}; } catch(e){ calcHistory = {}; }
+    if(!calcHistory || typeof calcHistory !== 'object' || Array.isArray(calcHistory)) calcHistory = {};
     try{ const aro = await window.storage.get('accountsReconciledOnce'); accountsReconciledOnce = aro ? JSON.parse(aro.value) : {}; } catch(e){ accountsReconciledOnce = {}; }
     // Older installs stored this as the bare string 'true'/'false' (a single flag reset on every
     // logout - see accountsReconciledOnce's own declaration for why that was the bug). JSON.parse
@@ -1133,7 +1156,7 @@
     });
     return row;
   }
-  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen','diagLogOpen','colorPickerOpen'];
+  const OVERLAY_STATE_FLAGS = ['catDetailOpen','txDetailOpen','goalDetailOpen','searchOpen','notificationsOpen','scheduleOpen','debtDetailOpen','diagLogOpen','colorPickerOpen','calculatorOpen'];
   function closeAllOverlaysThenRun(action, stepsLeft){
     stepsLeft = stepsLeft===undefined ? OVERLAY_STATE_FLAGS.length : stepsLeft;
     const state = history.state;
@@ -5571,6 +5594,204 @@
   async function saveDuplicateDismissals(){
     try{ await window.storage.set('duplicateDismissals', JSON.stringify(duplicateDismissals)); }catch(e){}
   }
+
+  // ---------- Calculator (round "calculator") ----------
+  // History is local-storage-only, scoped per account exactly like duplicateDismissals above -
+  // reuses duplicateDismissalScopeKey() directly rather than a near-duplicate function, since the
+  // scoping rule (this account's id, or '__local__' pre-login) is identical.
+  async function saveCalcHistory(){
+    try{ await window.storage.set('calcHistory', JSON.stringify(calcHistory)); }catch(e){}
+  }
+  function calcHistoryForScope(){
+    const scope = duplicateDismissalScopeKey();
+    if(!Array.isArray(calcHistory[scope])) calcHistory[scope] = [];
+    return calcHistory[scope];
+  }
+  // Newest first, capped at CALC_HISTORY_MAX - both tabs push into the SAME list (kind
+  // distinguishes them at render time) so switching tabs never hides what was calculated a moment
+  // ago in the other one, matching "visible in the sheet" (the brief's own wording, not "visible
+  // per tab").
+  async function pushCalcHistoryEntry(kind, summary, result){
+    const list = calcHistoryForScope();
+    list.unshift({ id: uuid(), kind, summary, result, at: new Date().toISOString() });
+    if(list.length > CALC_HISTORY_MAX) list.length = CALC_HISTORY_MAX;
+    await saveCalcHistory();
+    renderCalcHistory();
+  }
+  function renderCalcHistory(){
+    const container = document.getElementById('calc-history-list'); if(!container) return;
+    const list = calcHistoryForScope();
+    if(!list.length){ container.innerHTML = '<p class="empty-note">No calculations yet.</p>'; return; }
+    container.innerHTML = list.map(entry=>{
+      const label = entry.kind==='emi' ? 'EMI' : 'Quick';
+      return `<div class="calc-history-row"><span class="calc-history-kind">${label}</span><span class="calc-history-summary">${escapeHtml(entry.summary)}</span><span class="calc-history-result mono-num">${fmt(entry.result)}</span></div>`;
+    }).join('');
+  }
+  async function clearCalcHistoryForCurrentScope(){
+    if(!confirm("Clear the calculator's recent-calculations list? This only affects the calculator's own history, not any of your financial data.")) return;
+    calcHistory[duplicateDismissalScopeKey()] = [];
+    await saveCalcHistory();
+    renderCalcHistory();
+  }
+
+  function calcFabEnabled(){ return settings.calcFabEnabled !== false; }
+  function syncCalcFabVisibility(){
+    const fab = document.getElementById('calc-fab');
+    if(!fab) return;
+    fab.style.display = calcFabEnabled() ? 'flex' : 'none';
+    positionCalcFab();
+  }
+  function syncCalcFabToggleUI(){
+    const toggle = document.getElementById('calc-fab-toggle');
+    if(!toggle) return;
+    const on = calcFabEnabled();
+    toggle.classList.toggle('on', on);
+    toggle.setAttribute('aria-checked', on);
+  }
+
+  function calcQuickReset(){
+    calcQuickState = { display: '0', stored: null, pendingOp: null, justEvaluated: false };
+    renderCalcQuickDisplay();
+  }
+  function renderCalcQuickDisplay(){
+    const displayEl = document.getElementById('calc-display');
+    const opRowEl = document.getElementById('calc-op-row');
+    if(displayEl) displayEl.textContent = calcQuickState.display;
+    if(opRowEl){
+      const opSymbols = { '+':'+', '-':'−', '*':'×', '/':'÷' };
+      opRowEl.textContent = (calcQuickState.stored!==null && calcQuickState.pendingOp)
+        ? `${fmt(calcQuickState.stored)} ${opSymbols[calcQuickState.pendingOp]}`
+        : '';
+    }
+    const useBtn = document.getElementById('calc-use-amount-btn');
+    if(useBtn) useBtn.style.display = calcOpenedFromAddEntry ? 'flex' : 'none';
+  }
+  // Standard chain-calculator interaction (digits build the display string; an operator commits
+  // whatever's currently displayed against any already-stored value, then starts a fresh entry;
+  // = commits and clears the pending operator; % applies to the CURRENT displayed number as a
+  // percentage of the stored value, matching the same key on a physical/phone calculator - see
+  // calcPercent's own comment in money-math.js). All arithmetic goes through money-math.js
+  // (calcApplyOp/calcPercent/roundMoney) - never plain JS +-*/ or eval() - so results round
+  // exactly the same way a transaction amount already does.
+  function calcCommitPending(nextDisplay){
+    const st = calcQuickState;
+    const current = parseFloat(st.display) || 0;
+    if(st.stored===null){
+      st.stored = current;
+    } else if(st.pendingOp){
+      const result = calcApplyOp(st.stored, st.pendingOp, current);
+      if(result===null){ st.display = 'Error'; st.stored = null; st.pendingOp = null; renderCalcQuickDisplay(); return false; }
+      st.stored = result;
+    }
+    st.display = nextDisplay;
+    return true;
+  }
+  function calcKeypadPress(key){
+    const st = calcQuickState;
+    if(/^[0-9]$/.test(key)){
+      if(st.display==='0' || st.justEvaluated || st.display==='Error') st.display = '';
+      st.justEvaluated = false;
+      st.display += key;
+    } else if(key==='.'){
+      if(st.justEvaluated || st.display==='Error') st.display = '0';
+      st.justEvaluated = false;
+      if(!st.display.includes('.')) st.display += '.';
+    } else if(key==='clear'){
+      calcQuickReset();
+      return;
+    } else if(key==='backspace'){
+      if(st.justEvaluated || st.display==='Error'){ st.display = '0'; }
+      else { st.display = st.display.length>1 ? st.display.slice(0,-1) : '0'; }
+      st.justEvaluated = false;
+    } else if(key==='percent'){
+      if(st.stored!==null){
+        const current = parseFloat(st.display) || 0;
+        st.display = String(calcPercent(st.stored, current));
+      }
+      st.justEvaluated = true;
+    } else if(key==='+' || key==='-' || key==='*' || key==='/'){
+      if(!calcCommitPending(0)){ return; }
+      st.display = '0';
+      st.pendingOp = key;
+      st.justEvaluated = false;
+    } else if(key==='='){
+      const opSymbols = { '+':'+', '-':'−', '*':'×', '/':'÷' };
+      const beforeOp = st.pendingOp, beforeStored = st.stored, beforeCurrent = parseFloat(st.display) || 0;
+      if(!calcCommitPending(0)){ return; }
+      st.display = String(st.stored);
+      st.pendingOp = null;
+      st.justEvaluated = true;
+      if(beforeOp){
+        pushCalcHistoryEntry('quick', `${fmt(beforeStored)} ${opSymbols[beforeOp]} ${fmt(beforeCurrent)}`, st.stored);
+      }
+    }
+    renderCalcQuickDisplay();
+  }
+  function calcUseAmount(){
+    const val = parseFloat(calcQuickState.display);
+    if(isNaN(val)) return;
+    const amountInput = document.getElementById('entry-amount');
+    if(amountInput) amountInput.value = roundMoney(val).toFixed(2);
+    closeCalculator();
+  }
+
+  // EMI Planner tab - principal/rate/tenure prefilled with nothing but an optional default rate
+  // (Issue 6b, settings.calcDefaultEmiRate) each time the sheet opens. Prefilling principal from
+  // an existing debt is optional and never required (Issue 3) - the select's own blank "Don't
+  // prefill" option is the default, and choosing a real debt only ever touches the principal
+  // field, never rate/tenure (those aren't part of what was asked for).
+  function populateCalcEmiPrefillSelect(){
+    const select = document.getElementById('calc-emi-prefill-select');
+    const row = document.getElementById('calc-emi-prefill-row');
+    if(!select || !row) return;
+    const options = ['<option value="">Don\'t prefill</option>']
+      .concat(debts.map(d=> `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)} (${fmt(d.total)})</option>`));
+    select.innerHTML = options.join('');
+    row.style.display = debts.length ? 'block' : 'none';
+  }
+  function calcEmiResetForm(){
+    document.getElementById('calc-emi-principal').value = '';
+    document.getElementById('calc-emi-rate').value = (typeof settings.calcDefaultEmiRate==='number') ? settings.calcDefaultEmiRate : '';
+    document.getElementById('calc-emi-tenure').value = '';
+    const select = document.getElementById('calc-emi-prefill-select');
+    if(select) select.value = '';
+    const resultEl = document.getElementById('calc-emi-result');
+    if(resultEl){ resultEl.style.display = 'none'; resultEl.innerHTML = ''; }
+  }
+  function calcEmiCalculate(){
+    const principal = parseFloat(document.getElementById('calc-emi-principal').value);
+    const rate = parseFloat(document.getElementById('calc-emi-rate').value) || 0;
+    const tenure = parseInt(document.getElementById('calc-emi-tenure').value, 10);
+    const resultEl = document.getElementById('calc-emi-result');
+    const result = calcEmi(principal, rate, tenure);
+    if(!result){
+      resultEl.style.display = 'block';
+      resultEl.innerHTML = `<p class="empty-note">Enter a principal amount and tenure (in months) to calculate.</p>`;
+      return;
+    }
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = `
+      <div class="card" style="margin-top:12px;">
+        <div class="budget-row-top"><span>Monthly Payment</span><span class="mono-num" style="font-weight:800;">${fmt(result.monthlyPayment)}</span></div>
+        <div class="budget-row-top" style="margin-top:8px;"><span>Total Interest</span><span class="mono-num">${fmt(result.totalInterest)}</span></div>
+        <div class="budget-row-top" style="margin-top:8px;"><span>Total Payment</span><span class="mono-num">${fmt(result.totalPayment)}</span></div>
+      </div>`;
+    pushCalcHistoryEntry('emi', `${fmt(principal)} @ ${rate}% for ${tenure}mo`, result.monthlyPayment);
+  }
+
+  function openCalculator(){
+    calcOpenedFromAddEntry = document.querySelector('.tab-btn.active')?.dataset.tab === 'add';
+    calcQuickReset();
+    document.querySelectorAll('#calc-tab-toggle .type-btn').forEach(b=> b.classList.toggle('active', b.dataset.calctab==='quick'));
+    document.getElementById('calc-tab-quick').style.display = 'block';
+    document.getElementById('calc-tab-emi').style.display = 'none';
+    populateCalcEmiPrefillSelect();
+    calcEmiResetForm();
+    renderCalcHistory();
+    showOverlay('calculator-overlay');
+    if(!(history.state && history.state.calculatorOpen)) history.pushState({ calculatorOpen:true }, '', '');
+  }
+  function closeCalculator(){ hideOverlay('calculator-overlay'); }
   // Synced via the dismissed_duplicates table (see the SQL migration in this round's PR
   // description) - a dismissal made on one device now reaches every device for the same account
   // (see attachUserAndSync's dismissedDuplicates merge), and still survives this account's own
@@ -5828,6 +6049,40 @@
     document.getElementById('category-detail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='category-detail-overlay') history.back(); });
     document.getElementById('close-color-picker-btn').addEventListener('click', ()=> history.back());
     document.getElementById('color-picker-overlay').addEventListener('click', (e)=>{ if(e.target.id==='color-picker-overlay') history.back(); });
+
+    // Round "calculator"
+    document.getElementById('calc-fab').addEventListener('click', openCalculator);
+    document.getElementById('close-calculator-btn').addEventListener('click', ()=> history.back());
+    document.getElementById('calculator-overlay').addEventListener('click', (e)=>{ if(e.target.id==='calculator-overlay') history.back(); });
+    document.querySelectorAll('#calc-tab-toggle .type-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.querySelectorAll('#calc-tab-toggle .type-btn').forEach(b=> b.classList.toggle('active', b===btn));
+        const isQuick = btn.dataset.calctab==='quick';
+        document.getElementById('calc-tab-quick').style.display = isQuick ? 'block' : 'none';
+        document.getElementById('calc-tab-emi').style.display = isQuick ? 'none' : 'block';
+      });
+    });
+    document.querySelectorAll('#calc-keypad .calc-key').forEach(btn=>{
+      btn.addEventListener('click', ()=> calcKeypadPress(btn.dataset.calckey));
+    });
+    document.getElementById('calc-use-amount-btn').addEventListener('click', calcUseAmount);
+    document.getElementById('calc-emi-calculate-btn').addEventListener('click', calcEmiCalculate);
+    document.getElementById('calc-emi-prefill-select').addEventListener('change', (e)=>{
+      const debt = debts.find(d=> d.id===e.target.value);
+      if(debt) document.getElementById('calc-emi-principal').value = debt.total;
+    });
+    document.getElementById('calc-fab-toggle').addEventListener('click', async ()=>{
+      settings.calcFabEnabled = calcFabEnabled() ? false : true;
+      await saveSettings();
+      syncCalcFabToggleUI();
+      syncCalcFabVisibility();
+    });
+    document.getElementById('calc-default-emi-rate').addEventListener('change', async (e)=>{
+      const val = parseFloat(e.target.value);
+      settings.calcDefaultEmiRate = (e.target.value==='' || isNaN(val)) ? null : val;
+      await saveSettings();
+    });
+    document.getElementById('clear-calc-history-btn').addEventListener('click', clearCalcHistoryForCurrentScope);
     document.getElementById('close-txdetail-btn').addEventListener('click', ()=> history.back());
     document.getElementById('txdetail-overlay').addEventListener('click', (e)=>{ if(e.target.id==='txdetail-overlay') history.back(); });
     document.getElementById('txdetail-edit-btn').addEventListener('click', ()=>{
@@ -6440,6 +6695,10 @@
     syncAppLockUI();
     syncNetWorthToggleUI();
     syncSfxToggleUI();
+    syncCalcFabToggleUI();
+    syncCalcFabVisibility();
+    const calcDefaultRateInput = document.getElementById('calc-default-emi-rate');
+    if(calcDefaultRateInput) calcDefaultRateInput.value = (typeof settings.calcDefaultEmiRate==='number') ? settings.calcDefaultEmiRate : '';
     updateNotifPermissionStatus();
     applyDesktopLayout();
     desktopMql.addEventListener('change', applyDesktopLayout);
@@ -6459,6 +6718,7 @@
       if(!state.goalDetailOpen){ closeGoalDetail(); }
       if(!state.diagLogOpen){ closeDiagLogOverlay(); }
       if(!state.colorPickerOpen){ closeColorPicker(); }
+      if(!state.calculatorOpen){ closeCalculator(); }
       if(state.tab){
         renderTabUI(state.tab);
         if(state.tab==='more'){
@@ -6787,6 +7047,22 @@
       positionAboveBottomNav(bannerEl, 14);
       setBottomSpaceReservation('updateBanner', bannerEl.getBoundingClientRect().height + 14);
     }
+    positionCalcFab();
+  }
+  // Round "calculator" - unlike the toast/banner above, the FAB is meant to stay visible on every
+  // screen for as long as the setting is on (not a transient show/hide), so its reservation is
+  // effectively permanent rather than toggled per-appearance - still recomputed every reflow tick
+  // like the others, cheap and defensively correct if its own size or the nav's height ever
+  // changes. Overlap survey (see the round's own report) found exactly one real conflict - the
+  // Categories page's "Add" button once scrolled to its true end on mobile widths - and confirmed
+  // this same setBottomSpaceReservation mechanism (already proven for the toast/banner) resolves
+  // it: reserving space in .views' own padding-bottom means no page's last content can ever reach
+  // the FAB's zone, on any screen, not just the one conflict actually found.
+  function positionCalcFab(){
+    const fab = document.getElementById('calc-fab');
+    if(!fab || fab.style.display==='none'){ setBottomSpaceReservation('calcFab', 0); return; }
+    positionAboveBottomNav(fab, 16);
+    setBottomSpaceReservation('calcFab', fab.getBoundingClientRect().height + 16 + 14);
   }
   // Debounced rather than run on every event: a toolbar collapse/expand or an inset recompute
   // fires several resize/visualViewport events in quick succession as it animates, and this only
