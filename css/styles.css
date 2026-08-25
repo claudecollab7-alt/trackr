@@ -775,23 +775,64 @@
 
   #calc-tab-emi label{ display:block; font-size:12.5px; font-weight:700; color:var(--ink-soft); margin-bottom:12px; }
   #calc-tab-emi input, #calc-tab-emi select{ display:block; width:100%; margin-top:4px; padding:9px 12px; border:1.5px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font-size:14px; }
+  /* Issue 6, round 3 - the result panel's markup reuses the shared .card component (built in
+     app.js's calcEmiCalculate), but .card's own box-shadow is tuned for a top-level page card
+     sitting on the plain page background (--bg), not for a small panel nested one level inside a
+     sheet that is ALREADY a --card-coloured, already-shadowed surface. Stacking that shadow here
+     read as a separate, slightly-offset ghost rectangle behind the real panel (worst on desktop,
+     where the panel sits more isolated against the wider sheet) rather than a shadow that gives
+     it presence a panel this deep in the nesting doesn't need. Dropping the shadow and swapping to
+     a --bg fill against the sheet's --card background gives the same "this is a distinct panel"
+     read via a plain tone/border difference instead, with no phantom edge. */
+  #calc-emi-result .card{ box-shadow:none; background:var(--bg); border-color:var(--line); }
 
-  .calc-history-row{ display:flex; align-items:center; gap:10px; padding:4px 0; border-bottom:1px solid var(--bg); font-size:13px; cursor:pointer; }
-  /* Capped at ~2.3 rows with its own internal scroll (Issue 1, round 2) - the outer sheet must
-     never scroll regardless of how many calculations pile up, but "at least a couple of recent
-     rows visible without scrolling" only asked for a couple, not the full ~20-entry history. This
-     is the one intentional scroll region left: contained to the history list itself. */
-  #calc-history-list{ max-height:56px; overflow-y:auto; }
+  /* touch-action:manipulation (Issue 4, round 3) - every OTHER tappable calculator control is a
+     real <button>, already covered by the global `button, a, .node, [onclick]{
+     touch-action:manipulation }` rule near the top of this file. This row is a plain <div> with a
+     delegated click listener, so it slipped through that rule - meaning it was the one calculator
+     element still exposed to the mobile-browser default double-tap-zoom delay, where the FIRST
+     tap on a fresh target is held back (sometimes ~300ms, sometimes dropped) while the browser
+     waits to see if a second tap follows. That's what "sometimes requires two taps" looks like
+     from the user's side: no state actually gets lost between taps (traced the full handler and
+     couldn't find any code path that populates fields and then clears them), the first tap
+     sometimes just never reaches the click listener at all. */
+  .calc-history-row{ display:flex; align-items:center; gap:8px; padding:3px 0; border-bottom:1px solid var(--bg); font-size:12.5px; cursor:pointer; touch-action:manipulation; }
+  /* Raised from ~2.3 rows to ~6 rows (Issue 1, round 3 - the 2-ish row region from round 2 read
+     as too cramped once real-device testing had actual history to scroll through). The outer
+     sheet must still never scroll regardless of how many calculations pile up, so this remains
+     the one intentional scroll region left, just taller: contained to the history list itself. */
+  #calc-history-list{ max-height:140px; overflow-y:auto; }
+  /* Same scrollbar-track fix as #color-picker-overlay .search-overlay-body (Issue 3, round 3) -
+     color-scheme:dark (set per dark theme) makes the browser's default scrollbar draw a visible
+     track, which Light's color-scheme:light default track already renders invisible; this list is
+     the same shape of bug the colour picker had, just never carried the same treatment because it
+     didn't exist as a scroll container yet. Applied unconditionally (not behind the colour
+     picker's desktop-only breakpoint) because this list scrolls on mobile too, unlike the colour
+     picker's swatch grid which only needed it on an unusually short desktop window. Both
+     scrollbar-color's track keyword and ::-webkit-scrollbar-track are set to transparent for the
+     same reason the colour picker's fix sets both: which one actually paints depends on the
+     engine, and setting only one leaves the other browser family showing the unwanted track. */
+  #calc-history-list{ scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+  #calc-history-list::-webkit-scrollbar{ width:6px; }
+  #calc-history-list::-webkit-scrollbar-track{ background:transparent; }
+  #calc-history-list::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; }
+  #calc-history-list::-webkit-scrollbar-thumb:hover{ background:var(--ink-soft); }
   /* Scoped padding trim (not the shared .btn-pill rule) - Issue 1, round 2: the Quick tab's
      display+keypad+history needed to fit one mobile screen with no internal scrollbar, and this
      button only exists on the Add Entry-opened sheet, so it's pure overhead everywhere else. */
   #calc-use-amount-btn{ padding-top:5px; padding-bottom:5px; }
-  .calc-history-kind{ flex-shrink:0; font-size:10.5px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg); padding:3px 7px; border-radius:6px; }
+  .calc-history-kind{ flex-shrink:0; font-size:10px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg); padding:2px 6px; border-radius:6px; }
   .calc-history-summary{ flex:1; min-width:0; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .calc-history-result{ flex-shrink:0; font-weight:700; color:var(--ink); }
 
   @media (min-width:781px){
     #calculator-overlay .search-overlay-inner{ max-width:420px; }
+    /* Issue 5, round 3: right:16px (the mobile value, unchanged below this breakpoint) read as
+       clipped into the corner on desktop's much larger, otherwise-empty canvas. Pulled in to 32px
+       to match the matching bottom-offset bump in positionCalcFab() (js/app.js), which is the
+       only other half of this fix - that function's own overlap-avoidance logic is untouched,
+       only the desktop margin NUMBER it's called with. */
+    #calc-fab{ right:32px; }
   }
   /* Scoped header-margin trim (not the shared .search-overlay-header rule, same pattern as the
      max-width override above) - part of Issue 1 (round 2)'s vertical-space budget to fit the
