@@ -46,13 +46,6 @@
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     check: '<polyline points="4 12 9 17 20 6"/>',
     grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
-    // Round "calculator" (round 3, Issue 7): a rounded-square 2x2 grid (+/-/x in three cells)
-    // with the fourth cell replaced by a circled "=" that deliberately breaches past the square's
-    // bottom-right corner rather than sitting flush inside it - all outline/stroke (fill:none is
-    // set once on the shared <svg> wrapper in icon() below, along with stroke="currentColor", so
-    // this never needs its own colour and can't repeat the hardcoded-colour-breaks-Black-theme bug
-    // this codebase has already hit four times).
-    calculator: '<rect x="2" y="2" width="16" height="16" rx="4"/><line x1="10" y1="2" x2="10" y2="18"/><line x1="2" y1="10" x2="18" y2="10"/><line x1="3" y1="6" x2="9" y2="6"/><line x1="6" y1="3" x2="6" y2="9"/><line x1="11" y1="6" x2="17" y2="6"/><line x1="3" y1="11" x2="9" y2="17"/><line x1="3" y1="17" x2="9" y2="11"/><circle cx="16" cy="16" r="5.5"/><line x1="12.5" y1="14.3" x2="19.5" y2="14.3"/><line x1="12.5" y1="17.7" x2="19.5" y2="17.7"/>',
     delete: '<path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>'
   };
   function icon(name, size){

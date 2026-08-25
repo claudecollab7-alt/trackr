@@ -758,6 +758,18 @@
     box-shadow:var(--shadow-fab); z-index:250; cursor:pointer;
   }
   #calc-fab:active{ transform:scale(.94); }
+  /* Round 4, Issue 7 (colour-clash handling): the icon below is a FIXED four-colour flat asset
+     (like the app's own Trackr logo mark), not a currentColor line icon - its own hardcoded hex
+     fills must render true on every theme, but #calc-fab's round button stays theme-accent
+     coloured (var(--binder)) as it already is, unchanged. Sitting the icon directly on that accent
+     colour would clash on themes where the accent is close to one of the icon's own colours -
+     Crimson's near-red button behind teal/slate-blue, for instance. This backing plate is a small
+     neutral surface directly behind ONLY the icon (not the whole button), reusing --card - the
+     same variable every .card already backgrounds itself with - so it lightens on Light and
+     darkens on Black/Dark/Crimson with no new theme rule, and leaves a visible ring of the
+     button's own accent colour around its edge. */
+  .calc-fab-icon-plate{ display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:7px; background:var(--card); }
+  .calc-fab-icon-plate svg{ width:24px; height:24px; display:block; }
 
   .calc-display{ font-size:28px; font-weight:800; color:var(--ink); text-align:right; padding:4px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
   .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:12px; padding:0 4px 2px; }
