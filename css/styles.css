@@ -743,33 +743,35 @@
     #color-picker-overlay .swatch-grid{ grid-template-columns:repeat(10, 1fr); }
   }
 
-  /* Floating calculator button (round "calculator") - a NEW, separate fixed element, deliberately
+  /* Floating calculator icon (round "calculator") - a NEW, separate fixed element, deliberately
      never touching html/body/main/.views/.bottom-nav/.topbar's own geometry (see the round's own
      overlap-survey report). Its "bottom" is set entirely at runtime by positionCalcFab() in
      js/app.js (the same positionAboveBottomNav() the toast/update-banner already use), so this
      rule intentionally has no bottom value of its own - only right/size/appearance, which are
-     genuinely this NEW element's own concern. Reuses --binder/--shadow-fab, the same tokens the
-     existing bottom-nav centre FAB already uses, so it reads as the same visual language in every
-     theme with no new colour work needed. */
+     genuinely this NEW element's own concern.
+     Round 5: the circular theme-coloured button chrome (background/border-radius/border/plate)
+     from rounds "calculator" and 4 is gone - the fixed-colour icon from round 4 IS the floating
+     widget now, nothing wrapping it. #calc-fab itself is just the invisible hit target: sized
+     around the icon (56px, "roughly 52-56px on its longest axis") plus a few px of transparent
+     padding on every side, so the tappable region extends past the icon's own irregular silhouette
+     (the teal circle breaches the square's corner) rather than stopping exactly at the drawn
+     pixels. positionCalcFab()/setBottomSpaceReservation() read this element's real
+     getBoundingClientRect(), so the overlap-avoidance reservation grows to match automatically -
+     nothing there needed to change, only re-verifying it against the new box (see the round's own
+     overlap-survey report). */
   #calc-fab{
-    position:fixed; right:16px; width:56px; height:56px; border-radius:50%;
-    background:var(--binder); color:#FFFFFF; border:3px solid var(--bg);
+    position:fixed; right:16px; width:68px; height:68px; padding:6px;
+    background:none; border:none; box-shadow:none;
     display:flex; align-items:center; justify-content:center;
-    box-shadow:var(--shadow-fab); z-index:250; cursor:pointer;
+    z-index:250; cursor:pointer;
   }
   #calc-fab:active{ transform:scale(.94); }
-  /* Round 4, Issue 7 (colour-clash handling): the icon below is a FIXED four-colour flat asset
-     (like the app's own Trackr logo mark), not a currentColor line icon - its own hardcoded hex
-     fills must render true on every theme, but #calc-fab's round button stays theme-accent
-     coloured (var(--binder)) as it already is, unchanged. Sitting the icon directly on that accent
-     colour would clash on themes where the accent is close to one of the icon's own colours -
-     Crimson's near-red button behind teal/slate-blue, for instance. This backing plate is a small
-     neutral surface directly behind ONLY the icon (not the whole button), reusing --card - the
-     same variable every .card already backgrounds itself with - so it lightens on Light and
-     darkens on Black/Dark/Crimson with no new theme rule, and leaves a visible ring of the
-     button's own accent colour around its edge. */
-  .calc-fab-icon-plate{ display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:7px; background:var(--card); }
-  .calc-fab-icon-plate svg{ width:24px; height:24px; display:block; }
+  /* filter:drop-shadow (not box-shadow) deliberately - it follows the icon's own rendered alpha
+     shape rather than a rectangular box, which matters here because that shape is irregular (the
+     teal circle breaching the corner). Reuses --shadow-fab verbatim - the same token the old
+     button chrome used for its own elevation, so this reads as the same visual weight the FAB
+     always had, just now cast by the icon itself instead of a circle behind it. */
+  #calc-fab svg{ width:56px; height:56px; display:block; filter:drop-shadow(var(--shadow-fab)); }
 
   .calc-display{ font-size:28px; font-weight:800; color:var(--ink); text-align:right; padding:4px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
   .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:12px; padding:0 4px 2px; }
@@ -1189,8 +1191,7 @@
   body[data-theme="black"] .spine .tab-btn.active,
   body[data-theme="black"] .bottom-nav .tab-btn.fab,
   body[data-theme="black"] .cat-col form button,
-  body[data-theme="black"] .calc-key-op,
-  body[data-theme="black"] #calc-fab{
+  body[data-theme="black"] .calc-key-op{
     color:#000000;
   }
   /* Issue 2 (round 5): a fifth instance of the exact same background:var(--binder) + hardcoded
