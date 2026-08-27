@@ -743,35 +743,37 @@
     #color-picker-overlay .swatch-grid{ grid-template-columns:repeat(10, 1fr); }
   }
 
-  /* Floating calculator icon (round "calculator") - a NEW, separate fixed element, deliberately
+  /* Floating calculator button (round "calculator") - a NEW, separate fixed element, deliberately
      never touching html/body/main/.views/.bottom-nav/.topbar's own geometry (see the round's own
      overlap-survey report). Its "bottom" is set entirely at runtime by positionCalcFab() in
      js/app.js (the same positionAboveBottomNav() the toast/update-banner already use), so this
      rule intentionally has no bottom value of its own - only right/size/appearance, which are
      genuinely this NEW element's own concern.
-     Round 5: the circular theme-coloured button chrome (background/border-radius/border/plate)
-     from rounds "calculator" and 4 is gone - the fixed-colour icon from round 4 IS the floating
-     widget now, nothing wrapping it. #calc-fab itself is just the invisible hit target: sized
-     around the icon (56px, "roughly 52-56px on its longest axis") plus a few px of transparent
-     padding on every side, so the tappable region extends past the icon's own irregular silhouette
-     (the teal circle breaches the square's corner) rather than stopping exactly at the drawn
-     pixels. positionCalcFab()/setBottomSpaceReservation() read this element's real
-     getBoundingClientRect(), so the overlap-avoidance reservation grows to match automatically -
-     nothing there needed to change, only re-verifying it against the new box (see the round's own
-     overlap-survey report). */
+     Round 8: circular chrome is back, matching the bottom-nav's own Add Entry FAB
+     (.bottom-nav .tab-btn.fab) - same background:var(--binder) fill and box-shadow:var(--shadow-fab)
+     elevation, so the two floating round buttons in this app read as the same visual language
+     rather than two different patterns. Unlike that button, this one isn't embedded in the nav bar
+     (it floats freely over arbitrary page content), so it skips that button's border:4px solid
+     var(--bg) "cutout" ring - that border exists to separate the Add Entry FAB from the bar it
+     sits inside, a context this element doesn't share.
+     The circle IS the hit-area (width/height/border-radius together, no separate padding-only
+     wrapper) - round 5's rationale for extra invisible hit-padding beyond the drawn icon doesn't
+     apply once a regular circular shape wraps everything, since the circle itself is already a
+     clean, fully-hittable target with no irregular silhouette to compensate for. 68px keeps the
+     same footprint every round since round 5 has used, so
+     positionCalcFab()/setBottomSpaceReservation() (which read this element's live
+     getBoundingClientRect(), untouched here) reserve the same space as before - re-verified against
+     the round's own overlap-survey report regardless, since the fillable shape changed. */
   #calc-fab{
-    position:fixed; right:16px; width:68px; height:68px; padding:6px;
-    background:none; border:none; box-shadow:none;
+    position:fixed; right:16px; width:68px; height:68px; border-radius:50%;
+    background:var(--binder); color:#FFFFFF; box-shadow:var(--shadow-fab);
     display:flex; align-items:center; justify-content:center;
     z-index:250; cursor:pointer;
   }
   #calc-fab:active{ transform:scale(.94); }
-  /* filter:drop-shadow (not box-shadow) deliberately - it follows the icon's own rendered alpha
-     shape rather than a rectangular box, which matters here because that shape is irregular (the
-     teal circle breaching the corner). Reuses --shadow-fab verbatim - the same token the old
-     button chrome used for its own elevation, so this reads as the same visual weight the FAB
-     always had, just now cast by the icon itself instead of a circle behind it. */
-  #calc-fab svg{ width:56px; height:56px; display:block; filter:drop-shadow(var(--shadow-fab)); }
+  /* 44px leaves 12px of clear --binder circle showing around the icon on every side - "enough
+     internal padding that the icon isn't touching the circle's edge" per this round's brief. */
+  #calc-fab svg{ width:44px; height:44px; display:block; }
 
   .calc-display{ font-size:28px; font-weight:800; color:var(--ink); text-align:right; padding:4px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
   .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:12px; padding:0 4px 2px; }
@@ -1191,7 +1193,8 @@
   body[data-theme="black"] .spine .tab-btn.active,
   body[data-theme="black"] .bottom-nav .tab-btn.fab,
   body[data-theme="black"] .cat-col form button,
-  body[data-theme="black"] .calc-key-op{
+  body[data-theme="black"] .calc-key-op,
+  body[data-theme="black"] #calc-fab{
     color:#000000;
   }
   /* Issue 2 (round 5): a fifth instance of the exact same background:var(--binder) + hardcoded
