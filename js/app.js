@@ -46,7 +46,6 @@
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     check: '<polyline points="4 12 9 17 20 6"/>',
     grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
-    calculator: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="8.01" y2="12"/><line x1="12" y1="12" x2="12.01" y2="12"/><line x1="16" y1="12" x2="16.01" y2="12"/><line x1="8" y1="16" x2="8.01" y2="16"/><line x1="12" y1="16" x2="12.01" y2="16"/><line x1="16" y1="16" x2="16.01" y2="16"/>',
     delete: '<path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>'
   };
   function icon(name, size){
@@ -5640,7 +5639,7 @@
       document.querySelector('#calc-tab-toggle .type-btn[data-calctab="emi"]').click();
       if(entry.meta){
         document.getElementById('calc-emi-principal').value = entry.meta.principal;
-        document.getElementById('calc-emi-rate').value = entry.meta.rate || '';
+        document.getElementById('calc-emi-rate').value = (entry.meta.rate!=null) ? entry.meta.rate : '';
         document.getElementById('calc-emi-tenure').value = entry.meta.tenure;
       }
     } else {
@@ -7089,8 +7088,17 @@
   function positionCalcFab(){
     const fab = document.getElementById('calc-fab');
     if(!fab || fab.style.display==='none'){ setBottomSpaceReservation('calcFab', 0); return; }
-    positionAboveBottomNav(fab, 16);
-    setBottomSpaceReservation('calcFab', fab.getBoundingClientRect().height + 16 + 14);
+    // Issue 5, round 3: on desktop the bottom-nav is hidden (replaced by the sidebar), so
+    // positionAboveBottomNav's own logic falls through to using `margin` as the bare bottom
+    // offset with nothing else to push against - the same 16px used everywhere read as clipped
+    // into an otherwise-empty desktop corner rather than intentional. Only the MARGIN NUMBER
+    // changes here for the desktop breakpoint; positionAboveBottomNav itself (the actual
+    // overlap-avoidance logic) is untouched, so the bottom-nav math on mobile is identical to
+    // before. 781px matches this app's one existing desktop breakpoint (search #calculator-overlay
+    // .search-overlay-inner for the same number elsewhere in this file's CSS).
+    const bottomMargin = window.innerWidth >= 781 ? 32 : 16;
+    positionAboveBottomNav(fab, bottomMargin);
+    setBottomSpaceReservation('calcFab', fab.getBoundingClientRect().height + bottomMargin + 14);
   }
   // Debounced rather than run on every event: a toolbar collapse/expand or an inset recompute
   // fires several resize/visualViewport events in quick succession as it animates, and this only
