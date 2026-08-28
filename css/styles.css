@@ -759,21 +759,36 @@
      The circle IS the hit-area (width/height/border-radius together, no separate padding-only
      wrapper) - round 5's rationale for extra invisible hit-padding beyond the drawn icon doesn't
      apply once a regular circular shape wraps everything, since the circle itself is already a
-     clean, fully-hittable target with no irregular silhouette to compensate for. 68px keeps the
-     same footprint every round since round 5 has used, so
+     clean, fully-hittable target with no irregular silhouette to compensate for.
+     Round 9: resized from 68px to 54px to match the Add Entry FAB's own computed size exactly
+     (getBoundingClientRect confirmed both at 68x68/54x54 respectively before this change - a
+     clean 1.259 ratio, not the ~1.44 independently measured against a screenshot; the likely cause
+     of that mismatch was found and fixed below, not in this size number itself).
      positionCalcFab()/setBottomSpaceReservation() (which read this element's live
-     getBoundingClientRect(), untouched here) reserve the same space as before - re-verified against
-     the round's own overlap-survey report regardless, since the fillable shape changed. */
+     getBoundingClientRect(), untouched here) reserve however much space this box actually turns
+     out to be - re-verified against the round's own overlap-survey report regardless, since a
+     smaller circle changes the hit-area. */
   #calc-fab{
-    position:fixed; right:16px; width:68px; height:68px; border-radius:50%;
+    position:fixed; right:16px; width:54px; height:54px; border-radius:50%;
     background:var(--binder); color:#FFFFFF; box-shadow:var(--shadow-fab);
+    /* Round 9 fix: #calc-fab never explicitly reset the browser's own default <button> border/
+       padding (round 5's version had border:none - lost when round 8's rewrite swapped that line
+       for a real background/box-shadow and didn't carry border:none forward). The result was a
+       genuinely visible artifact: a default 2px outset button border (a light/dark bevel, not a
+       flat colour) riding the circle's own edge, confirmed both via getComputedStyle (border:"2px
+       outset rgb(0,0,0)") and by screenshot at 6x zoom - lighter on the top-left, darker toward
+       black on the bottom-right. That non-uniform edge is the most likely explanation for the
+       independently-measured ~1.44x ratio: a bevelled edge doesn't have one clean boundary to
+       measure pixels against, unlike a flat-filled circle. */
+    border:none; padding:0;
     display:flex; align-items:center; justify-content:center;
     z-index:250; cursor:pointer;
   }
   #calc-fab:active{ transform:scale(.94); }
-  /* 44px leaves 12px of clear --binder circle showing around the icon on every side - "enough
-     internal padding that the icon isn't touching the circle's edge" per this round's brief. */
-  #calc-fab svg{ width:44px; height:44px; display:block; }
+  /* 35px keeps the same ~17.6% padding-per-side ratio the 44px-in-68px icon had (12/68), just
+     scaled to the new 54px circle (54 * 44/68 = 34.9, rounded to 35) rather than carrying the old
+     12px absolute padding forward unscaled. */
+  #calc-fab svg{ width:35px; height:35px; display:block; }
 
   .calc-display{ font-size:28px; font-weight:800; color:var(--ink); text-align:right; padding:4px 4px 2px; word-break:break-all; font-variant-numeric:tabular-nums; }
   .calc-op-row{ font-size:14px; font-weight:700; color:var(--ink-soft); text-align:right; min-height:12px; padding:0 4px 2px; }
